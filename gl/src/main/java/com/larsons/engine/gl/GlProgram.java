@@ -40,6 +40,7 @@ final class GlProgram implements AutoCloseable {
             layout(location = 2) in vec4 aColor;
 
             uniform vec2 uViewport;
+            uniform float uDepth;
 
             out vec2 vUV;
             out vec4 vColor;
@@ -50,7 +51,12 @@ final class GlProgram implements AutoCloseable {
                 // DrawTarget is measured from.
                 vec2 ndc = vec2(aPos.x / uViewport.x * 2.0 - 1.0,
                                 1.0 - aPos.y / uViewport.y * 2.0);
-                gl_Position = vec4(ndc, 0.0, 1.0);
+                // The depth this batch sits at, in normalised device
+                // coordinates. −1 is nearer than anything the terrain pass can
+                // draw, which is what the UI wants and is the default; a
+                // billboard standing in the world sets its own, so a character
+                // behind a hill is behind it. See GlTarget.pushDepth.
+                gl_Position = vec4(ndc, uDepth, 1.0);
                 vUV = aUV;
                 vColor = aColor;
             }
@@ -116,6 +122,7 @@ final class GlProgram implements AutoCloseable {
 
     private final int program;
     private final int viewportUniform;
+    private final int depthUniform;
 
     GlProgram() {
         int vs = compile(GL_VERTEX_SHADER, VERTEX, "vertex");
@@ -134,13 +141,30 @@ final class GlProgram implements AutoCloseable {
             glDeleteShader(fs);
         }
         viewportUniform = glGetUniformLocation(program, "uViewport");
+        depthUniform = glGetUniformLocation(program, "uDepth");
         glUseProgram(program);
         glUniform1i(glGetUniformLocation(program, "uTexture"), 0);
+        glUniform1f(depthUniform, NEAREST_DEPTH);
     }
 
     void use(int width, int height) {
         glUseProgram(program);
         glUniform2f(viewportUniform, width, height);
+    }
+
+    /**
+     * Nearer than anything the terrain pass can draw, and the default.
+     *
+     * <p>Which is what makes the depth uniform invisible to every painter that
+     * does not want it: the HUD, the menus and the flat views all draw at this
+     * and pass the depth test against whatever the world left in the buffer,
+     * exactly as they did when there was no depth test at all.
+     */
+    static final float NEAREST_DEPTH = -1f;
+
+    /** Where the triangles that follow sit, in normalised device coordinates. */
+    void setDepth(float ndcZ) {
+        glUniform1f(depthUniform, ndcZ);
     }
 
     private static int compile(int type, String source, String what) {

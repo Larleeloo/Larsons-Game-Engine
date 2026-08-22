@@ -205,6 +205,14 @@ public final class GlTarget implements DrawTarget, AutoCloseable {
         setTransform(transform);
         alphas.clear();
         alpha = 1f;
+        depths.clear();
+        depth = GlProgram.NEAREST_DEPTH;
+        program.setDepth(depth);
+        // Off until something turns it on. The terrain pass does, mid-frame,
+        // and hands it back enabled with writes off so the sprites behind it
+        // stay behind it — but a frame that never draws terrain must not
+        // inherit last frame's depth buffer as a test.
+        glDisable(GL_DEPTH_TEST);
         scissors.clear();
         clipKinds.clear();
         scissor = null;
@@ -1273,6 +1281,72 @@ public final class GlTarget implements DrawTarget, AutoCloseable {
         stats.record(DrawStats.Kind.STATE, null);
         alpha = alphas.pop();
     }
+
+    /**
+     * {@inheritDoc}
+     *
+     * <p><b>A uniform, and so a flush</b> — where alpha and the transform are
+     * folded into the vertices precisely to avoid one. The difference is how
+     * often each moves: alpha changes several times per entity, and the depth
+     * changes once per <em>thing standing in the world</em>, of which a frame
+     * has dozens rather than thousands. A flush apiece is a draw call apiece,
+     * which is what a sprite costs on any renderer.
+     */
+    @Override
+    public void pushDepth(float ndcZ) {
+        stats.record(DrawStats.Kind.STATE, null);
+        depths.push(depth);
+        setDepth(ndcZ);
+    }
+
+    @Override
+    public void popDepth() {
+        if (depths.isEmpty()) return;
+        stats.record(DrawStats.Kind.STATE, null);
+        setDepth(depths.pop());
+    }
+
+    /**
+     * Draw everything appended so far, right now.
+     *
+     * <p>For the terrain pass, which takes the GL state over between the sky
+     * and the sprites: whatever the 2D batch is holding was issued before that
+     * happened, or it would be drawn afterwards with the world's depth test and
+     * back-face cull still on.
+     */
+    void flushBatch() {
+        batch.flush();
+    }
+
+    /** Put the depth back where the terrain pass found it. */
+    void restoreDepth() {
+        program.use(width, height);
+        program.setDepth(depth);
+    }
+
+    private void setDepth(float ndcZ) {
+        if (ndcZ == depth) return;
+        batch.flush();
+        depth = ndcZ;
+        program.setDepth(ndcZ);
+    }
+
+    /** The frame's terrain pass, handed over by the renderer. */
+    private com.larsons.engine.graphics.TerrainPass terrain;
+
+    /** Told once a frame by {@link GlRenderer}; see {@link #terrainPass()}. */
+    void attachTerrain(com.larsons.engine.graphics.TerrainPass pass) {
+        this.terrain = pass;
+    }
+
+    @Override
+    public com.larsons.engine.graphics.TerrainPass terrainPass() {
+        return terrain;
+    }
+
+    /** Where the triangles being appended sit; see {@link #pushDepth}. */
+    private float depth = GlProgram.NEAREST_DEPTH;
+    private final java.util.ArrayDeque<Float> depths = new java.util.ArrayDeque<>();
 
     /**
      * {@inheritDoc}

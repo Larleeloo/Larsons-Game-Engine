@@ -368,6 +368,21 @@ public final class SolidPainter {
     private double detailDistance;
     /** {@link #decorTiles} in world units, never past {@link #detailDistance}. */
     private double decorDistance;
+
+    /**
+     * Whether the blocks are somebody else's job this frame.
+     *
+     * <p>Set when a {@linkplain com.larsons.engine.graphics.TerrainPass
+     * depth-buffered backend} is drawing the world. What is left for this
+     * painter is everything that is <em>not</em> geometry the GPU can keep:
+     * plants, actors, the level's scenery — billboards, which turn with the
+     * camera and so cannot be meshed once and re-used. Each one is queued with
+     * the depth it stands at, so the terrain the GPU drew hides the ones behind
+     * it.
+     */
+    private boolean depthBuffered;
+    /** The far plane the terrain pass used, so depths agree with it. */
+    private double depthFar = 1;
     /**
      * How far a face may be and still be queued, which is the detailed reach
      * for the ordinary sweep and the whole horizon while {@link #distant} runs.
@@ -492,6 +507,12 @@ public final class SolidPainter {
         final double[] quad = new double[4 * 3];
         /** Fog over a textured face, {@code 0} when it is close enough not to need any. */
         int fogOverlay;
+        /**
+         * Where this sits in the depth buffer, when a backend has one. Unused
+         * — and unset — when the painter is drawing the world itself, because
+         * then its own sort <em>is</em> the depth test.
+         */
+        float depth;
         // Billboard fields; sprite is null for a face.
         Runnable sprite;
         double screenX, screenY, scale, fade;
@@ -553,6 +574,25 @@ public final class SolidPainter {
     public void setDecorTiles(int tiles) {
         this.decorTiles = Math.max(1, Math.min(MAX_VIEW_TILES, tiles));
     }
+
+    /**
+     * Hand the blocks over to a depth-buffered backend, or take them back.
+     *
+     * <p>With this on, {@link #terrain()} sweeps only for the things a GPU mesh
+     * cannot hold — the plants — and only as far as they are drawn, and
+     * {@link #distant()} does nothing at all. Everything still queued is given
+     * a depth, so it composites against the world the backend drew.
+     *
+     * @param far the far plane the terrain pass is using, which the depths have
+     *            to be measured against for the two to agree
+     */
+    public void setDepthBuffered(boolean on, double far) {
+        this.depthBuffered = on;
+        this.depthFar = Math.max(1, far);
+    }
+
+    /** Whether the blocks are being drawn by a depth-buffered backend. */
+    public boolean depthBuffered() { return depthBuffered; }
 
     /** How far the coarse pass reaches, in tiles; {@code 0} when it is off. */
     public int distantTiles() { return distantTiles; }
@@ -825,7 +865,9 @@ public final class SolidPainter {
     private void sweep() {
         int ts = level.tileSize;
         if (ts <= 0) return;
-        double reach = detailDistance;
+        // With the blocks drawn elsewhere this walk exists only to find the
+        // plants, and they are drawn far less far than the ground is.
+        double reach = depthBuffered ? decorDistance : detailDistance;
         int c0 = Math.max(0, (int) Math.floor((eye.x() - reach) / ts));
         int c1 = Math.min(level.width - 1, (int) Math.floor((eye.x() + reach) / ts));
         int r0 = Math.max(0, (int) Math.floor((eye.y() - reach) / ts));
@@ -1069,6 +1111,18 @@ public final class SolidPainter {
         return grounded * (double) level.tileSize;
     }
 
+    /** Where fog begins this frame, in world units — for a backend drawing it. */
+    public double fogStart() { return fogStart; }
+
+    /** Where fog is total, in world units. */
+    public double fogEnd() { return horizon(); }
+
+    /** The colour distance fades into: the sky's own horizon. */
+    public int fogArgb() { return fogArgb; }
+
+    /** How far the world is drawn a block at a time, in world units. */
+    public double detailDistance() { return detailDistance; }
+
     /** How far the furthest thing this frame draws can be. */
     private double horizon() {
         return Math.max(viewDistance, distantDistance);
@@ -1121,7 +1175,7 @@ public final class SolidPainter {
      * detailed pass, whatever the cell arithmetic says.
      */
     public void distant() {
-        if (level == null || eye == null) return;
+        if (level == null || eye == null || depthBuffered) return;
         int ts = level.tileSize;
         if (ts <= 0) return;
         double outermost = horizon();
@@ -1479,7 +1533,7 @@ public final class SolidPainter {
         // skipped when a block sits on it, because that block's own underside
         // is the same quad and drawing both is two coplanar fills fighting.
         int floorId = level.tileAt(col, row);
-        if (floorId > 0 && eye.z() > 0 && open(col, row, 1, floorId)) {
+        if (!depthBuffered && floorId > 0 && eye.z() > 0 && open(col, row, 1, floorId)) {
             Color colour = level.colorFor(floorId);
             if (colour != null) {
                 Block ground = blockOf(floorId);
@@ -1502,7 +1556,7 @@ public final class SolidPainter {
                 Block block = blockOf(id);
                 if (block == null) continue;
                 if (block.plant()) plant(col, row, block, layer);
-                else meshed(col, row, block, layer, packed & FACE_MASK);
+                else if (!depthBuffered) meshed(col, row, block, layer, packed & FACE_MASK);
             }
             return;
         }
@@ -1517,7 +1571,7 @@ public final class SolidPainter {
             Block block = blockOf(id);
             if (block == null) continue;
             if (block.plant()) plant(col, row, block, layer);
-            else block(col, row, block, layer, depth);
+            else if (!depthBuffered) block(col, row, block, layer, depth);
         }
     }
 
@@ -2017,6 +2071,13 @@ public final class SolidPainter {
         e.edge = colour.getAlpha() >= 255 && seen >= 1;
         e.edgeArgb = distance < EDGE_TILES * level.tileSize
                 ? shadeFog(colour, shade * 0.72, distance) : e.argb;
+        if (depthBuffered) {
+            // The eye-space forward distance rather than the straight-line one:
+            // that is what a projection matrix divides by, so it is the number
+            // the terrain pass wrote into the depth buffer.
+            eye.toEye((minX + maxX) / 2, (minY + maxY) / 2, (minZ + maxZ) / 2, point);
+            e.depth = (float) EyeCamera.ndcDepth(point[2], depthFar);
+        }
         keep();
         return e;
     }
@@ -2127,6 +2188,7 @@ public final class SolidPainter {
         // finished sprite with — so they fade instead, which reads the same
         // against a fogged background and costs one alpha push.
         e.fade = 1 - fogAmount(distance);
+        if (depthBuffered) e.depth = (float) EyeCamera.ndcDepth(depth, depthFar);
         keep();
     }
 
@@ -2195,6 +2257,19 @@ public final class SolidPainter {
     private static final long QUANTA_MAX = 1L << 30;
 
     private void draw(Entry e) {
+        if (depthBuffered) {
+            target.pushDepth(e.depth);
+            try {
+                paint(e);
+            } finally {
+                target.popDepth();
+            }
+            return;
+        }
+        paint(e);
+    }
+
+    private void paint(Entry e) {
         if (e.sprite != null) {
             AffineTransform t = new AffineTransform();
             t.translate(e.screenX, e.screenY);

@@ -123,4 +123,20 @@ public interface Renderer {
      * work it queued has started.
      */
     default void setProfiler(com.larsons.engine.profile.FrameProfiler profiler) {}
+
+    /**
+     * A depth-buffered three-dimensional terrain pass, or {@code null} where
+     * this backend has none.
+     *
+     * <p><b>{@code null} is the honest answer for a renderer without a depth
+     * buffer, and it is the default</b> — Java2D has none and never will, so
+     * the scene keeps its painter's-algorithm path and every level goes on
+     * working on a bare JRE. A backend that returns one is promising a real
+     * depth test, not an emulation of it: the whole reason the caller asks is
+     * to stop sorting geometry per frame, and a pass that needed the sort back
+     * would be slower than the painter rather than faster.
+     *
+     * @see TerrainPass
+     */
+    default TerrainPass terrainPass() { return null; }
 }

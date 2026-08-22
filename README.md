@@ -3826,6 +3826,61 @@ never turn generation on.
   merged box is level across its whole footprint, so it can be trusted to
   occlude what is behind it.
 
+### The world on the GPU
+
+The `[F5]` views have two renderers behind them, and the difference between
+them is a depth buffer.
+
+The **painter** (`SolidPainter`) sorts every face of every frame — it has
+nothing else to sort with, Java2D having no depth buffer — and that is exactly
+what stops its geometry from being kept: an order that depends on where the
+camera is cannot be computed once. It is the JDK-only path, it works on a bare
+JRE, and it is what every level fell back to before there was anything else.
+
+The **GPU path** is Minecraft's, piece for piece:
+
+| piece | what it is | where |
+|---|---|---|
+| Chunk sections | the world in 16³ blocks, meshed when it changes and not again | [`SectionMesher`](src/main/java/com/larsons/engine/graphics/chunk/SectionMesher.java) |
+| Smooth lighting | per-vertex ambient occlusion, including the diagonal flip | same |
+| Cave culling | per-section face-to-face connectivity by flood fill, then a breadth-first walk out from the camera | [`SectionVisibility`](src/main/java/com/larsons/engine/graphics/chunk/SectionVisibility.java), [`SectionRenderList`](src/main/java/com/larsons/engine/graphics/chunk/SectionRenderList.java) |
+| Block atlas | every sheet in one texture, so terrain is one bind | [`BlockAtlas`](src/main/java/com/larsons/engine/graphics/chunk/BlockAtlas.java) |
+| Render layers | opaque near-to-far with depth writes, then translucent far-to-near without | [`GlTerrainPass`](gl/src/main/java/com/larsons/engine/gl/GlTerrainPass.java) |
+| Cutout alpha | a leaf's holes discard rather than writing depth | `GlTerrainProgram` |
+
+**Almost all of it is on the CPU and none of it needs a graphics card to
+test.** Deciding what the world looks like — which sections exist, which faces
+are exposed, how occluded each corner is, which sections can be seen and in
+what order — is `com.larsons.engine.graphics.chunk`, and `GpuTerrainTest`
+exercises the lot. What is left for the GL module is uploading arrays and
+issuing draw calls. A renderer whose correctness lives in a shader is a
+renderer nobody can test.
+
+What it costs the processor per frame, measured over generated terrain — the
+section walk, which is the whole of the CPU's job once the meshes exist:
+
+| detail distance | painter's sweep | GPU walk | quads on screen |
+|---|---|---|---|
+| 4 chunks | 10.8 ms | **0.036 ms** | 21 000 |
+| 8 chunks | 53.5 ms | **0.130 ms** | 122 000 |
+| 16 chunks | (minutes) | **0.805 ms** | 232 000 |
+
+Two to three hundred times less processor, and a quarter of a million quads is
+an ordinary frame for any GPU made this decade. The detail distance stops being
+the thing that decides a frame rate, which is what the depth buffer bought.
+
+**The two agree about where a vertex lands.** `Mat4.perspective` is derived
+from `EyeCamera`'s own focal length rather than from the textbook
+`gluPerspective`, and `GpuTerrainTest` pins the two to within a hundredth of a
+pixel — so switching backends does not move the picture.
+
+**What still goes through the painter** on the GPU path: the plants, the
+actors, the level's scenery and the far field's level-of-detail tree. Those are
+billboards and merged landforms rather than geometry a section mesh has a
+version of. They are drawn afterwards, at their own depths
+(`DrawTarget.pushDepth`), so the terrain the GPU drew hides the ones standing
+behind it.
+
 ### How far you can see, and how much of it is blocks
 
 Four sliders, all in the **pause menu** while you are looking at what they
