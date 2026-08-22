@@ -267,10 +267,37 @@ public class Level {
     }
 
     /** Record that the cell at {@code (col, row)} changed. */
-    private void markTerrainChanged(int col, int row) {
+    private void markTerrainChanged(int col, int row, int layer) {
         terrainRevision++;
         if (regionRevisions == null) regionRevisions = new java.util.HashMap<>();
         regionRevisions.merge(regionKey(col, row), 1L, Long::sum);
+        CellListener listener = cellListener;
+        if (listener != null) listener.cellChanged(col, row, layer);
+    }
+
+    /**
+     * Told about every cell this level changes.
+     *
+     * <p>For a renderer that keeps geometry: a GPU terrain pass meshes the
+     * world into sections and holds them until something moves, and this is how
+     * it hears that something did. The revision counters beside it answer "has
+     * anything changed" for a cache that can afford to check; this answers
+     * "<em>what</em> changed" for one that cannot rebuild the world to find
+     * out.
+     *
+     * <p>One listener, replaced rather than added to — there is exactly one
+     * renderer drawing a level at a time, and a list would invite the kind of
+     * leak where a scene that has been left goes on being told.
+     */
+    public interface CellListener {
+        void cellChanged(int col, int row, int layer);
+    }
+
+    private transient CellListener cellListener;
+
+    /** Hear about every cell that changes; {@code null} to stop. */
+    public void setCellListener(CellListener listener) {
+        this.cellListener = listener;
     }
 
     /**
@@ -912,7 +939,7 @@ public class Level {
             if (col < 0 || row < 0 || col >= width || row >= height) return false;
             boolean changed = terrain.set(col, row, layer, id);
             if (changed) {
-                markTerrainChanged(col, row);
+                markTerrainChanged(col, row, layer);
                 noteColumnWrite(col, row, layer, id);
                 // No clearCellAttachments here: in a generated world the floor
                 // is bedrock rather than a lid something is standing on, and
@@ -934,7 +961,7 @@ public class Level {
         if (sparse != null) {
             boolean changed = sparse.set(col, row, id);
             if (changed) {
-                markTerrainChanged(col, row);
+                markTerrainChanged(col, row, layer);
                 noteColumnWrite(col, row, layer, id);
                 if (id == 0 && layer == LAYER_GROUND) clearCellAttachments(col, row);
             }
@@ -947,7 +974,7 @@ public class Level {
         }
         if (dense[row][col] == id) return false;
         dense[row][col] = id;
-        markTerrainChanged(col, row);
+        markTerrainChanged(col, row, layer);
         noteColumnWrite(col, row, layer, id);
         if (id == 0 && layer == LAYER_GROUND) clearCellAttachments(col, row);
         return true;

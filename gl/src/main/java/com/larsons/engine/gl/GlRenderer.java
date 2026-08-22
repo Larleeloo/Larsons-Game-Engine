@@ -63,6 +63,7 @@ public final class GlRenderer implements Renderer {
 
     /** Built on the render thread's first frame. See the class note. */
     private GlTarget target;
+    private GlTerrainPass terrain;
 
     /**
      * A1: the frame is drawn here rather than at the window, and blitted on
@@ -208,6 +209,7 @@ public final class GlRenderer implements Renderer {
                 GlSurface.unbind();
             }
             target.beginFrame(width, height);
+            target.attachTerrain(terrainPass());
             target.clear(clearColor.getRGB());
             return target;
         } finally {
@@ -334,6 +336,26 @@ public final class GlRenderer implements Renderer {
     }
 
     /**
+     * The depth-buffered terrain pass, built on first ask.
+     *
+     * <p>This backend has a depth buffer — {@link GlSurface} attaches
+     * {@code GL_DEPTH24_STENCIL8} for the stencil clipping it already does — so
+     * it can offer the one thing the Java2D painter cannot: geometry that is
+     * ordered by the GPU rather than by the CPU, and so does not have to be
+     * re-sorted every frame. See {@link com.larsons.engine.graphics.TerrainPass}.
+     */
+    @Override
+    public com.larsons.engine.graphics.TerrainPass terrainPass() {
+        if (terrain == null) terrain = new GlTerrainPass(this::currentTarget);
+        return terrain;
+    }
+
+    /** The frame's target, for the terrain pass to hand the GL state back to. */
+    private GlTarget currentTarget() {
+        return target;
+    }
+
+    /**
      * Release this renderer's GL objects. <b>Not the window</b> — the engine
      * closes that next, and closing it twice terminates GLFW under the second
      * caller.
@@ -348,6 +370,10 @@ public final class GlRenderer implements Renderer {
      */
     @Override
     public void dispose() {
+        if (terrain != null) {
+            terrain.dispose();
+            terrain = null;
+        }
         if (context.currentOnThisThread()) {
             if (target != null) {
                 target.close();

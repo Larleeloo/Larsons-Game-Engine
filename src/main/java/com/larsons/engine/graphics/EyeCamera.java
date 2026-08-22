@@ -327,6 +327,27 @@ public final class EyeCamera {
     }
 
     /** Screen column of an eye-frame point; only meaningful for {@code depth > 0}. */
+    /**
+     * Where something this far in front of the eye sits in the depth buffer,
+     * in normalised device coordinates.
+     *
+     * <p>What a billboard hands {@code DrawTarget.pushDepth} so a
+     * depth-buffered terrain pass can hide it behind a hill. It is the same
+     * mapping {@link Mat4#perspective} writes into its third row, which is what
+     * makes the answer comparable with the depth the terrain wrote — anything
+     * derived a second way would put sprites in front of the world or behind it
+     * by a hair, and both look like a bug.
+     *
+     * @param distance how far in front of the eye, in world units
+     * @param far      the far plane the terrain pass was drawn with
+     */
+    public static double ndcDepth(double distance, double far) {
+        double z = Math.max(NEAR, distance);
+        double range = Math.max(1e-6, far - NEAR);
+        double clipZ = (far + NEAR) / range * z - 2 * far * NEAR / range;
+        return Math.max(-1, Math.min(1, clipZ / z));
+    }
+
     public double screenX(double right, double depth) {
         return centreX() + right * focal() / depth;
     }

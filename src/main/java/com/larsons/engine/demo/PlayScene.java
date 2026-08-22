@@ -53,6 +53,7 @@ import com.larsons.engine.graphics.Perspective;
 import com.larsons.engine.graphics.PlayerSprites;
 import com.larsons.engine.graphics.Skins;
 import com.larsons.engine.graphics.SolidPainter;
+import com.larsons.engine.graphics.TerrainPass;
 import com.larsons.engine.graphics.SurfaceDecorPainter;
 import com.larsons.engine.graphics.TerrainCache;
 import com.larsons.engine.graphics.TerrainPainter;
@@ -549,6 +550,7 @@ public class PlayScene extends AbstractScene {
      */
     @Override
     public void onExit() {
+        closeSections();
         sounds.reset();
         // Whatever this scene did to the pointer, the next screen inherits a
         // desktop pointer: menus are worked with it, and a hidden cursor left
@@ -2614,9 +2616,20 @@ public class PlayScene extends AbstractScene {
             solid.setCutaway(drawX() + hitSize() / 2.0, drawY() + hitSize(),
                     drawZ() + drawSize() * EYE_HEIGHT, ts() * CUTAWAY_TILES);
         }
-        phase("terrain", solid::terrain);
-        // After the detailed sweep and drawn behind it; see SolidPainter.distant.
-        phase("distant", solid::distant);
+        // The world itself, through the GPU where there is one to use — see
+        // drawGpuTerrain. The painter is told, and then draws only what a
+        // cached mesh cannot hold: the plants, the actors, the scenery.
+        TerrainPass gpu = gpuTerrain(target, p);
+        solid.setDepthBuffered(gpu != null, gpuFar());
+        if (gpu != null) {
+            phase("terrain-gpu", () -> drawGpuTerrain(gpu));
+            // Still swept, but only for the plants, and only as far as they go.
+            phase("terrain", solid::terrain);
+        } else {
+            phase("terrain", solid::terrain);
+            // After the detailed sweep and drawn behind it; see SolidPainter.distant.
+            phase("distant", solid::distant);
+        }
         // Both scenery layers, queued into the same painter. "Behind the
         // actors" and "in front of them" is a flat picture's way of saying what
         // depth says for itself once there is an eye standing in the world, so
@@ -2659,6 +2672,89 @@ public class PlayScene extends AbstractScene {
         // the confusion the crosshair exists to prevent.
         if (viewpoint.freeLook()) drawCrosshair(target);
         if (viewpoint == Viewpoint.FIRST_PERSON) drawHandItem(target, p);
+    }
+
+    // --- the GPU terrain path --------------------------------------------------
+
+    /** The block atlas, the meshed sections and the frame's walk of them. */
+    private com.larsons.engine.graphics.chunk.BlockAtlas blockAtlas;
+    private com.larsons.engine.graphics.chunk.TerrainSections sections;
+    private final com.larsons.engine.graphics.chunk.SectionRenderList renderList =
+            new com.larsons.engine.graphics.chunk.SectionRenderList();
+    private Level meshedLevel;
+    private long meshedGeneration;
+
+    /** Let the meshing threads go and stop listening to the level. */
+    private void closeSections() {
+        if (sections != null) {
+            sections.close();
+            sections = null;
+        }
+        if (meshedLevel != null) meshedLevel.setCellListener(null);
+        meshedLevel = null;
+        blockAtlas = null;
+    }
+
+    /**
+     * The backend's depth-buffered terrain pass, if it has one and this level
+     * is the kind it can draw.
+     *
+     * <p>Asked of the <em>target</em> every frame rather than remembered:
+     * the same scene is drawn into a window, into a golden-frame recording and
+     * into the level editor's preview, and only one of those has a GPU behind
+     * it. A frame that finds nothing draws the world with the painter, which is
+     * what every frame did before this existed.
+     */
+    private TerrainPass gpuTerrain(DrawTarget target, GameProfile p) {
+        TerrainPass pass = target.terrainPass();
+        if (pass == null || level == null || !viewpoint.solid()) return null;
+        if (!p.verticality) return null;   // a flat level has no third dimension to mesh
+        if (sections == null || meshedLevel != level) {
+            closeSections();
+            blockAtlas = com.larsons.engine.graphics.chunk.BlockAtlas.of(level.blocks);
+            sections = new com.larsons.engine.graphics.chunk.TerrainSections(level, blockAtlas);
+            meshedLevel = level;
+            meshedGeneration = level.terrainRevision();
+            // A block placed or mined is a section to build again — the six-cell
+            // argument the column mesh makes, one dimension up.
+            level.setCellListener((col, row, layer) -> {
+                com.larsons.engine.graphics.chunk.TerrainSections at = sections;
+                if (at != null) at.invalidate(col, row, layer);
+            });
+        }
+        return pass;
+    }
+
+    /** The far plane the GPU pass draws with, which the painter's depths share. */
+    private double gpuFar() {
+        return Math.max(EyeCamera.NEAR * 2, solid.fogEnd() * 1.5);
+    }
+
+    /**
+     * Walk the section graph and hand the result to the backend.
+     *
+     * <p>Only as far as the <em>detail</em> distance: past that the world is
+     * the level-of-detail tree's, which the painter still draws, because a
+     * cached box of landform is not geometry a section mesh has any version of.
+     */
+    private void drawGpuTerrain(TerrainPass pass) {
+        // Cheap when nothing moved: the pass compares the atlas's revision and
+        // only re-uploads when a sheet has actually been redrawn.
+        blockAtlas.advance(animClock);
+        pass.setAtlas(blockAtlas);
+        com.larsons.engine.graphics.Mat4 projection =
+                com.larsons.engine.graphics.Mat4.perspective(eye.fov(),
+                        eye.viewportWidth() / (double) eye.viewportHeight(),
+                        EyeCamera.NEAR, gpuFar());
+        com.larsons.engine.graphics.Frustum frustum = com.larsons.engine.graphics.Frustum.of(
+                projection.times(com.larsons.engine.graphics.Mat4.view(eye)));
+        int layers = Math.max(1, level.layerCount());
+        int size = com.larsons.engine.graphics.chunk.SectionMesh.SIZE;
+        int tileSize = Math.max(1, level.tileSize);
+        renderList.build(sections, frustum, tileSize, eye.x(), eye.y(), eye.z(),
+                solid.detailDistance(), 0, (layers + size - 1) / size);
+        pass.drawTerrain(renderList, eye, tileSize, solid.fogArgb(),
+                solid.fogStart(), solid.fogEnd());
     }
 
     /**

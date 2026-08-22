@@ -445,6 +445,41 @@ public interface DrawTarget {
     void popAlpha();
 
     /**
+     * Draw what follows at this depth, so it can be hidden by a
+     * {@linkplain com.larsons.engine.graphics.TerrainPass depth-buffered
+     * terrain pass} that has already run.
+     *
+     * <p><b>A no-op wherever there is no depth buffer, which is most places.</b>
+     * Java2D has none and never will, so its target ignores this and its scenes
+     * go on sorting for themselves; a GPU backend that has drawn the world in
+     * three dimensions uses it to put a character behind the hill it is standing
+     * behind. A painter that never calls it draws in front of everything, which
+     * is what a HUD wants.
+     *
+     * @param ndcZ where to sit, in normalised device coordinates: &minus;1 is
+     *             against the near plane and 1 against the far one. Callers get
+     *             this from {@code EyeCamera.ndcDepth}.
+     */
+    default void pushDepth(float ndcZ) {}
+
+    /** Undo the last {@link #pushDepth}. */
+    default void popDepth() {}
+
+    /**
+     * The depth-buffered terrain pass this frame is being drawn through, or
+     * {@code null} where the backend has none.
+     *
+     * <p>On the target rather than on the renderer because a scene is handed a
+     * target and nothing else, which is the seam that lets a scene be drawn
+     * into a recording, a golden frame or a real window without knowing the
+     * difference. A scene that finds one here draws the world with it and its
+     * sprites at their own depths; a scene that finds {@code null} draws
+     * everything through {@link com.larsons.engine.graphics.SolidPainter}, as
+     * every scene did before there was a choice.
+     */
+    default com.larsons.engine.graphics.TerrainPass terrainPass() { return null; }
+
+    /**
      * Apply {@code transform} to everything drawn until the matching
      * {@link #popTransform()}, on top of any transform already pushed.
      */
