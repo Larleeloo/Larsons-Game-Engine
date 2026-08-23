@@ -640,11 +640,49 @@ class SolidViewTest {
                         + "ground the blocks gave up, and did not");
     }
 
+    /**
+     * <b>The render distance bounds everything, and the horizon has to be
+     * outside it or there is no horizon.</b>
+     *
+     * <p>Both halves of the failure that read as "rendering stops at twenty
+     * chunks". The detail distance is clamped to the render distance, because
+     * blocks cannot be drawn past the edge of what is drawn at all — and when
+     * the two coincide the coarse pass has nothing left to cover, so the world
+     * ends at a hard edge instead of fading into landforms. Which is correct,
+     * and is why the pause menu now raises one when you raise the other.
+     */
+    @Test
+    void theWorldEndsAtTheRenderDistanceAndTheCoarsePassFillsWhatIsLeft() {
+        Level plain = rolling(220);
+        int view = 160, asked = 900;              // tiles; the level is 220 across
+        SolidPainter painter = new SolidPainter();
+        painter.setViewTiles(view);
+        painter.setDetailTiles(asked);            // far more than the view allows
+        painter.setDistantTiles(0);
+        painter.begin(new RecordingTarget(400, 300), plainEye(), plain);
+        assertEquals(view * (double) TILE, painter.detailDistance(), 1e-6,
+                "detail cannot outrun the render distance, so asking for " + asked
+                        + " tiles of it inside a " + view + "-tile view gets the view");
+
+        // With the blocks reaching the edge there is no band left between them,
+        // so nothing coarse — the world ends at a hard line.
+        assertEquals(0, boxesFrom(plain, asked, view, view),
+                "no room between the blocks and the edge means no coarse pass");
+        // Pull the blocks in and the same setting fills what they gave up.
+        assertTrue(boxesFrom(plain, asked, 32, view) > 0,
+                "and given room it draws the landforms that fill it");
+    }
+
     /** Coarse boxes queued when the blocks stop at {@code handoff} tiles. */
     private static int boxesFrom(Level lvl, int detailTiles, int handoffTiles) {
+        return boxesFrom(lvl, detailTiles, handoffTiles, 90 * 16);
+    }
+
+    /** The same, with the render distance said explicitly. */
+    private static int boxesFrom(Level lvl, int detailTiles, int handoffTiles, int viewTiles) {
         RecordingTarget target = new RecordingTarget(400, 300);
         SolidPainter painter = new SolidPainter();
-        painter.setViewTiles(90 * 16);
+        painter.setViewTiles(viewTiles);
         painter.setDetailTiles(detailTiles);
         painter.setDistantTiles(0);
         painter.setTerrainHandoff(handoffTiles * (double) TILE);

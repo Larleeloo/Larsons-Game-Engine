@@ -255,6 +255,40 @@ class PauseMenuTest {
                 "the way out is still the first thing offered");
     }
 
+    /**
+     * <b>Asking for more detail asks for more world to put it in.</b>
+     *
+     * <p>The regression this pins was reported twice as "the detail slider does
+     * nothing". Blocks cannot be drawn past the edge of what is drawn at all, so
+     * the painter clamps the detail distance to the render distance — and with
+     * the render distance at twenty chunks, dragging detail to ninety got you
+     * twenty, silently, with nothing on screen to say why. Worse, the two then
+     * coincided, which left the coarse pass with nothing to draw between them:
+     * the world stopped dead at twenty rather than fading into landforms.
+     */
+    @Test
+    void raisingTheDetailDistanceRaisesTheRenderDistanceToHoldIt() {
+        com.larsons.engine.config.PlayerSettings settings =
+                new com.larsons.engine.config.PlayerSettings();
+        com.larsons.engine.world.gen.TerrainSettings terrain =
+                new com.larsons.engine.world.gen.TerrainSettings();
+        terrain.renderDistance = 20 * 16;
+
+        PlayScene.setDetailDistance(settings, terrain, 90 * 16);
+        assertEquals(90 * 16, settings.detailDistance, "the detail distance is what was asked");
+        assertTrue(terrain.renderDistance >= 90 * 16,
+                "and the render distance has to make room for it, or the painter "
+                        + "clamps the detail straight back down to "
+                        + terrain.renderDistance / 16 + " chunks");
+
+        // Downward it does not drag: a player pulling detail in wants a cheaper
+        // frame, not a smaller world — the landforms carry the rest.
+        int wide = terrain.renderDistance;
+        PlayScene.setDetailDistance(settings, terrain, 8 * 16);
+        assertEquals(wide, terrain.renderDistance,
+                "turning detail down must not shrink the horizon with it");
+    }
+
     /** And they are gone from the level-settings form they came out of. */
     @Test
     void theLevelSettingsFormNoLongerSetsThem() {

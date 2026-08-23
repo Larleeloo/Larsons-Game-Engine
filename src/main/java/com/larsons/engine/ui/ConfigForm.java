@@ -72,6 +72,16 @@ public class ConfigForm {
 
         Option(String label) { this.label = label; }
 
+        /**
+         * The text actually drawn for this row.
+         *
+         * <p>Almost always the label it was built with. {@link NoteOption} can
+         * override it to say something that changes while the form is open —
+         * what a setting is <em>currently getting you</em>, as opposed to what
+         * it asked for.
+         */
+        String labelText() { return label; }
+
         public Option enabledWhen(BooleanSupplier cond) { this.enabledWhen = cond; return this; }
 
         public boolean isEnabled() { return enabled; }
@@ -203,9 +213,16 @@ public class ConfigForm {
      * over it, because there is nothing on it to activate.
      */
     static final class NoteOption extends Option {
-        NoteOption(String text) { super(text); selectable = false; }
+        private final Supplier<String> live;
+        NoteOption(String text) { super(text); selectable = false; live = null; }
+        NoteOption(Supplier<String> live) { super(""); selectable = false; this.live = live; }
         @Override public Control control() { return Control.NOTE; }
         @Override String valueText() { return ""; }
+        @Override String labelText() {
+            if (live == null) return label;
+            String said = live.get();
+            return said == null ? "" : said;
+        }
     }
 
     /** A draggable horizontal slider over an int range (drag, click, or arrow keys). */
@@ -370,6 +387,18 @@ public class ConfigForm {
      */
     public Option addNote(String text) {
         return add(new NoteOption(text));
+    }
+
+    /**
+     * A caption that is re-read every frame — for saying what a setting is
+     * <em>currently getting you</em>, which is not always what it asked for.
+     *
+     * <p>A slider that is being clamped, or a request a machine cannot meet,
+     * otherwise reads as a broken control: the number moves and nothing happens,
+     * and there is nowhere for the engine to say why. This is that somewhere.
+     */
+    public Option addNote(Supplier<String> live) {
+        return add(new NoteOption(live));
     }
     public Option addSlider(String label, IntSupplier get, IntConsumer set, int min, int max) {
         return add(new SliderOption(label, get, set, min, max));
@@ -673,7 +702,7 @@ public class ConfigForm {
             // left: a long label is shortened, never drawn over the field.
             int controlLeft = renderValue(target, o, contentX, contentW,
                     baseY, boxTop, boxH, labelColor);
-            String label = UiText.fit(target, itemFont, o.label,
+            String label = UiText.fit(target, itemFont, o.labelText(),
                     controlLeft - LABEL_GAP - contentX);
             o.labelBox.setBounds(contentX, boxTop, target.textWidth(label, itemFont), boxH);
             target.drawText(label, contentX, baseY, itemFont, labelColor);
@@ -722,7 +751,7 @@ public class ConfigForm {
         Font noteFont = theme.noteFont;
         int lineH = target.textHeight(noteFont);
         int maxLines = Math.max(1, (rowHeight - 6) / lineH);
-        List<String> lines = UiText.wrap(target, noteFont, o.label, contentW, maxLines);
+        List<String> lines = UiText.wrap(target, noteFont, o.labelText(), contentW, maxLines);
         if (lines.isEmpty()) return;
 
         // Centre the block in the row slot so a one-line note sits level with
@@ -746,7 +775,7 @@ public class ConfigForm {
     private void renderActionRow(DrawTarget target, Option o, int contentX, int contentW,
                                  int baseY, int boxTop, int boxH, Color color) {
         Font font = theme.itemFont;
-        String label = UiText.fit(target, font, o.label, contentW - BUTTON_PAD);
+        String label = UiText.fit(target, font, o.labelText(), contentW - BUTTON_PAD);
         int tw = target.textWidth(label, font);
         int bw = tw + BUTTON_PAD;
         int bx = contentX + (contentW - bw) / 2;
@@ -811,7 +840,7 @@ public class ConfigForm {
             }
             case TEXT -> {
                 int fw = Math.max(MIN_FIELD_W, Math.min(MAX_FIELD_W,
-                        contentW - target.textWidth(o.label, font) - LABEL_GAP));
+                        contentW - target.textWidth(o.labelText(), font) - LABEL_GAP));
                 int fx = rightEdge - fw;
                 o.mainBox.setBounds(fx, boxTop, fw, boxH);
                 target.drawRoundRect(fx, boxTop, fw, boxH, 8, 8,
