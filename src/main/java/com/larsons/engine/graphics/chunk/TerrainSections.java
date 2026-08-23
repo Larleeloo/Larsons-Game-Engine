@@ -362,8 +362,15 @@ public final class TerrainSections {
                 t.setPriority(Thread.MIN_PRIORITY);
                 return t;
             };
+            // Most of the machine, not half of it. These run below the game
+            // loop, so a thread that has work only takes a core the frame was
+            // not using — and the thing being traded is a few seconds of the
+            // world arriving against frames during those seconds, which is a
+            // trade worth making in that direction: a dip toward 60 while a
+            // large view fills is reasonable, a minute of watching it fill is
+            // not. One core is left alone for the render thread.
             workers = Executors.newFixedThreadPool(
-                    Math.max(1, Runtime.getRuntime().availableProcessors() / 2), factory);
+                    Math.max(1, Runtime.getRuntime().availableProcessors() - 1), factory);
         }
         return workers;
     }

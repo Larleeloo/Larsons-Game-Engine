@@ -569,6 +569,40 @@ class GpuTerrainTest {
                 + grown + " from " + held);
     }
 
+    /**
+     * <b>A machine that is hitting its frame rate must be allowed to grow.</b>
+     *
+     * <p>The bug this pins shipped, and it looked like a broken setting rather
+     * than a governor: every detail distance drew the same six or seven chunks,
+     * however long you waited. The radius was being steered on <em>whole-frame</em>
+     * time against a six-millisecond budget — and a frame running at exactly the
+     * 120 Hz it was aiming for takes 8.3 ms, so hitting the target read as
+     * missing it, and the radius sat at its opening value forever.
+     *
+     * <p>The reason it cannot be repaired by choosing a larger number is the
+     * point of the test: under vsync the frame time is <em>pinned</em> to the
+     * refresh interval whatever the load, so an idle 120 Hz frame and a
+     * struggling one are the same measurement. What is steered on now is the
+     * walk's own cost, which nothing pins.
+     */
+    @Test
+    void aFrameRateItIsAlreadyHittingDoesNotStopTheRadiusGrowing() {
+        DetailReach reach = new DetailReach();
+        double span = SectionMesh.SIZE * (double) TILE;
+        double asked = 40 * span;
+        double at = reach.update(asked, Double.MAX_VALUE, 0, 0, 0, 0, span);
+        double start = at;
+        // A healthy frame: the walk costs a fraction of a millisecond, the world
+        // is built, and there is little on screen. Nothing here is a reason to
+        // stop — whatever the wall clock between frames happens to say.
+        for (int i = 0; i < 400; i++) {
+            at = reach.update(asked, Double.MAX_VALUE, 200, 900, 0, 0.4, span);
+        }
+        assertEquals(asked, at, 1e-6,
+                "a comfortable frame has to reach what was asked for, and stopped at "
+                        + at / span + " chunks from " + start / span);
+    }
+
     /** Any of the three costs over its target pulls the radius back in. */
     @Test
     void theDetailRadiusBacksOffWhateverIsCostingTooMuch() {

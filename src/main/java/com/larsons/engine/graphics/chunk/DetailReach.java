@@ -67,14 +67,30 @@ public final class DetailReach {
     public static final int TARGET_VISITS = 24_000;
 
     /**
-     * The frame this is trying to fit inside, in milliseconds.
+     * What the section walk itself may cost, in milliseconds.
      *
-     * <p>120 frames a second is 8.3 ms for everything — the world, the sprites,
-     * the interface, the simulation. Six leaves room for the rest of them, and
-     * a frame consistently over it is the machine saying the radius is too big
-     * whatever the section count thinks.
+     * <p><b>The walk's own time, and never the frame's.</b> That distinction
+     * shipped wrong once and was worth a bug report: this used to compare the
+     * <em>whole frame</em> against a six-millisecond budget, reasoning that 120
+     * frames a second is 8.3 ms and the terrain should have most of it. But a
+     * frame running at exactly 120 Hz <em>takes</em> 8.3 ms, which is over six —
+     * so a game hitting its target read as a machine in distress, the radius
+     * refused to grow past its opening value, and every detail-distance setting
+     * produced the same six or seven chunks however long you waited.
+     *
+     * <p>And it is not a matter of picking a bigger number. Under vsync or any
+     * frame cap the frame time is <b>pinned to the refresh interval whatever the
+     * load is</b>: an idle 120 Hz frame and a struggling one both read 8.3 ms, an
+     * idle 60 Hz frame reads 16.7. Whole-frame time carries no information about
+     * headroom at all, and there is no threshold that fixes that.
+     *
+     * <p>The walk's own time does carry it — nothing pins it, it scales with the
+     * radius, and it is the thing this class is actually steering. Two
+     * milliseconds is a quarter of a 120 Hz frame spent deciding what to draw,
+     * which is more than it should ever need: measured at thirty-two chunks it
+     * costs 0.41.
      */
-    private static final double TARGET_FRAME_MS = 6.0;
+    private static final double TARGET_WALK_MS = 2.0;
 
     /** Below these fractions of the targets, growing is allowed. */
     private static final double COMFORTABLE = 0.85;
@@ -84,11 +100,15 @@ public final class DetailReach {
      * grow anyway.
      *
      * <p>Not zero: the rim is always a frame or two behind, and a player walking
-     * forward keeps it that way for as long as they walk. Two per cent is the
+     * forward keeps it that way for as long as they walk. A tenth is the
      * difference between "the edge is arriving" and "the middle has not turned
-     * up yet".
+     * up yet" — the runaway this guards against was nine tenths unbuilt, not one
+     * tenth, and {@link #TARGET_VISITS} is a hard brake underneath it either
+     * way. Stricter than this and the radius grows only on the occasional frame
+     * where the rim happens to have caught up, which turns a second of expansion
+     * into a minute of it.
      */
-    private static final double UNBUILT_ALLOWED = 0.02;
+    private static final double UNBUILT_ALLOWED = 0.10;
 
     /** How much the radius moves in one frame. */
     private static final double STEP = 0.015;
@@ -114,11 +134,14 @@ public final class DetailReach {
      * @param drawn      sections the last frame drew
      * @param visits     sections the last frame's walk stepped into
      * @param unbuilt    how many of those had no mesh yet
-     * @param frameMs    how long the last frame took, or {@code 0} if unknown
+     * @param walkMs     what the last walk cost, or {@code 0} if unknown.
+     *                   <b>The walk's own time — never the whole frame's</b>,
+     *                   which under vsync says nothing; see
+     *                   {@link #TARGET_WALK_MS}
      * @param span       one section's width in world units, for the floor
      */
     public double update(double requested, double affordable, int drawn, int visits,
-                         int unbuilt, double frameMs, double span) {
+                         int unbuilt, double walkMs, double span) {
         double ceiling = Math.min(requested, affordable);
         double floor = Math.min(ceiling, FLOOR_SECTIONS * span);
         ceiling = Math.max(ceiling, floor);
@@ -132,7 +155,7 @@ public final class DetailReach {
         // the machine missed should not wait for the other signals to agree.
         boolean tooMuch = drawn > TARGET_SECTIONS
                 || visits > TARGET_VISITS
-                || (frameMs > 0 && frameMs > TARGET_FRAME_MS);
+                || (walkMs > 0 && walkMs > TARGET_WALK_MS);
 
         // <b>And growing waits for the world it already asked for.</b> The
         // section count measures what has been <em>built</em>, not what has been
@@ -152,7 +175,7 @@ public final class DetailReach {
         boolean roomToGrow = arrived
                 && drawn < TARGET_SECTIONS * COMFORTABLE
                 && visits < TARGET_VISITS * COMFORTABLE
-                && (frameMs <= 0 || frameMs < TARGET_FRAME_MS * COMFORTABLE);
+                && (walkMs <= 0 || walkMs < TARGET_WALK_MS * COMFORTABLE);
 
         if (tooMuch) reach *= 1 - STEP;
         else if (roomToGrow) reach *= 1 + STEP;

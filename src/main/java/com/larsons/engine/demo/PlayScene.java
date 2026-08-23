@@ -768,12 +768,6 @@ public class PlayScene extends AbstractScene {
 
     @Override
     public void update(double dt, InputManager input) {
-        // What the machine is actually managing, which is what the detail
-        // radius steers on. Smoothed over about a dozen frames: a single long
-        // frame is a garbage collection or a window being dragged, and pulling
-        // the render distance in for one of those would be visible where the
-        // cause was not.
-        lastFrameMs += (dt * 1000 - lastFrameMs) * 0.08;
         // Unconditionally, before anything below can decide to skip the
         // simulation. render() blends from "one step ago" to "now", so a tick
         // that moves nothing has to leave those two equal — otherwise the frames
@@ -2713,8 +2707,8 @@ public class PlayScene extends AbstractScene {
     private final com.larsons.engine.graphics.chunk.DetailReach detailReach =
             new com.larsons.engine.graphics.chunk.DetailReach();
 
-    /** The last frame's delta, in milliseconds — what {@link #detailReach} steers on. */
-    private double lastFrameMs;
+    /** What the last section walk cost, in milliseconds — see {@link #gpuReach}. */
+    private double lastWalkMs;
 
     /** This frame's answer from {@link #detailReach}, shared by both halves of it. */
     private double frameGpuReach;
@@ -2796,8 +2790,13 @@ public class PlayScene extends AbstractScene {
         int layers = Math.max(1, level.layerCount());
         int size = com.larsons.engine.graphics.chunk.SectionMesh.SIZE;
         int tileSize = Math.max(1, level.tileSize);
+        long walkStarted = System.nanoTime();
         renderList.build(sections, frustum, tileSize, eye.x(), eye.y(), eye.z(),
                 frameGpuReach, 0, (layers + size - 1) / size);
+        // The walk's own cost, which is what the radius steers on. Deliberately
+        // not the frame's: see DetailReach.TARGET_WALK_MS for what happens when
+        // a vsynced frame time is mistaken for a measure of headroom.
+        lastWalkMs = (System.nanoTime() - walkStarted) / 1e6;
         pass.drawTerrain(renderList, eye, tileSize, solid.fogArgb(),
                 solid.fogStart(), solid.fogEnd());
     }
@@ -2816,7 +2815,7 @@ public class PlayScene extends AbstractScene {
         return detailReach.update(solid.detailDistance(),
                 sections.affordableReach(tileSize),
                 renderList.visible().size(), renderList.visits(),
-                renderList.unbuilt(), lastFrameMs, span);
+                renderList.unbuilt(), lastWalkMs, span);
     }
 
     /**
