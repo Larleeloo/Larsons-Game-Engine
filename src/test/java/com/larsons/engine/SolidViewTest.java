@@ -583,6 +583,43 @@ class SolidViewTest {
         assertTrue(near > 0, "…and still draws the ones you are standing in");
     }
 
+    /**
+     * <b>Handing the blocks to a GPU must not take the horizon away with
+     * them</b> — and the horizon must stay flat when it goes.
+     *
+     * <p>Two halves, and both are regressions this path has already had once.
+     * The near world is the backend's out to the detail distance, but everything
+     * past that is still the level-of-detail tree's and still the painter's: a
+     * depth-buffered frame that skipped it would end the world at the render
+     * distance slider, which on the default twelve chunks is a wall of sky.
+     *
+     * <p>And it is drawn with no depth of its own, because it does not need one:
+     * every box of it starts where the detail ends, so the world drawn
+     * afterwards covers it by construction. That matters because a depth is a
+     * uniform, a uniform is a flush, and a flush is a draw call — one per coarse
+     * box, thousands of them at two hundred and fifty-six chunks, to arbitrate an
+     * order the geometry already settled.
+     */
+    @Test
+    void theHorizonSurvivesTheBlocksGoingToTheGpu() {
+        Level plain = rolling(220);
+        RecordingTarget target = new RecordingTarget(400, 300);
+        SolidPainter painter = new SolidPainter();
+        painter.setViewTiles(90 * 16);
+        painter.setDetailTiles(32);
+        painter.setDistantTiles(0);
+        painter.setDepthBuffered(true, 20_000);
+        painter.begin(target, plainEye(), plain);
+        painter.distant();
+        painter.flush();
+
+        assertTrue(target.count("fillPolygon") > 0,
+                "the far world is the painter's job whoever is drawing the near one");
+        assertEquals(0, target.count("pushDepth"),
+                "the horizon is drawn before the near world and so needs no depth; "
+                        + "one per box is one draw call per box");
+    }
+
     /** Faces drawn with the ground at full reach and the scenery at {@code decor}. */
     private static int decorFaces(Level lvl, EyeCamera eye, int decorTiles) {
         RecordingTarget target = new RecordingTarget(eye.viewportWidth(), eye.viewportHeight());

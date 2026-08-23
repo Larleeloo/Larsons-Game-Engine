@@ -118,11 +118,50 @@ public final class SectionMesher {
             }
         }
         SectionVisibility visibility = SectionVisibility.of(inner);
-        if (!anything) return SectionMesh.empty(sx, sy, sz);
 
         Buffer opaque = new Buffer();
         Buffer translucent = new Buffer();
         float[] uv = new float[4];
+
+        // <b>The floor, which is not a cube.</b> Layer 0 of a level is a lid at
+        // z = 0 with no thickness — the ground rather than a block standing on
+        // it — so the loop below cannot reach it: that loop starts at layer 1,
+        // because layer L lives in box L − 1. {@code SolidPainter} drew the lid
+        // itself and stops as soon as a depth-buffered backend takes the blocks
+        // over, and if nothing picked it up here a column whose only content is
+        // the painted floor would be a hole straight through the world — every
+        // column of one, on a level built by hand.
+        boolean lid = false;
+        if (sy == 0) {
+            for (int by = 0; by < size; by++) {
+                for (int bx = 0; bx < size; bx++) {
+                    // bz = −1 is the padded slice holding layer 0; the same
+                    // exposure rule as any other upward face, so a block
+                    // standing on the floor hides the tile under itself.
+                    int id = ids[index(bx + 1, by + 1, 0, pad)];
+                    if (id <= 0) continue;
+                    Block block = level.blocks.get(id);
+                    if (block != null && block.plant()) continue;
+                    if (!exposed(ids, solid, level, pad, bx, by, -1,
+                            SectionVisibility.UP, id)) continue;
+                    Color colour = level.colorFor(id);
+                    if (colour == null) continue;
+                    atlas.uv(id, BlockAtlas.FACE_TOP, uv);
+                    Color tintBase = atlas.hasSheet(id, BlockAtlas.FACE_TOP)
+                            ? new Color(255, 255, 255, colour.getAlpha())
+                            : colour;
+                    float fx0 = bx * (float) ts, fy0 = by * (float) ts;
+                    quad(colour.getAlpha() < 255 ? translucent : opaque,
+                            tintBase, SHADE_TOP, uv,
+                            fx0, fy0, 0f, fx0 + ts, fy0 + ts, 0f,
+                            SectionVisibility.UP,
+                            ao(solid, pad, bx, by, -1, SectionVisibility.UP));
+                    lid = true;
+                }
+            }
+        }
+
+        if (!anything && !lid) return SectionMesh.empty(sx, sy, sz);
 
         for (int bz = 0; bz < size; bz++) {
             int layer = baseBox + bz + 1;

@@ -25,6 +25,32 @@ package com.larsons.engine.graphics;
  */
 public final class Mat4 {
 
+    /**
+     * <b>Geometry facing the eye comes out of {@link #perspective} wound
+     * clockwise, and a back-face cull has to be told so.</b>
+     *
+     * <p>Wind a face counter-clockwise seen from outside — which is what every
+     * mesher in this engine does, and what the textbook calls the front face —
+     * and push it through the usual OpenGL projection, where the eye looks down
+     * &minus;Z: it lands on the screen counter-clockwise, which is why
+     * {@code GL_CCW} is the driver's default. This projection looks down
+     * <b>+Z</b> instead, because {@link EyeCamera} does, and that one sign flips
+     * the answer. A face whose outward normal points back at the eye has a
+     * negative eye-space z-component of its normal here, and the perspective
+     * divide carries that straight through to the window: the same triangle,
+     * unchanged, comes out <em>clockwise</em>.
+     *
+     * <p>So a backend culling back faces against this matrix must set
+     * {@code glFrontFace(GL_CW)}. Setting {@code GL_CCW} does not draw the world
+     * mirrored or upside down — the image is right either way — it culls exactly
+     * the faces that were pointing at you and keeps the ones that were pointing
+     * away, so a flat plain shows nothing at all and a lone block shows the two
+     * or three faces on its far side. That is a hard failure to read backwards
+     * from, which is why the convention is stated here as a value, next to the
+     * matrix that causes it, and pinned by {@code GpuTerrainTest}.
+     */
+    public static final boolean FRONT_FACES_WIND_CLOCKWISE = true;
+
     private final float[] m;
 
     private Mat4(float[] m) {

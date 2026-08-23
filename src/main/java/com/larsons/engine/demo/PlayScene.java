@@ -2622,6 +2622,16 @@ public class PlayScene extends AbstractScene {
         TerrainPass gpu = gpuTerrain(target, p);
         solid.setDepthBuffered(gpu != null, gpuFar());
         if (gpu != null) {
+            // The horizon first, and drawn on its own. Every coarse box of it
+            // lies beyond the detailed reach, so the world the GPU draws next is
+            // in front of all of it — which means it needs no depth of its own
+            // and can be flushed flat, before the pass that clears the depth
+            // buffer. Giving it depths instead would be a uniform change, and so
+            // a draw call, per box (SolidPainter.distant).
+            phase("distant", () -> {
+                solid.distant();
+                solid.flush();
+            });
             phase("terrain-gpu", () -> drawGpuTerrain(gpu));
             // Still swept, but only for the plants, and only as far as they go.
             phase("terrain", solid::terrain);
@@ -2708,6 +2718,11 @@ public class PlayScene extends AbstractScene {
     private TerrainPass gpuTerrain(DrawTarget target, GameProfile p) {
         TerrainPass pass = target.terrainPass();
         if (pass == null || level == null || !viewpoint.solid()) return null;
+        // A backend that has tried and given up — a shader the driver refused.
+        // Asked every frame because the answer can only turn up after the first
+        // one, and the cost of not asking is the whole world: the painter has
+        // already been stood down by the time the pass declines.
+        if (!pass.available()) return null;
         if (!p.verticality) return null;   // a flat level has no third dimension to mesh
         if (sections == null || meshedLevel != level) {
             closeSections();
