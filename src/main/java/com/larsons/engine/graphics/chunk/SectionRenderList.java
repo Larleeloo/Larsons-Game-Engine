@@ -135,6 +135,7 @@ public final class SectionRenderList {
                       int minY, int maxY) {
         visible.clear();
         clearSeen();
+        clearBandMemo();
         head = tail = 0;
 
         double span = SectionMesh.SIZE * (double) tileSize;
@@ -180,6 +181,11 @@ public final class SectionRenderList {
                 int nz = sz + SectionVisibility.step(face, 1);
                 int ny = sy + SectionVisibility.step(face, 2);
                 if (ny < minY || ny >= maxY) continue;
+                // Not up through the sky. A column knows the band it actually
+                // holds geometry in, and above a mountain that is a few sections
+                // out of twenty — the rest is air the walk would step into, ask
+                // about, and step out of. See TerrainSections.withinBand.
+                if (!inBand(sections, nx, ny, nz)) continue;
                 long key = TerrainSections.key(nx, ny, nz);
                 if (!markSeen(key)) continue;
 
@@ -198,6 +204,51 @@ public final class SectionRenderList {
                 push(nx, ny, nz, SectionVisibility.opposite(face));
             }
         }
+    }
+
+    // --- the band memo ---------------------------------------------------------------
+
+    /**
+     * A one-frame, direct-mapped memo of {@link TerrainSections#withinBand}.
+     *
+     * <p><b>Because the saving and the cost were the same size without it.</b>
+     * The band is asked once per <em>step</em> — six per section — and the
+     * answer lives in a {@code ConcurrentHashMap} keyed by a boxed
+     * {@code Long}, so skipping the sky cost a hash and an allocation per step
+     * to save a hash and an allocation per section. Measured, the walk got
+     * slower: 5 664 visits at 2.28 ms became 3 467 visits at 6.20.
+     *
+     * <p>A column is asked about several times in quick succession — once per
+     * vertical neighbour, and again from each of its horizontal ones — and a
+     * breadth-first walk works through columns in a run, so a small
+     * direct-mapped table hits nearly always and costs one multiply and one
+     * array read when it does. Collisions simply re-ask; there is nothing to
+     * evict and nothing to be correct about beyond the answer itself.
+     *
+     * <p>Cleared each frame, so a band that widened while the meshers caught up
+     * is picked up on the next one rather than being remembered wrongly for the
+     * rest of the session.
+     */
+    private static final int BAND_MEMO = 1 << 12;
+    private final long[] bandKey = new long[BAND_MEMO];
+    private final int[] bandLow = new int[BAND_MEMO];
+    private final int[] bandHigh = new int[BAND_MEMO];
+
+    private boolean inBand(TerrainSections sections, int sx, int sy, int sz) {
+        // +1 so that column (0,0) — a real column — is not the empty marker.
+        long key = (((long) sx << 32) ^ (sz & 0xFFFFFFFFL)) + 1;
+        int at = (int) (mix(key) & (BAND_MEMO - 1));
+        if (bandKey[at] != key) {
+            bandKey[at] = key;
+            long band = sections.band(sx, sz);
+            bandLow[at] = (int) (band >> 32);
+            bandHigh[at] = (int) band;
+        }
+        return sy >= bandLow[at] && sy <= bandHigh[at];
+    }
+
+    private void clearBandMemo() {
+        java.util.Arrays.fill(bandKey, 0L);
     }
 
     // --- the two primitive collections ----------------------------------------------

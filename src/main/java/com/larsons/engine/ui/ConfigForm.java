@@ -84,6 +84,28 @@ public class ConfigForm {
 
         public Option enabledWhen(BooleanSupplier cond) { this.enabledWhen = cond; return this; }
 
+        /**
+         * Say something about this row while it is the one under the pointer.
+         *
+         * <p><b>For what a control is <em>currently getting you</em>, which is
+         * not always what it asked for.</b> A setting bounded by another
+         * setting, or by the machine, reads as a broken control otherwise: the
+         * number moves and nothing happens, and there is nowhere for the engine
+         * to explain. A permanent caption is the wrong home for that — it is
+         * only wanted while the player is looking at the control it belongs to,
+         * and the rest of the time it is a row of text between them and the
+         * next setting.
+         *
+         * <p>Re-read every frame, so it can report a measurement rather than a
+         * fixed sentence.
+         */
+        public Option hint(Supplier<String> text) { this.hint = text; return this; }
+
+        /** The same, for a hint that never changes. */
+        public Option hint(String text) { return hint(() -> text); }
+
+        Supplier<String> hint;
+
         public boolean isEnabled() { return enabled; }
         /** Whether keyboard/mouse selection can land on this row. */
         public boolean isSelectable() { return selectable; }
@@ -709,6 +731,37 @@ public class ConfigForm {
         }
 
         drawScrollBar(target, ascent, contentX, contentW, startY, areaBottom);
+        drawHint(target, contentX, contentW, areaBottom);
+    }
+
+    /**
+     * The selected row's {@linkplain Option#hint hint}, along the foot of the
+     * form.
+     *
+     * <p>Drawn last so it sits over the rows rather than under them, and only
+     * when there is one to draw — a form whose rows have no hints looks exactly
+     * as it did before this existed.
+     */
+    private void drawHint(DrawTarget target, int contentX, int contentW, int areaBottom) {
+        if (selected < 0 || selected >= options.size()) return;
+        Supplier<String> source = options.get(selected).hint;
+        if (source == null) return;
+        String said = source.get();
+        if (said == null || said.isBlank()) return;
+
+        Font font = theme.noteFont != null ? theme.noteFont : theme.itemFont;
+        int lineH = target.textHeight(font);
+        List<String> lines = UiText.wrap(target, font, said, contentW - 16, 2);
+        if (lines.isEmpty()) return;
+
+        int boxH = lines.size() * lineH + 12;
+        int boxY = areaBottom - boxH - 8;
+        target.fillRoundRect(contentX - 8, boxY, contentW + 16, boxH, 8, 8, theme.hintBackdrop);
+        int y = boxY + 6 + target.textAscent(font);
+        for (String line : lines) {
+            target.drawText(line, contentX, y, font, theme.hint);
+            y += lineH;
+        }
     }
 
     /**

@@ -20,6 +20,17 @@ public class MenuTheme {
     /** Something the player should look at twice — a key bound to two actions. */
     public Color warning = new Color(235, 120, 110);
 
+    /**
+     * The foot-of-the-form hint for the row under the pointer, and the panel it
+     * sits on ({@code ConfigForm.Option.hint}).
+     *
+     * <p>Translucent, because the hint is drawn over the rows rather than in a
+     * gap reserved for it: a form that has hints must not be laid out
+     * differently from one that has none.
+     */
+    public Color hint = new Color(225, 228, 240);
+    public Color hintBackdrop = new Color(18, 18, 28, 235);
+
     public Font titleFont = new Font("SansSerif", Font.BOLD, 48);
     public Font subtitleFont = new Font("SansSerif", Font.PLAIN, 20);
     public Font itemFont = new Font("SansSerif", Font.PLAIN, 26);
@@ -43,6 +54,8 @@ public class MenuTheme {
         t.itemDisabled = new Color(170, 174, 185);
         t.accent = new Color(200, 120, 20);
         t.warning = new Color(180, 50, 40);
+        t.hint = new Color(35, 38, 50);
+        t.hintBackdrop = new Color(235, 238, 245, 235);
         return t;
     }
 }

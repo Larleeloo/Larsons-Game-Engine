@@ -658,6 +658,63 @@ class GpuTerrainTest {
                 "and a block in it weighs something");
     }
 
+    /**
+     * <b>The walk does not climb through the sky.</b>
+     *
+     * <p>A world is twenty sections of column and the ground is two or three of
+     * them; the rest is air the walk would step into, ask about and step out of.
+     * At twenty chunks that was about half of every frame's walk and at ninety
+     * it would be most of it — the walk would be the thing deciding the render
+     * distance rather than the cost of drawing. Minecraft never has the problem
+     * because a chunk there is a list of the subchunks that exist; this is the
+     * same fact, kept per column as meshes arrive.
+     */
+    @Test
+    void theWalkDoesNotClimbThroughEmptySky() throws Exception {
+        Level lvl = bare(160, 160);
+        lvl.fillFloor(lvl.blocks.get("stone_path").id());
+        for (int c = 0; c < 160; c++) {
+            for (int r = 0; r < 160; r++) lvl.setTile(c, r, 1, stone(lvl));
+        }
+        TerrainSections sections = new TerrainSections(lvl, atlas());
+        try {
+            EyeCamera eye = new EyeCamera(W, H);
+            eye.place(80 * TILE, 140 * TILE, 3 * TILE);
+            eye.look(0, -0.1);
+            SectionRenderList list = null;
+            for (int i = 0; i < 400; i++) {
+                list = walk(sections, eye, lvl, 50 * TILE);
+                if (sections.buildingCount() == 0 && i > 40) break;
+                Thread.sleep(10);
+            }
+            assertNotNull(list);
+            assertFalse(list.visible().isEmpty(), "the ground is still found");
+            // The ground here is one section deep, so a walk that stays in the
+            // band visits little more than it draws. Without the band it climbs
+            // every column to the top of the world.
+            assertTrue(list.visits() < list.visible().size() * 3,
+                    "the walk stepped into " + list.visits() + " sections to draw "
+                            + list.visible().size() + " — it is climbing the sky");
+        } finally {
+            sections.close();
+        }
+    }
+
+    /**
+     * The memory budget honours what it was asked for, and refuses to promise
+     * more than the heap can back.
+     */
+    @Test
+    void theMeshBudgetIsBoundedByTheHeapWhateverItIsAsked() {
+        long heap = Runtime.getRuntime().maxMemory();
+        assertTrue(TerrainSections.budgetFor(0) > 0, "an automatic budget is a real one");
+        assertTrue(TerrainSections.budgetFor(64 * 1024) <= heap,
+                "asking for sixty-four gigabytes must not promise more than the heap");
+        long modest = TerrainSections.budgetFor(256);
+        assertTrue(modest <= Math.max(256L * 1024 * 1024, 64L * 1024 * 1024),
+                "a small ask is honoured rather than rounded up to the cap: " + modest);
+    }
+
     // --- the atlas ------------------------------------------------------------------
 
     /** Every block has a cell, so the shader never has to ask whether it does. */
