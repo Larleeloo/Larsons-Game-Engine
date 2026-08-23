@@ -2760,7 +2760,9 @@ public class PlayScene extends AbstractScene {
         if (sections == null || meshedLevel != level) {
             closeSections();
             blockAtlas = com.larsons.engine.graphics.chunk.BlockAtlas.of(level.blocks);
-            sections = new com.larsons.engine.graphics.chunk.TerrainSections(level, blockAtlas);
+            sections = new com.larsons.engine.graphics.chunk.TerrainSections(level, blockAtlas,
+                    com.larsons.engine.graphics.chunk.TerrainSections.budgetFor(
+                            PlayerSettings.active().terrainMemoryMb));
             meshedLevel = level;
             meshedGeneration = level.terrainRevision();
             // A block placed or mined is a section to build again — the six-cell
@@ -2790,10 +2792,24 @@ public class PlayScene extends AbstractScene {
         // height allows and silently drops the rest, so a readout that has to
         // be read is a readout that has to be brief.
         if (sections == null || detailReach.reach() < 0) {
-            return "Now: landforms to %.0f chunks.".formatted(horizonChunks);
+            return "Now drawing landforms to %.0f chunks.".formatted(horizonChunks);
         }
-        return "Now: blocks %.0f chunks, landforms %.0f (detail finds this machine's limit)."
+        return ("Now drawing blocks to %.0f chunks and landforms to %.0f. "
+                + "Blocks grow to whatever this machine sustains — memory, "
+                + "the walk, and the card's own time all bound it.")
                 .formatted(detailReach.reach() / span, horizonChunks);
+    }
+
+    /** What the terrain cache is holding, against what it is allowed. */
+    private String terrainMemoryReadout() {
+        if (sections == null) return "Applies when a world is loaded.";
+        long budget = sections.byteBudget() >> 20;
+        long held = sections.meshBytes() >> 20;
+        int asked = PlayerSettings.active().terrainMemoryMb;
+        return ("Holding %d MB of %d. %s Takes effect on the next world; the heap "
+                + "caps it whatever this says.")
+                .formatted(held, budget,
+                        asked == 0 ? "Sized from the heap." : "Asked for %d GB.".formatted(asked / 1024));
     }
 
     /** The far plane the GPU pass draws with, which the painter's depths share. */
@@ -3390,29 +3406,39 @@ public class PlayScene extends AbstractScene {
                             && terrain.distantDistance < terrain.renderDistance) {
                         terrain.distantDistance = terrain.renderDistance;
                     }
-                }, 1, TerrainSettings.MAX_RENDER_DISTANCE / per);
+                }, 1, TerrainSettings.MAX_RENDER_DISTANCE / per)
+                .hint(this::viewDistanceReadout);
         pauseForm.addSlider("Detail distance (chunks)", () -> settings.detailDistance / per,
                 v -> {
                     setDetailDistance(settings, terrain, v * per);
                     store.trySave(settings);
                 }, Math.max(1, PlayerSettings.MIN_DETAIL_DISTANCE / per),
-                PlayerSettings.MAX_DETAIL_DISTANCE / per);
+                PlayerSettings.MAX_DETAIL_DISTANCE / per)
+                .hint(this::viewDistanceReadout);
         pauseForm.addSlider("Decorations (chunks)", () -> settings.decorDistance / per,
                 v -> {
                     settings.decorDistance = v * per;
                     store.trySave(settings);
                 }, Math.max(1, PlayerSettings.MIN_DECOR_DISTANCE / per),
-                PlayerSettings.MAX_DECOR_DISTANCE / per);
+                PlayerSettings.MAX_DECOR_DISTANCE / per)
+                .hint(this::viewDistanceReadout);
         pauseForm.addSlider("Distant generation (chunks, 0 = off)",
                         () -> terrain.distantDistance / per,
                         v -> terrain.distantDistance = v == 0 ? 0
                                 : Math.max(v * per, terrain.renderDistance),
                         0, TerrainSettings.MAX_DISTANT_DISTANCE / per)
-                .enabledWhen(() -> PlayerSettings.active().distantTerrain);
-        // What the settings are actually getting you, which is the thing three
-        // sliders bounded by each other and by the machine cannot say on their
-        // own. Re-read every frame; see ConfigForm.addNote(Supplier).
-        pauseForm.addNote(this::viewDistanceReadout);
+                .enabledWhen(() -> PlayerSettings.active().distantTerrain)
+                .hint(this::viewDistanceReadout);
+        pauseForm.addSlider("Terrain memory (GB, 0 = auto)",
+                () -> settings.terrainMemoryMb / 1024,
+                v -> {
+                    settings.terrainMemoryMb = v * 1024;
+                    store.trySave(settings);
+                    // Takes effect on the next world: the cache sizes itself
+                    // when it is built, and rebuilding it here would throw away
+                    // every mesh the player is currently looking at.
+                }, 0, PlayerSettings.MAX_TERRAIN_MEMORY_MB / 1024)
+                .hint(this::terrainMemoryReadout);
         pauseForm.addNote("Blocks out to the detail distance; landforms past it, "
                 + "for about the same cost however far you see.");
         pauseForm.addNote("Detail is what costs a frame — turn it down first, "

@@ -72,6 +72,16 @@ artifacts.add(coreTestClasses.name, testJar)
 application {
     // Boots a window, the game loop, and the bundled demo scenes.
     mainClass = "com.larsons.engine.core.Main"
+
+    // <b>A heap proportional to the machine, because terrain meshes are what
+    // a long render distance is spent on.</b> Left alone, a JVM takes a
+    // quarter of physical memory — so a player with 64 GB gets 16, and the
+    // terrain cache, which sizes itself from the heap, quietly decides that
+    // twenty chunks is all the machine can hold. A percentage rather than a
+    // fixed -Xmx so this is not a number that is too big on a laptop and too
+    // small on a workstation; sixty leaves the driver, the OS and everything
+    // outside the heap the rest.
+    applicationDefaultJvmArgs = listOf("-XX:MaxRAMPercentage=60")
 }
 
 // IntelliJ starts the Gradle daemon with -Didea.active=true, but the daemon

@@ -138,6 +138,26 @@ public final class PlayerSettings {
      */
     public int decorDistance = com.larsons.engine.graphics.SolidPainter.DEFAULT_DECOR_TILES;
 
+    /**
+     * How much memory the terrain mesh cache may hold, in megabytes;
+     * {@code 0} lets the engine work it out from the heap.
+     *
+     * <p><b>The setting that decides how far blocks can be drawn</b>, because
+     * per-block geometry is the one structure that grows with the square of the
+     * distance and everything else in the engine is a rounding error beside it.
+     * A player with memory to spare should be able to spend it: on this
+     * engine's terrain a gigabyte is roughly twenty-five chunks, and sixteen is
+     * roughly a hundred.
+     *
+     * <p>Bounded by the heap whatever it says — a budget the JVM cannot back is
+     * not a render distance, it is a crash a few minutes into playing. The JVM's
+     * own ceiling is set proportionally to the machine in
+     * {@code build.gradle.kts}, so a large machine has a large heap to draw on.
+     */
+    public int terrainMemoryMb;
+
+    public static final int MAX_TERRAIN_MEMORY_MB = 16 * 1024;
+
     public static final double MIN_SENSITIVITY = 0.1;
     public static final double MAX_SENSITIVITY = 5.0;
     public static final double MIN_HUD_SCALE = 0.75;
@@ -164,6 +184,7 @@ public final class PlayerSettings {
         hudScale = clamp(hudScale, MIN_HUD_SCALE, MAX_HUD_SCALE);
         detailDistance = (int) clamp(detailDistance, MIN_DETAIL_DISTANCE, MAX_DETAIL_DISTANCE);
         decorDistance = (int) clamp(decorDistance, MIN_DECOR_DISTANCE, MAX_DECOR_DISTANCE);
+        terrainMemoryMb = (int) clamp(terrainMemoryMb, 0, MAX_TERRAIN_MEMORY_MB);
     }
 
     public Map<String, Object> toMap() {
@@ -177,6 +198,7 @@ public final class PlayerSettings {
         m.put("distantTerrain", distantTerrain);
         m.put("detailDistance", detailDistance);
         m.put("decorDistance", decorDistance);
+        m.put("terrainMemoryMb", terrainMemoryMb);
         return m;
     }
 
@@ -201,6 +223,8 @@ public final class PlayerSettings {
                 ? n.intValue() : s.detailDistance;
         s.decorDistance = m.get("decorDistance") instanceof Number d
                 ? d.intValue() : s.decorDistance;
+        s.terrainMemoryMb = m.get("terrainMemoryMb") instanceof Number mem
+                ? mem.intValue() : s.terrainMemoryMb;
         s.normalize();
         return s;
     }
