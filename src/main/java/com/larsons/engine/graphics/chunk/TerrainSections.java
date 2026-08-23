@@ -59,7 +59,17 @@ public final class TerrainSections {
      * look at.
      */
     private static final double HEAP_SHARE = 1.0 / 3;
-    private static final long MAX_BYTE_BUDGET = 1536L * 1024 * 1024;
+    /**
+     * The cap on that share.
+     *
+     * <p>Three gigabytes rather than one and a half, because on a machine with
+     * the heap to spare this is what buys render distance and there is nothing
+     * else here that wants the memory. It only binds when the heap is large —
+     * a third of it is the real limit on anything smaller — so raising it costs
+     * a modest machine nothing and lets a generous one reach further, which is
+     * the whole point of measuring rather than assuming.
+     */
+    private static final long MAX_BYTE_BUDGET = 3072L * 1024 * 1024;
     private static final long MIN_BYTE_BUDGET = 64L * 1024 * 1024;
 
     /**

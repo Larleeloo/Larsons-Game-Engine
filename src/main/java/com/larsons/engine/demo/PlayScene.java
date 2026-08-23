@@ -2707,8 +2707,17 @@ public class PlayScene extends AbstractScene {
     private final com.larsons.engine.graphics.chunk.DetailReach detailReach =
             new com.larsons.engine.graphics.chunk.DetailReach();
 
-    /** What the last section walk cost, in milliseconds — see {@link #gpuReach}. */
-    private double lastWalkMs;
+    /**
+     * What the last frame's terrain cost, on each side of the fence.
+     *
+     * <p>Both, because they run out at different times and on different
+     * machines. The processor's share is the walk and the queuing of the draws;
+     * the card's is the drawing, which no CPU clock can see — a
+     * {@code glDrawArrays} returns as soon as the command is written down. See
+     * {@code TerrainPass.lastGpuMillis}.
+     */
+    private double lastTerrainCpuMs;
+    private double lastTerrainGpuMs;
 
     /** This frame's answer from {@link #detailReach}, shared by both halves of it. */
     private double frameGpuReach;
@@ -2777,14 +2786,14 @@ public class PlayScene extends AbstractScene {
         double span = com.larsons.engine.graphics.chunk.SectionMesh.SIZE
                 * (double) Math.max(1, level.tileSize);
         double horizonChunks = solid.fogEnd() / span;
+        // Short enough to fit the row. A note wraps to whatever lines its
+        // height allows and silently drops the rest, so a readout that has to
+        // be read is a readout that has to be brief.
         if (sections == null || detailReach.reach() < 0) {
-            return "Landforms to %.0f chunks. Blocks are drawn by the painter here — "
-                    .formatted(horizonChunks)
-                    + "the measured detail distance applies to the GPU path.";
+            return "Now: landforms to %.0f chunks.".formatted(horizonChunks);
         }
-        return "Now: blocks to %.0f chunks, landforms to %.0f. Detail grows to what this "
-                .formatted(detailReach.reach() / span, horizonChunks)
-                + "machine sustains, so it climbs for a few seconds after the world loads.";
+        return "Now: blocks %.0f chunks, landforms %.0f (detail finds this machine's limit)."
+                .formatted(detailReach.reach() / span, horizonChunks);
     }
 
     /** The far plane the GPU pass draws with, which the painter's depths share. */
@@ -2813,15 +2822,27 @@ public class PlayScene extends AbstractScene {
         int layers = Math.max(1, level.layerCount());
         int size = com.larsons.engine.graphics.chunk.SectionMesh.SIZE;
         int tileSize = Math.max(1, level.tileSize);
-        long walkStarted = System.nanoTime();
+        long started = System.nanoTime();
         renderList.build(sections, frustum, tileSize, eye.x(), eye.y(), eye.z(),
                 frameGpuReach, 0, (layers + size - 1) / size);
-        // The walk's own cost, which is what the radius steers on. Deliberately
-        // not the frame's: see DetailReach.TARGET_WALK_MS for what happens when
-        // a vsynced frame time is mistaken for a measure of headroom.
-        lastWalkMs = (System.nanoTime() - walkStarted) / 1e6;
         pass.drawTerrain(renderList, eye, tileSize, solid.fogArgb(),
                 solid.fogStart(), solid.fogEnd());
+        // The terrain's own cost on this side of the fence — the walk, and the
+        // queuing of the draws. Deliberately not the frame's: see
+        // DetailReach.TARGET_CPU_MS for what happens when a vsynced frame time
+        // is mistaken for a measure of headroom. The other side comes back a
+        // frame later, from the card itself, already smoothed.
+        //
+        // Smoothed over about a dozen frames, like the card's. Raw, this number
+        // moves with the camera angle and with every collection, and a radius
+        // that follows it moves with them too: measured on the unsmoothed
+        // signal it pulsed between twelve and twenty chunks for ever, which is
+        // the horizon breathing in and out — a worse artefact than the one the
+        // whole governor exists to remove.
+        double cpuMs = (System.nanoTime() - started) / 1e6;
+        lastTerrainCpuMs = lastTerrainCpuMs <= 0
+                ? cpuMs : lastTerrainCpuMs + (cpuMs - lastTerrainCpuMs) * 0.08;
+        lastTerrainGpuMs = pass.lastGpuMillis();
     }
 
     /**
@@ -2838,7 +2859,7 @@ public class PlayScene extends AbstractScene {
         return detailReach.update(solid.detailDistance(),
                 sections.affordableReach(tileSize),
                 renderList.visible().size(), renderList.visits(),
-                renderList.unbuilt(), lastWalkMs, span);
+                renderList.unbuilt(), lastTerrainCpuMs, lastTerrainGpuMs, span);
     }
 
     /**
