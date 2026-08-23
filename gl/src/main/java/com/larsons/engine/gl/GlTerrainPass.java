@@ -102,6 +102,34 @@ final class GlTerrainPass implements TerrainPass {
     private int atlasRevision = -1;
     private boolean unavailable;
 
+    // --- what the card is actually spending -------------------------------------
+
+    /**
+     * A {@code GL_TIME_ELAPSED} query around the terrain draw, read a frame
+     * later — the same arrangement, and for the same reason, as
+     * {@code GlShaderChain.Timers}.
+     *
+     * <p>Reading a query result blocks until the GPU has reached it, so asking
+     * in the frame that issued it would stall the pipeline to measure it — the
+     * measurement would cost more than the thing measured and would change it.
+     * Asked at the start of the next frame instead, by which time the answer is
+     * sitting there. One query in flight at a time: this is a single span, and
+     * a frame whose answer is not ready simply keeps the last one.
+     */
+    private int timeQuery = -1;
+    private boolean timing;
+    private boolean timingUnavailable;
+
+    /**
+     * Smoothed over about a dozen frames.
+     *
+     * <p>A single expensive frame is a shader being compiled or a chunk of
+     * uploads landing, and pulling the render distance in for one of those
+     * would be visible where the cause was not. What the radius should follow
+     * is the level the card is holding, not its worst instant.
+     */
+    private double gpuMillis;
+
     @Override
     public void setAtlas(BlockAtlas atlas) {
         if (atlas == null || atlas.revision() == atlasRevision) return;
@@ -163,9 +191,12 @@ final class GlTerrainPass implements TerrainPass {
         // Read rather than assumed: this class does not own it and is not the
         // only thing that borrows it.
         int callersVao = glGetInteger(GL_VERTEX_ARRAY_BINDING);
+        collectGpuTime();
+        beginGpuTime();
         try {
             drawSections(visible, eye, tileSize, fogArgb, fogStart, fogEnd);
         } finally {
+            endGpuTime();
             glBindVertexArray(callersVao);
             glDisable(GL_CULL_FACE);
             // Handed back to the 2D target with the depth buffer intact and
@@ -183,6 +214,38 @@ final class GlTerrainPass implements TerrainPass {
                     GL_ONE, GL_ONE_MINUS_SRC_ALPHA);
             if (flat != null) flat.restoreAfterTerrain();
         }
+    }
+
+    @Override
+    public double lastGpuMillis() { return gpuMillis; }
+
+    /** Take last frame's answer if the card has finished with it. */
+    private void collectGpuTime() {
+        if (timingUnavailable || timeQuery < 0 || timing) return;
+        if (glGetQueryObjecti(timeQuery, GL_QUERY_RESULT_AVAILABLE) != GL_TRUE) return;
+        double ms = glGetQueryObjecti64(timeQuery, GL_QUERY_RESULT) / 1e6;
+        gpuMillis = gpuMillis <= 0 ? ms : gpuMillis + (ms - gpuMillis) * 0.08;
+    }
+
+    private void beginGpuTime() {
+        if (timingUnavailable) return;
+        try {
+            if (timeQuery < 0) timeQuery = glGenQueries();
+            glBeginQuery(GL_TIME_ELAPSED, timeQuery);
+            timing = true;
+        } catch (RuntimeException e) {
+            // A context without timer queries is a context that draws fine and
+            // cannot say what it cost. The radius then steers on the signals
+            // that remain, which is what a backend with no timing at all does.
+            timingUnavailable = true;
+            timing = false;
+        }
+    }
+
+    private void endGpuTime() {
+        if (!timing) return;
+        timing = false;
+        glEndQuery(GL_TIME_ELAPSED);
     }
 
     /** The two passes themselves; {@link #drawTerrain} owns the state around them. */
@@ -299,6 +362,14 @@ final class GlTerrainPass implements TerrainPass {
             glDeleteTextures(atlasTexture);
             atlasTexture = -1;
             atlasRevision = -1;
+        }
+        if (timeQuery >= 0) {
+            if (timing) {
+                glEndQuery(GL_TIME_ELAPSED);
+                timing = false;
+            }
+            glDeleteQueries(timeQuery);
+            timeQuery = -1;
         }
     }
 }

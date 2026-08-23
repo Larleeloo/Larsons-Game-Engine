@@ -549,13 +549,13 @@ class GpuTerrainTest {
         DetailReach reach = new DetailReach();
         double span = SectionMesh.SIZE * (double) TILE;
         double asked = 90 * span;
-        double start = reach.update(asked, Double.MAX_VALUE, 0, 0, 0, 0, span);
+        double start = reach.update(asked, Double.MAX_VALUE, 0, 0, 0, 0, 0, span);
 
         // Nothing drawn, nothing costly — but nine tenths of the walk is still
         // waiting on a mesh. That is not an invitation to reach further.
         double held = start;
         for (int i = 0; i < 500; i++) {
-            held = reach.update(asked, Double.MAX_VALUE, 40, 4000, 3600, 0, span);
+            held = reach.update(asked, Double.MAX_VALUE, 40, 4000, 3600, 0, 0, span);
         }
         assertEquals(start, held, 1e-9,
                 "the radius grew into a world that had not been built yet");
@@ -563,7 +563,7 @@ class GpuTerrainTest {
         // The same frame, with the world arrived: now it may grow.
         double grown = held;
         for (int i = 0; i < 200; i++) {
-            grown = reach.update(asked, Double.MAX_VALUE, 40, 4000, 0, 0, span);
+            grown = reach.update(asked, Double.MAX_VALUE, 40, 4000, 0, 0, 0, span);
         }
         assertTrue(grown > held * 2, "once the world is there it has to reach further: "
                 + grown + " from " + held);
@@ -590,13 +590,13 @@ class GpuTerrainTest {
         DetailReach reach = new DetailReach();
         double span = SectionMesh.SIZE * (double) TILE;
         double asked = 40 * span;
-        double at = reach.update(asked, Double.MAX_VALUE, 0, 0, 0, 0, span);
+        double at = reach.update(asked, Double.MAX_VALUE, 0, 0, 0, 0, 0, span);
         double start = at;
         // A healthy frame: the walk costs a fraction of a millisecond, the world
         // is built, and there is little on screen. Nothing here is a reason to
         // stop — whatever the wall clock between frames happens to say.
         for (int i = 0; i < 400; i++) {
-            at = reach.update(asked, Double.MAX_VALUE, 200, 900, 0, 0.4, span);
+            at = reach.update(asked, Double.MAX_VALUE, 200, 900, 0, 0.4, 0, span);
         }
         assertEquals(asked, at, 1e-6,
                 "a comfortable frame has to reach what was asked for, and stopped at "
@@ -608,17 +608,21 @@ class GpuTerrainTest {
     void theDetailRadiusBacksOffWhateverIsCostingTooMuch() {
         double span = SectionMesh.SIZE * (double) TILE;
         double asked = 90 * span;
-        // Too many sections drawn; too much walked; too long a frame. Each on
-        // its own, with everything else comfortable and the world fully built.
-        for (int which = 0; which < 3; which++) {
+        // Each cost on its own, with everything else comfortable and the world
+        // fully built: too many sections drawn, too many walked, too long on the
+        // processor, too long on the card. Any one of them is enough.
+        for (int which = 0; which < 4; which++) {
             DetailReach reach = new DetailReach();
-            double start = reach.update(asked, Double.MAX_VALUE, 0, 0, 0, 0, span);
+            double start = reach.update(asked, Double.MAX_VALUE, 0, 0, 0, 0, 0, span);
             double at = start;
             for (int i = 0; i < 100; i++) {
                 at = reach.update(asked, Double.MAX_VALUE,
                         which == 0 ? DetailReach.TARGET_SECTIONS * 2 : 10,
                         which == 1 ? DetailReach.TARGET_VISITS * 2 : 10,
-                        0, which == 2 ? 40 : 0, span);
+                        0,
+                        which == 2 ? 40 : 0,
+                        which == 3 ? 40 : 0,
+                        span);
             }
             assertTrue(at < start, "signal " + which + " did not pull the radius in: "
                     + at + " from " + start);
@@ -633,7 +637,7 @@ class GpuTerrainTest {
         double span = SectionMesh.SIZE * (double) TILE;
         double at = 0;
         for (int i = 0; i < 2000; i++) {
-            at = reach.update(8 * span, 5 * span, 1, 1, 0, 0.1, span);
+            at = reach.update(8 * span, 5 * span, 1, 1, 0, 0.1, 0, span);
         }
         assertTrue(at <= 5 * span + 1e-6,
                 "the cache said five sections' worth and it reached " + at / span);

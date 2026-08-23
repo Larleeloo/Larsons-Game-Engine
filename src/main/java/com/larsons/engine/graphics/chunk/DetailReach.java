@@ -45,15 +45,34 @@ package com.larsons.engine.graphics.chunk;
 public final class DetailReach {
 
     /**
-     * Sections a frame should draw, at most.
+     * Sections a frame may draw — <b>a backstop, not the answer</b>.
      *
-     * <p>One draw call each, near enough — Minecraft at its own maximum render
-     * distance is in this neighbourhood, which is not a coincidence: it is the
-     * point where the driver's per-draw cost starts to be the frame. Machines
-     * differ, so this is a ceiling rather than a target, and the frame-time rule
-     * below is what actually finds a slower machine's number.
+     * <p>It used to be four thousand and it used to be what actually decided
+     * the render distance, which was the wrong shape of rule twice over. A
+     * number chosen by hand is the same number on a laptop and on a card ten
+     * times quicker, so the quick machine never finds out what it could have
+     * had — measured, it stopped at twenty-three chunks on a card that had
+     * plenty left. And it is a proxy for the cost rather than the cost: what a
+     * section costs to draw depends on how much is in it, which is a property of
+     * the terrain and not of the count.
+     *
+     * <p>So the cost is measured now — {@link #TARGET_GPU_MS} on the card,
+     * {@link #TARGET_CPU_MS} on the processor — and this is left far enough
+     * above any sane answer that it only catches a runaway.
      */
-    public static final int TARGET_SECTIONS = 4096;
+    public static final int TARGET_SECTIONS = 40_000;
+
+    /**
+     * What the world may cost the graphics card, in milliseconds a frame.
+     *
+     * <p>Five of a 120 Hz frame's 8.3, which leaves the sprites, the interface
+     * and the driver the rest. <b>This is the number that decides the render
+     * distance on a machine that is not short of memory</b>, and it is the only
+     * one of the governor's signals that measures the thing actually being
+     * bought — see {@code TerrainPass.lastGpuMillis} for why the CPU cannot
+     * answer this and why a constant should not try.
+     */
+    private static final double TARGET_GPU_MS = 5.0;
 
     /**
      * Sections a frame's walk may step into.
@@ -64,7 +83,7 @@ public final class DetailReach {
      * sixty-chunk radius the walk stepped into <b>94 000</b> sections to draw
      * four thousand, which is twenty milliseconds of doing nothing.
      */
-    public static final int TARGET_VISITS = 24_000;
+    public static final int TARGET_VISITS = 60_000;
 
     /**
      * What the section walk itself may cost, in milliseconds.
@@ -90,7 +109,7 @@ public final class DetailReach {
      * which is more than it should ever need: measured at thirty-two chunks it
      * costs 0.41.
      */
-    private static final double TARGET_WALK_MS = 2.0;
+    private static final double TARGET_CPU_MS = 3.0;
 
     /** Below these fractions of the targets, growing is allowed. */
     private static final double COMFORTABLE = 0.85;
@@ -134,14 +153,16 @@ public final class DetailReach {
      * @param drawn      sections the last frame drew
      * @param visits     sections the last frame's walk stepped into
      * @param unbuilt    how many of those had no mesh yet
-     * @param walkMs     what the last walk cost, or {@code 0} if unknown.
-     *                   <b>The walk's own time — never the whole frame's</b>,
-     *                   which under vsync says nothing; see
-     *                   {@link #TARGET_WALK_MS}
+     * @param cpuMs      what the terrain cost the processor, or {@code 0} if
+     *                   unknown. <b>The terrain's own time — never the whole
+     *                   frame's</b>, which under vsync says nothing; see
+     *                   {@link #TARGET_CPU_MS}
+     * @param gpuMs      what it cost the graphics card, or {@code 0} if the
+     *                   backend cannot say ({@code TerrainPass.lastGpuMillis})
      * @param span       one section's width in world units, for the floor
      */
     public double update(double requested, double affordable, int drawn, int visits,
-                         int unbuilt, double walkMs, double span) {
+                         int unbuilt, double cpuMs, double gpuMs, double span) {
         double ceiling = Math.min(requested, affordable);
         double floor = Math.min(ceiling, FLOOR_SECTIONS * span);
         ceiling = Math.max(ceiling, floor);
@@ -155,7 +176,8 @@ public final class DetailReach {
         // the machine missed should not wait for the other signals to agree.
         boolean tooMuch = drawn > TARGET_SECTIONS
                 || visits > TARGET_VISITS
-                || (walkMs > 0 && walkMs > TARGET_WALK_MS);
+                || (cpuMs > 0 && cpuMs > TARGET_CPU_MS)
+                || (gpuMs > 0 && gpuMs > TARGET_GPU_MS);
 
         // <b>And growing waits for the world it already asked for.</b> The
         // section count measures what has been <em>built</em>, not what has been
@@ -175,7 +197,8 @@ public final class DetailReach {
         boolean roomToGrow = arrived
                 && drawn < TARGET_SECTIONS * COMFORTABLE
                 && visits < TARGET_VISITS * COMFORTABLE
-                && (walkMs <= 0 || walkMs < TARGET_WALK_MS * COMFORTABLE);
+                && (cpuMs <= 0 || cpuMs < TARGET_CPU_MS * COMFORTABLE)
+                && (gpuMs <= 0 || gpuMs < TARGET_GPU_MS * COMFORTABLE);
 
         if (tooMuch) reach *= 1 - STEP;
         else if (roomToGrow) reach *= 1 + STEP;

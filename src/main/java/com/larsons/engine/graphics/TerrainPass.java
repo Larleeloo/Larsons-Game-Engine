@@ -54,6 +54,25 @@ public interface TerrainPass {
                      int fogArgb, double fogStart, double fogEnd);
 
     /**
+     * What the last frame's terrain actually cost the graphics card, in
+     * milliseconds, or {@code 0} when the backend cannot say.
+     *
+     * <p><b>The only honest measure of how much world a machine can draw, and
+     * the reason it has to come from the backend.</b> Everything the CPU can
+     * see about a draw call is how long it took to <em>queue</em> — a
+     * {@code glDrawArrays} returns in microseconds whatever it costs to
+     * execute — so a renderer deciding its own render distance from CPU
+     * timings is reading an instrument that is wrong by two orders of magnitude
+     * in the flattering direction. A ceiling picked by hand instead is wrong in
+     * the other one: it is the same number on a laptop and on a card ten times
+     * quicker, and the fast machine never finds out.
+     *
+     * <p>Measured, the radius grows until this says stop, which is a different
+     * answer on every machine and the right one on each.
+     */
+    default double lastGpuMillis() { return 0; }
+
+    /**
      * Whether this pass can actually draw.
      *
      * <p><b>The one question a caller must ask before standing the painter
