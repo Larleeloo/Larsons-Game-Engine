@@ -607,6 +607,32 @@ public final class SolidPainter {
     /** Whether the blocks are being drawn by a depth-buffered backend. */
     public boolean depthBuffered() { return depthBuffered; }
 
+    /**
+     * Where the backend's per-block terrain actually stops, so {@link #distant}
+     * begins exactly there.
+     *
+     * <p><b>The one number that decides whether the horizon has a seam.</b> The
+     * detail distance is what the player asked for; this is what the machine
+     * gave, which is smaller and moves as the machine finds its own answer (see
+     * {@code DetailReach}). Starting the coarse pass at the request instead
+     * leaves a ring of bare sky between the last section drawn and the first box
+     * — a ring that moves with the camera, which is what flashing is.
+     *
+     * <p>Zero means "wherever the detail distance is", which is the right answer
+     * when the painter is drawing the blocks itself: then the two are the same
+     * thing.
+     */
+    public void setTerrainHandoff(double worldUnits) {
+        this.handoff = Math.max(0, worldUnits);
+    }
+
+    /** Where {@link #distant} starts: the handoff if one was set, else the detail. */
+    private double innerHorizon() {
+        return handoff > 0 ? Math.min(handoff, detailDistance) : detailDistance;
+    }
+
+    private double handoff;
+
     /** How far the coarse pass reaches, in tiles; {@code 0} when it is off. */
     public int distantTiles() { return distantTiles; }
 
@@ -1192,7 +1218,7 @@ public final class SolidPainter {
         int ts = level.tileSize;
         if (ts <= 0) return;
         double outermost = horizon();
-        double inner = detailDistance;
+        double inner = innerHorizon();
         if (outermost <= inner) return;
         // <b>The horizon is drawn flat, even when a depth-buffered backend is
         // running the near world.</b> Every box of it starts where the detailed

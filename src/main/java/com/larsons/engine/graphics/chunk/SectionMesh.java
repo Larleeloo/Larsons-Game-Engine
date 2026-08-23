@@ -99,6 +99,22 @@ public final class SectionMesh {
         return opaqueColour.length == 0 && translucentColour.length == 0;
     }
 
+    /**
+     * Roughly what this mesh weighs on the heap, in bytes.
+     *
+     * <p><b>What a render distance is actually spent on, and so what has to be
+     * budgeted.</b> Counting <em>sections</em> instead is the mistake that
+     * looks reasonable and is not: most of the sections inside a long view are
+     * open sky or the inside of a mountain, and both of those are this class
+     * with four empty arrays — free to keep and worth keeping, because the walk
+     * needs their visibility to get past them. A budget of four thousand
+     * sections spends most of itself on nothing and then evicts the ground.
+     */
+    public int byteCount() {
+        return (opaque.length + translucent.length) * 4
+                + (opaqueColour.length + translucentColour.length) * 4;
+    }
+
     /** Which faces of this section can see which — see {@link SectionVisibility}. */
     public SectionVisibility visibility() { return visibility; }
 }

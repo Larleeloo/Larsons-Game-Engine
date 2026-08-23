@@ -620,6 +620,40 @@ class SolidViewTest {
                         + "one per box is one draw call per box");
     }
 
+    /**
+     * <b>The coarse pass starts where the blocks actually stop, not where the
+     * slider said they would.</b>
+     *
+     * <p>The seam that was flashing. What a player asks for and what a machine
+     * sustains are different numbers, and the second one moves — so a horizon
+     * pass anchored to the first leaves a ring of bare sky between the last
+     * section drawn and the first coarse box, and that ring travels with the
+     * camera. Told the real handoff, the two meet exactly.
+     */
+    @Test
+    void theHorizonStartsWhereTheBlocksReallyStop() {
+        Level plain = rolling(220);
+        int asked = 64;
+        int handedOverAt = 24;
+        assertTrue(boxesFrom(plain, asked, 0) < boxesFrom(plain, asked, handedOverAt),
+                "pulling the detail in has to widen the coarse pass to cover the "
+                        + "ground the blocks gave up, and did not");
+    }
+
+    /** Coarse boxes queued when the blocks stop at {@code handoff} tiles. */
+    private static int boxesFrom(Level lvl, int detailTiles, int handoffTiles) {
+        RecordingTarget target = new RecordingTarget(400, 300);
+        SolidPainter painter = new SolidPainter();
+        painter.setViewTiles(90 * 16);
+        painter.setDetailTiles(detailTiles);
+        painter.setDistantTiles(0);
+        painter.setTerrainHandoff(handoffTiles * (double) TILE);
+        painter.begin(target, plainEye(), lvl);
+        painter.distant();
+        painter.flush();
+        return target.count("fillPolygon");
+    }
+
     /** Faces drawn with the ground at full reach and the scenery at {@code decor}. */
     private static int decorFaces(Level lvl, EyeCamera eye, int decorTiles) {
         RecordingTarget target = new RecordingTarget(eye.viewportWidth(), eye.viewportHeight());
