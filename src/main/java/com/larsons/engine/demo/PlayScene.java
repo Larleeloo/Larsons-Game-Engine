@@ -768,6 +768,12 @@ public class PlayScene extends AbstractScene {
 
     @Override
     public void update(double dt, InputManager input) {
+        // What the machine is actually managing, which is what the detail
+        // radius steers on. Smoothed over about a dozen frames: a single long
+        // frame is a garbage collection or a window being dragged, and pulling
+        // the render distance in for one of those would be visible where the
+        // cause was not.
+        lastFrameMs += (dt * 1000 - lastFrameMs) * 0.08;
         // Unconditionally, before anything below can decide to skip the
         // simulation. render() blends from "one step ago" to "now", so a tick
         // that moves nothing has to leave those two equal — otherwise the frames
@@ -2622,6 +2628,11 @@ public class PlayScene extends AbstractScene {
         TerrainPass gpu = gpuTerrain(target, p);
         solid.setDepthBuffered(gpu != null, gpuFar());
         if (gpu != null) {
+            // Where the blocks stop and the coarse boxes start, decided once
+            // and told to both halves — which is the whole of why the seam
+            // between them does not flash. See DetailReach.
+            frameGpuReach = gpuReach(Math.max(1, level.tileSize));
+            solid.setTerrainHandoff(frameGpuReach);
             // The horizon first, and drawn on its own. Every coarse box of it
             // lies beyond the detailed reach, so the world the GPU draws next is
             // in front of all of it — which means it needs no depth of its own
@@ -2636,6 +2647,10 @@ public class PlayScene extends AbstractScene {
             // Still swept, but only for the plants, and only as far as they go.
             phase("terrain", solid::terrain);
         } else {
+            // Drawing the blocks itself, the painter reaches exactly as far as
+            // it was told to, so the handoff and the detail distance are the
+            // same thing and there is nothing to hand over.
+            solid.setTerrainHandoff(0);
             phase("terrain", solid::terrain);
             // After the detailed sweep and drawn behind it; see SolidPainter.distant.
             phase("distant", solid::distant);
@@ -2694,6 +2709,16 @@ public class PlayScene extends AbstractScene {
     private Level meshedLevel;
     private long meshedGeneration;
 
+    /** How far per-block terrain reaches, found by measuring rather than asking. */
+    private final com.larsons.engine.graphics.chunk.DetailReach detailReach =
+            new com.larsons.engine.graphics.chunk.DetailReach();
+
+    /** The last frame's delta, in milliseconds — what {@link #detailReach} steers on. */
+    private double lastFrameMs;
+
+    /** This frame's answer from {@link #detailReach}, shared by both halves of it. */
+    private double frameGpuReach;
+
     /** Let the meshing threads go and stop listening to the level. */
     private void closeSections() {
         if (sections != null) {
@@ -2703,6 +2728,11 @@ public class PlayScene extends AbstractScene {
         if (meshedLevel != null) meshedLevel.setCellListener(null);
         meshedLevel = null;
         blockAtlas = null;
+        // A different world has different terrain and so a different answer;
+        // carrying the old one over would spend the first seconds of the new
+        // world walking back from a number that was never about it.
+        detailReach.reset();
+        solid.setTerrainHandoff(0);
     }
 
     /**
@@ -2767,9 +2797,26 @@ public class PlayScene extends AbstractScene {
         int size = com.larsons.engine.graphics.chunk.SectionMesh.SIZE;
         int tileSize = Math.max(1, level.tileSize);
         renderList.build(sections, frustum, tileSize, eye.x(), eye.y(), eye.z(),
-                solid.detailDistance(), 0, (layers + size - 1) / size);
+                frameGpuReach, 0, (layers + size - 1) / size);
         pass.drawTerrain(renderList, eye, tileSize, solid.fogArgb(),
                 solid.fogStart(), solid.fogEnd());
+    }
+
+    /**
+     * How far this frame draws the world a block at a time.
+     *
+     * <p>Not the detail slider — that is the request. This is the request
+     * bounded by what the mesh cache can hold and then walked toward what the
+     * machine is actually sustaining, one and a half per cent a frame. See
+     * {@link com.larsons.engine.graphics.chunk.DetailReach} for why a slider
+     * cannot answer this and what happens to a renderer that lets it try.
+     */
+    private double gpuReach(int tileSize) {
+        double span = com.larsons.engine.graphics.chunk.SectionMesh.SIZE * (double) tileSize;
+        return detailReach.update(solid.detailDistance(),
+                sections.affordableReach(tileSize),
+                renderList.visible().size(), renderList.visits(),
+                renderList.unbuilt(), lastFrameMs, span);
     }
 
     /**

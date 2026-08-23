@@ -5,6 +5,7 @@ import com.larsons.engine.graphics.EyeCamera;
 import com.larsons.engine.graphics.Frustum;
 import com.larsons.engine.graphics.Mat4;
 import com.larsons.engine.graphics.chunk.BlockAtlas;
+import com.larsons.engine.graphics.chunk.DetailReach;
 import com.larsons.engine.graphics.chunk.SectionMesh;
 import com.larsons.engine.graphics.chunk.SectionMesher;
 import com.larsons.engine.graphics.chunk.SectionRenderList;
@@ -526,6 +527,97 @@ class GpuTerrainTest {
         SectionRenderList list = new SectionRenderList();
         list.build(sections, frustum, TILE, eye.x(), eye.y(), eye.z(), reach, 0, tall);
         return list;
+    }
+
+    // --- how far detail reaches -----------------------------------------------------
+
+    /**
+     * <b>The radius holds still while the world it already asked for is still
+     * arriving.</b>
+     *
+     * <p>The regression this exists for, and it cost a frame rate rather than a
+     * picture. The count of sections <em>drawn</em> reads low both when there is
+     * little to draw and when there is plenty of it unbuilt — and left to that
+     * signal alone the radius grew straight through a loading world: measured,
+     * fifty-eight chunks reached while four hundred sections were drawn, the
+     * walk stepping through ninety thousand empty sections at twenty
+     * milliseconds a frame. Which is to say it spent the most frames exactly
+     * when the player could least spare them.
+     */
+    @Test
+    void theDetailRadiusWaitsForTheWorldItAlreadyAskedFor() {
+        DetailReach reach = new DetailReach();
+        double span = SectionMesh.SIZE * (double) TILE;
+        double asked = 90 * span;
+        double start = reach.update(asked, Double.MAX_VALUE, 0, 0, 0, 0, span);
+
+        // Nothing drawn, nothing costly — but nine tenths of the walk is still
+        // waiting on a mesh. That is not an invitation to reach further.
+        double held = start;
+        for (int i = 0; i < 500; i++) {
+            held = reach.update(asked, Double.MAX_VALUE, 40, 4000, 3600, 0, span);
+        }
+        assertEquals(start, held, 1e-9,
+                "the radius grew into a world that had not been built yet");
+
+        // The same frame, with the world arrived: now it may grow.
+        double grown = held;
+        for (int i = 0; i < 200; i++) {
+            grown = reach.update(asked, Double.MAX_VALUE, 40, 4000, 0, 0, span);
+        }
+        assertTrue(grown > held * 2, "once the world is there it has to reach further: "
+                + grown + " from " + held);
+    }
+
+    /** Any of the three costs over its target pulls the radius back in. */
+    @Test
+    void theDetailRadiusBacksOffWhateverIsCostingTooMuch() {
+        double span = SectionMesh.SIZE * (double) TILE;
+        double asked = 90 * span;
+        // Too many sections drawn; too much walked; too long a frame. Each on
+        // its own, with everything else comfortable and the world fully built.
+        for (int which = 0; which < 3; which++) {
+            DetailReach reach = new DetailReach();
+            double start = reach.update(asked, Double.MAX_VALUE, 0, 0, 0, 0, span);
+            double at = start;
+            for (int i = 0; i < 100; i++) {
+                at = reach.update(asked, Double.MAX_VALUE,
+                        which == 0 ? DetailReach.TARGET_SECTIONS * 2 : 10,
+                        which == 1 ? DetailReach.TARGET_VISITS * 2 : 10,
+                        0, which == 2 ? 40 : 0, span);
+            }
+            assertTrue(at < start, "signal " + which + " did not pull the radius in: "
+                    + at + " from " + start);
+            assertTrue(at >= span, "…nor may it collapse to nothing: " + at / span);
+        }
+    }
+
+    /** What the player asked for is a ceiling, never a floor. */
+    @Test
+    void theDetailRadiusNeverExceedsWhatWasAskedOrWhatFits() {
+        DetailReach reach = new DetailReach();
+        double span = SectionMesh.SIZE * (double) TILE;
+        double at = 0;
+        for (int i = 0; i < 2000; i++) {
+            at = reach.update(8 * span, 5 * span, 1, 1, 0, 0.1, span);
+        }
+        assertTrue(at <= 5 * span + 1e-6,
+                "the cache said five sections' worth and it reached " + at / span);
+    }
+
+    /**
+     * <b>Emptiness is free, so the budget is bytes.</b> A section of open sky
+     * meshes to nothing and is worth keeping — the walk needs its visibility to
+     * see through it — so counting sections spends a cache on air.
+     */
+    @Test
+    void anEmptySectionCostsTheCacheNothing() {
+        Level lvl = bare();
+        assertEquals(0, SectionMesher.build(lvl, atlas(), 0, 0, 0).byteCount(),
+                "nothing in it, nothing to hold");
+        lvl.setTile(4, 4, 5, stone(lvl));
+        assertTrue(SectionMesher.build(lvl, atlas(), 0, 0, 0).byteCount() > 0,
+                "and a block in it weighs something");
     }
 
     // --- the atlas ------------------------------------------------------------------

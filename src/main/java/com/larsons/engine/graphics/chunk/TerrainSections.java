@@ -29,23 +29,70 @@ import java.util.concurrent.atomic.AtomicInteger;
  * dirties the section it landed in and any neighbour it touches — the same
  * six-cell argument the column mesh makes one dimension down.
  *
- * <p><b>What evicts one</b> is distance. Meshes are the memory cost of a long
- * render distance — a section of surface terrain is a few thousand vertices, a
- * hundred kilobytes with its colours — so the furthest are dropped once the
- * budget is passed and rebuilt if the player turns round. They are a function
- * of the world, so dropping one loses nothing but the work.
+ * <p><b>What evicts one is distance, and what is counted is bytes.</b> Counting
+ * sections is the mistake that looks reasonable: most of the sections inside a
+ * long view are open sky or the inside of a mountain, both of which mesh to
+ * nothing and cost nothing to keep — so a budget of four thousand
+ * <em>sections</em> is spent almost entirely on emptiness and then evicts the
+ * ground the player is looking at. Measured at sixteen chunks: 4 098 sections
+ * held, 567 drawn, and the walk asking every frame for a rim that had just been
+ * thrown away. That is what a flashing horizon is, and it does not get better
+ * with distance — at thirty-two chunks the same 567 sections were drawn, because
+ * the cache could not hold one section more.
+ *
+ * <p>So the budget is a number of bytes, sized from the heap the JVM was given,
+ * and emptiness is free. What that buys is a cache that holds the whole of a
+ * long view when the view fits and degrades honestly when it does not — see
+ * {@link #affordableReach}, which is how the caller finds out where to stop
+ * asking rather than discovering it as a hole.
  */
 public final class TerrainSections {
 
-    /** Sections held before the furthest are dropped. */
-    private static final int DEFAULT_BUDGET = 4096;
+    /**
+     * The largest share of the heap the meshes may take.
+     *
+     * <p>A third, capped. Meshes are the one structure here that scales with the
+     * square of the render distance, so they get the lion's share of what is
+     * going spare — but a third leaves the world's own chunks, the atlas and
+     * every other part of the game the room they had, and the cap keeps a
+     * machine with a very large heap from filling it with terrain it will never
+     * look at.
+     */
+    private static final double HEAP_SHARE = 1.0 / 3;
+    private static final long MAX_BYTE_BUDGET = 1536L * 1024 * 1024;
+    private static final long MIN_BYTE_BUDGET = 64L * 1024 * 1024;
 
-    /** Builds queued in one frame, so a teleport does not queue the world. */
-    private static final int MAX_QUEUED_PER_FRAME = 32;
+    /**
+     * Builds queued in one frame, and how many may be in flight at once.
+     *
+     * <p>The per-frame cap is what stops a teleport queueing the world in one
+     * go; the in-flight cap is what actually paces the workers. The first is
+     * generous now because the second exists: the old arrangement had only the
+     * per-frame cap at thirty-two, which at sixty frames a second fills a
+     * ninety-chunk view in about a minute — long enough that the player watches
+     * it happen, which is the loading stutter rather than a fix for it.
+     */
+    private static final int MAX_QUEUED_PER_FRAME = 256;
+    private static final int MAX_IN_FLIGHT = 512;
+
+    /** How much of the budget is left standing after a trim; see {@link #trim}. */
+    private static final double LOW_WATER = 0.85;
+
+    /**
+     * Map entries held, whatever they weigh.
+     *
+     * <p>Not a memory budget — that is {@link #byteBudget} — but a ceiling on
+     * the map itself, because empty sections are kept for their visibility and a
+     * player who walks a long way would otherwise accumulate every piece of sky
+     * they have ever stood under. Sixty bytes an entry, so this is about twelve
+     * megabytes of bookkeeping: far more than a ninety-chunk view needs, which
+     * is the point of it being a safety net rather than a policy.
+     */
+    private static final int MAX_SECTIONS = 200_000;
 
     private final Level level;
     private final BlockAtlas atlas;
-    private final int budget;
+    private final long byteBudget;
 
     private final Map<Long, SectionMesh> meshes = new ConcurrentHashMap<>();
     private final java.util.Set<Long> building = ConcurrentHashMap.newKeySet();
@@ -53,24 +100,92 @@ public final class TerrainSections {
     private final java.util.Set<Long> dirty = ConcurrentHashMap.newKeySet();
     private ExecutorService workers;
 
+    /** Bytes of mesh held, kept in step with {@link #meshes} rather than summed. */
+    private final java.util.concurrent.atomic.AtomicLong bytes =
+            new java.util.concurrent.atomic.AtomicLong();
+
+    /**
+     * Non-empty sections held, and their bytes — what {@link #affordableReach}
+     * divides to find out how much ground a byte buys on <em>this</em> world.
+     */
+    private final AtomicInteger solidSections = new AtomicInteger();
+
     private volatile int centreX, centreY, centreZ;
     private int queuedThisFrame;
+    private volatile boolean trimming;
 
     public TerrainSections(Level level, BlockAtlas atlas) {
-        this(level, atlas, DEFAULT_BUDGET);
+        this(level, atlas, defaultByteBudget());
     }
 
-    public TerrainSections(Level level, BlockAtlas atlas, int budget) {
+    public TerrainSections(Level level, BlockAtlas atlas, long byteBudget) {
         this.level = level;
         this.atlas = atlas;
-        this.budget = Math.max(64, budget);
+        this.byteBudget = Math.max(4L * 1024 * 1024, byteBudget);
+    }
+
+    static long defaultByteBudget() {
+        long share = (long) (Runtime.getRuntime().maxMemory() * HEAP_SHARE);
+        return Math.max(MIN_BYTE_BUDGET, Math.min(MAX_BYTE_BUDGET, share));
     }
 
     /** How many sections are meshed right now (diagnostics). */
     public int meshCount() { return meshes.size(); }
 
+    /** How many bytes of mesh are held right now (diagnostics). */
+    public long meshBytes() { return bytes.get(); }
+
+    /** The ceiling {@link #meshBytes} is kept under. */
+    public long byteBudget() { return byteBudget; }
+
     /** How many are being meshed right now (diagnostics). */
     public int buildingCount() { return building.size(); }
+
+    /**
+     * <b>How far this cache can actually keep the world, in world units.</b>
+     *
+     * <p>The number a caller needs and could not otherwise have. A view distance
+     * is a request; what a machine can hold is a fact about its heap and about
+     * how much geometry this particular terrain has per section — a plain and a
+     * mountain range cost very different amounts for the same radius. So it is
+     * measured rather than assumed: the bytes held divided by the non-empty
+     * sections held gives what a section of <em>this</em> world weighs, the
+     * budget divided by that gives how many fit, and the surface band being a
+     * couple of sections deep turns that into a radius.
+     *
+     * <p><b>Answering honestly matters more than answering large.</b> A caller
+     * that asks for more than this does not get more world, it gets the rim of
+     * its view built and evicted and built again — which is a frame rate spent
+     * on nothing and a horizon that flashes. Told where the detail really stops,
+     * it can hand over to the level-of-detail tree exactly there, and the seam
+     * is invisible.
+     *
+     * @param tileSize world units per cell
+     * @return the radius the byte budget supports, or {@link Double#MAX_VALUE}
+     *         while nothing is yet known about this world
+     */
+    public double affordableReach(int tileSize) {
+        int solid = solidSections.get();
+        long held = bytes.get();
+        // Nothing built yet, or nothing in it: no evidence to be careful with.
+        if (solid < MIN_SAMPLE || held <= 0) return Double.MAX_VALUE;
+        double perSection = held / (double) solid;
+        double affordable = byteBudget / perSection;
+        // The surface is a band a couple of sections deep, not a single sheet:
+        // a hillside puts three or four non-empty sections over one column, a
+        // plain puts one. Measured the same way as the weight — non-empty
+        // sections over the ground they cover — would need the walk's own
+        // footprint, so this is the conservative constant instead.
+        double columns = affordable / SURFACE_SECTIONS_PER_COLUMN;
+        double radiusInSections = Math.sqrt(columns / Math.PI);
+        return radiusInSections * SectionMesh.SIZE * (double) Math.max(1, tileSize);
+    }
+
+    /** Non-empty sections needed before {@link #affordableReach} trusts its average. */
+    private static final int MIN_SAMPLE = 64;
+
+    /** How deep the non-empty band over one column of world tends to be. */
+    private static final double SURFACE_SECTIONS_PER_COLUMN = 2.5;
 
     /** Start a frame: where the camera is, and a fresh build budget. */
     public void beginFrame(int sectionX, int sectionY, int sectionZ) {
@@ -91,21 +206,27 @@ public final class TerrainSections {
     public SectionMesh mesh(int sx, int sy, int sz) {
         long key = key(sx, sy, sz);
         SectionMesh mesh = meshes.get(key);
-        if (mesh != null && !dirty.contains(key)) return mesh;
+        // The empty check first, and it is not a micro-optimisation: this runs
+        // tens of thousands of times a frame, `dirty` is empty except in the
+        // frames just after a block was placed, and asking a ConcurrentHashMap
+        // costs a boxed key and a hash either way. Half the lookups in the walk
+        // are this one.
+        if (mesh != null && (dirty.isEmpty() || !dirty.contains(key))) return mesh;
         queue(key, sx, sy, sz);
         return mesh;
     }
 
     private void queue(long key, int sx, int sy, int sz) {
         if (queuedThisFrame >= MAX_QUEUED_PER_FRAME) return;
+        if (building.size() >= MAX_IN_FLIGHT) return;
         if (!building.add(key)) return;
         queuedThisFrame++;
         pool().execute(() -> {
             try {
                 SectionMesh built = SectionMesher.build(level, atlas, sx, sy, sz);
-                meshes.put(key, built);
+                store(key, built);
                 dirty.remove(key);
-                if (meshes.size() > budget) trim();
+                if (bytes.get() > byteBudget || meshes.size() > MAX_SECTIONS) trim();
             } catch (RuntimeException e) {
                 System.err.println("TerrainSections: section " + sx + "," + sy + "," + sz
                         + " failed to mesh: " + e);
@@ -113,6 +234,24 @@ public final class TerrainSections {
                 building.remove(key);
             }
         });
+    }
+
+    /** Put a mesh in, keeping the byte and non-empty tallies in step with it. */
+    private void store(long key, SectionMesh built) {
+        SectionMesh previous = meshes.put(key, built);
+        long delta = built.byteCount() - (previous == null ? 0 : previous.byteCount());
+        bytes.addAndGet(delta);
+        int wasSolid = previous != null && !previous.isEmpty() ? 1 : 0;
+        int isSolid = built.isEmpty() ? 0 : 1;
+        if (isSolid != wasSolid) solidSections.addAndGet(isSolid - wasSolid);
+    }
+
+    /** Take one out, the same way. */
+    private void forget(long key) {
+        SectionMesh gone = meshes.remove(key);
+        if (gone == null) return;
+        bytes.addAndGet(-gone.byteCount());
+        if (!gone.isEmpty()) solidSections.decrementAndGet();
     }
 
     /**
@@ -153,6 +292,8 @@ public final class TerrainSections {
     public void clear() {
         meshes.clear();
         dirty.clear();
+        bytes.set(0);
+        solidSections.set(0);
     }
 
     /** Let the meshing threads go. */
@@ -163,12 +304,51 @@ public final class TerrainSections {
         clear();
     }
 
+    /**
+     * Drop the furthest meshes until the budget has headroom again.
+     *
+     * <p><b>Down to a low-water mark, and only one thread at a time.</b> Both
+     * halves are the fix for what this used to be: a full sort of every key, on
+     * a worker thread, for <em>every build</em> once the budget was passed —
+     * which past the budget is every build there is, several threads deep, each
+     * one boxing four thousand longs to throw away one mesh. Trimming to
+     * fifteen per cent under instead means one sort buys thousands of builds,
+     * and the flag means the other workers get on with meshing rather than
+     * queueing up to sort the same map.
+     *
+     * <p>Empty sections are never dropped: they weigh nothing, and their
+     * visibility is what lets the walk see <em>through</em> them. Evicting the
+     * sky to make room for the ground under it would stop the walk at the first
+     * thing it threw away.
+     */
     private void trim() {
-        int cx = centreX, cy = centreY, cz = centreZ;
-        List<Long> keys = new ArrayList<>(meshes.keySet());
-        keys.sort(Comparator.comparingLong(k -> -distanceSq(k, cx, cy, cz)));
-        int drop = Math.min(keys.size(), meshes.size() - budget);
-        for (int i = 0; i < drop; i++) meshes.remove(keys.get(i));
+        if (trimming) return;
+        synchronized (this) {
+            if (trimming) return;
+            if (bytes.get() <= byteBudget && meshes.size() <= MAX_SECTIONS) return;
+            trimming = true;
+        }
+        try {
+            int cx = centreX, cy = centreY, cz = centreZ;
+            long byteTarget = (long) (byteBudget * LOW_WATER);
+            int countTarget = (int) (MAX_SECTIONS * LOW_WATER);
+            List<Long> keys = new ArrayList<>(meshes.keySet());
+            keys.sort(Comparator.comparingLong(k -> -distanceSq(k, cx, cy, cz)));
+            for (Long key : keys) {
+                boolean overBytes = bytes.get() > byteTarget;
+                boolean overCount = meshes.size() > countTarget;
+                if (!overBytes && !overCount) break;
+                SectionMesh mesh = meshes.get(key);
+                // An empty section weighs nothing and its visibility is what
+                // lets the walk see *through* it, so bytes alone never justify
+                // dropping one. Only the entry ceiling does — a player who has
+                // walked a long way leaves a map full of remembered sky.
+                if (mesh != null && mesh.isEmpty() && !overCount) continue;
+                forget(key);
+            }
+        } finally {
+            trimming = false;
+        }
     }
 
     private synchronized ExecutorService pool() {
