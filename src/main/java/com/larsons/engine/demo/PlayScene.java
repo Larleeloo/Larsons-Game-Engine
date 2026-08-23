@@ -2764,6 +2764,29 @@ public class PlayScene extends AbstractScene {
         return pass;
     }
 
+    /**
+     * One line saying what the view distance settings are actually producing.
+     *
+     * <p>Three sliders bound each other and a fourth bound comes from the
+     * machine, so the number on a control is a request and not an outcome. A
+     * player who moves one and sees nothing change has no way to find out which
+     * of the four answered — which is exactly the confusion this exists to end.
+     */
+    private String viewDistanceReadout() {
+        if (level == null || !level.isWorld()) return "";
+        double span = com.larsons.engine.graphics.chunk.SectionMesh.SIZE
+                * (double) Math.max(1, level.tileSize);
+        double horizonChunks = solid.fogEnd() / span;
+        if (sections == null || detailReach.reach() < 0) {
+            return "Landforms to %.0f chunks. Blocks are drawn by the painter here — "
+                    .formatted(horizonChunks)
+                    + "the measured detail distance applies to the GPU path.";
+        }
+        return "Now: blocks to %.0f chunks, landforms to %.0f. Detail grows to what this "
+                .formatted(detailReach.reach() / span, horizonChunks)
+                + "machine sustains, so it climbs for a few seconds after the world loads.";
+    }
+
     /** The far plane the GPU pass draws with, which the painter's depths share. */
     private double gpuFar() {
         return Math.max(EyeCamera.NEAR * 2, solid.fogEnd() * 1.5);
@@ -3305,6 +3328,28 @@ public class PlayScene extends AbstractScene {
      * these numbers mean anything on: a hand-built level is drawn to its own
      * edges whatever they say.
      */
+    /**
+     * Set how far the world is drawn a block at a time, <b>and take the render
+     * distance with it</b>.
+     *
+     * <p>Blocks cannot be drawn past the edge of what is drawn at all, so
+     * {@code SolidPainter.begin} clamps the detail distance to the render
+     * distance. Left at that, the detail slider is a control that moves and does
+     * nothing: set it to ninety chunks with the render distance at twenty and
+     * you get twenty, silently, with nothing on screen to say which of the two
+     * numbers is in charge — which is exactly how it was reported, twice.
+     *
+     * <p>So asking for more detail asks for more world to put it in. The
+     * distant-generation row has always worked this way against the same
+     * setting; this is that rule applied to the slider that needed it more.
+     */
+    static void setDetailDistance(PlayerSettings settings, TerrainSettings terrain, int blocks) {
+        settings.detailDistance = blocks;
+        if (terrain != null && terrain.renderDistance < blocks) {
+            terrain.renderDistance = Math.min(TerrainSettings.MAX_RENDER_DISTANCE, blocks);
+        }
+    }
+
     private void addViewDistanceRows(GameProfile p) {
         if (level == null || !level.isWorld() || p == null || p.terrain == null) return;
         var terrain = p.terrain;
@@ -3327,7 +3372,7 @@ public class PlayScene extends AbstractScene {
                 }, 1, TerrainSettings.MAX_RENDER_DISTANCE / per);
         pauseForm.addSlider("Detail distance (chunks)", () -> settings.detailDistance / per,
                 v -> {
-                    settings.detailDistance = v * per;
+                    setDetailDistance(settings, terrain, v * per);
                     store.trySave(settings);
                 }, Math.max(1, PlayerSettings.MIN_DETAIL_DISTANCE / per),
                 PlayerSettings.MAX_DETAIL_DISTANCE / per);
@@ -3343,6 +3388,10 @@ public class PlayScene extends AbstractScene {
                                 : Math.max(v * per, terrain.renderDistance),
                         0, TerrainSettings.MAX_DISTANT_DISTANCE / per)
                 .enabledWhen(() -> PlayerSettings.active().distantTerrain);
+        // What the settings are actually getting you, which is the thing three
+        // sliders bounded by each other and by the machine cannot say on their
+        // own. Re-read every frame; see ConfigForm.addNote(Supplier).
+        pauseForm.addNote(this::viewDistanceReadout);
         pauseForm.addNote("Blocks out to the detail distance; landforms past it, "
                 + "for about the same cost however far you see.");
         pauseForm.addNote("Detail is what costs a frame — turn it down first, "

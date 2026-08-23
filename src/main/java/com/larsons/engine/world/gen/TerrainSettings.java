@@ -80,8 +80,20 @@ public final class TerrainSettings {
     /** How far the coarse horizon may be pushed, in blocks — 256 chunks. */
     public static final int MAX_DISTANT_DISTANCE = 256 * BLOCKS_PER_CHUNK;
 
-    /** The render distance a level starts at, in blocks — twelve chunks. */
-    public static final int DEFAULT_RENDER_DISTANCE = 12 * BLOCKS_PER_CHUNK;
+    /**
+     * The render distance a level starts at, in blocks — thirty-two chunks.
+     *
+     * <p><b>Long, because it is nearly free and short is the failure that does
+     * not look like one.</b> This bounds the whole picture: the painter clamps
+     * the detail distance to it, and the coarse pass stops at it, so a world
+     * that starts at twelve chunks ends at twelve chunks however far the other
+     * sliders are pushed — and there is nothing on screen to say which of them
+     * is in charge. What fills the difference is the
+     * {@linkplain WorldLod level-of-detail tree}, whose cost is a function of
+     * angle rather than distance, so the twenty extra chunks are a few thousand
+     * quads rather than twenty chunks' worth of blocks.
+     */
+    public static final int DEFAULT_RENDER_DISTANCE = 32 * BLOCKS_PER_CHUNK;
 
     /** The horizon a generated world starts at: far enough to read as landscape. */
     public static final int DEFAULT_DISTANT_DISTANCE = 48 * BLOCKS_PER_CHUNK;
