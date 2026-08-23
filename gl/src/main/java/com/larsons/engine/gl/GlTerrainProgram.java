@@ -33,7 +33,7 @@ import static org.lwjgl.opengl.GL33C.*;
  */
 final class GlTerrainProgram implements AutoCloseable {
 
-    /** Vertex attribute slots, matched by {@link GlSectionBuffer}. */
+    /** Vertex attribute slots, matched by {@link GlSectionArena}. */
     static final int ATTRIB_POSITION = 0;
     static final int ATTRIB_UV = 1;
     static final int ATTRIB_COLOR = 2;

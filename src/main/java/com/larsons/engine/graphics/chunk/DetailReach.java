@@ -6,30 +6,35 @@ package com.larsons.engine.graphics.chunk;
  *
  * <h2>Why a slider cannot answer this</h2>
  *
- * <p>Per-block geometry costs the square of its radius, and it costs it twice:
- * in memory, because every section's triangles are kept so they need not be
- * rebuilt, and in draw calls, because each one is a separate piece of geometry
- * at a separate place. Measured on this engine's own terrain: thirty-two chunks
- * of full detail is <b>1.4 GB of mesh and 2.8 million quads a frame</b>. Ninety
- * chunks is that times eight — eleven gigabytes, and more draw calls than any
- * driver will issue in eight milliseconds.
+ * <p>Per-block geometry costs the square of its radius, and it costs it in
+ * three separate currencies: memory, because every section's triangles are kept
+ * so they need not be rebuilt; processor, because a frame has to decide which
+ * of them are visible; and card, because it has to shade them. Measured on this
+ * engine's own terrain, a chunk of radius is a few tens of megabytes and a few
+ * tens of thousands of quads, and both scale with the area.
  *
- * <p>So no machine draws ninety chunks a block at a time, and a renderer that
- * tries does not fail gracefully: it fills its cache, evicts the rim, rebuilds
- * it, evicts it again, and the horizon flashes while the frame rate collapses.
- * The world <em>is</em> drawn to ninety chunks — by {@code WorldLod}, whose cost
- * is a function of angle rather than distance, which is exactly the trade
- * Distant Horizons makes and the reason it can show a landscape Minecraft
- * cannot.
+ * <p><b>Which of the three runs out first is a fact about the machine, not about
+ * the engine</b>, and it moves: a workstation with sixty-four gigabytes and a
+ * recent card runs out of none of them where a laptop runs out of all three.
+ * That is why none of the limits here is a chosen number any more. The heap
+ * decides the memory ({@code TerrainSections.affordableReach}), a timer query
+ * decides the card ({@code TerrainPass.lastGpuMillis}), and the walk times
+ * itself.
+ *
+ * <p>Past whatever that comes to, the world is still drawn — by
+ * {@code WorldLod}, whose cost is a function of angle rather than distance,
+ * which is exactly the trade Distant Horizons makes and the reason it can show
+ * a landscape Minecraft cannot. The seam between them is wherever this class
+ * settles, and both sides are told the same number.
  *
  * <h2>What this does instead</h2>
  *
  * <p>It asks for a little, and grows while growing stays cheap. Every frame it
- * compares two measurements against two targets — how many sections the last
- * frame drew, and how long the last frame took — and moves the radius by one
- * and a half per cent. That is slow enough to be invisible (a hundred frames to
- * change by four fifths, under a second at 120 Hz) and fast enough to find the
- * machine's own answer while the player is still walking away from spawn.
+ * compares what the last one cost against what a frame can afford, and moves
+ * the radius by one and a half per cent. That is slow enough to be invisible (a
+ * hundred frames to change by four fifths, under a second at 120 Hz) and fast
+ * enough to find the machine's own answer while the player is still walking
+ * away from spawn.
  *
  * <p><b>Starting small rather than large is the half that matters while the
  * world is loading.</b> A radius that begins at what the slider asked for spends
@@ -58,9 +63,12 @@ public final class DetailReach {
      *
      * <p>So the cost is measured now — {@link #TARGET_GPU_MS} on the card,
      * {@link #TARGET_CPU_MS} on the processor — and this is left far enough
-     * above any sane answer that it only catches a runaway.
+     * above any sane answer that it only catches a runaway. Higher again since
+     * sections stopped being draw calls: sixty-four of them share one buffer and
+     * one {@code glMultiDrawArrays} now, so the count of them says even less
+     * about what a frame costs than it did.
      */
-    public static final int TARGET_SECTIONS = 40_000;
+    public static final int TARGET_SECTIONS = 120_000;
 
     /**
      * What the world may cost the graphics card, in milliseconds a frame.
@@ -83,7 +91,7 @@ public final class DetailReach {
      * sixty-chunk radius the walk stepped into <b>94 000</b> sections to draw
      * four thousand, which is twenty milliseconds of doing nothing.
      */
-    public static final int TARGET_VISITS = 60_000;
+    public static final int TARGET_VISITS = 150_000;
 
     /**
      * What the section walk itself may cost, in milliseconds.

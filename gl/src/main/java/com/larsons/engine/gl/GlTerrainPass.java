@@ -4,12 +4,14 @@ import com.larsons.engine.graphics.EyeCamera;
 import com.larsons.engine.graphics.Mat4;
 import com.larsons.engine.graphics.TerrainPass;
 import com.larsons.engine.graphics.chunk.BlockAtlas;
+import com.larsons.engine.graphics.chunk.SectionBatch;
 import com.larsons.engine.graphics.chunk.SectionMesh;
 import com.larsons.engine.graphics.chunk.SectionRenderList;
 import org.lwjgl.system.MemoryUtil;
 
 import java.awt.image.BufferedImage;
 import java.nio.ByteBuffer;
+import java.nio.IntBuffer;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
@@ -75,8 +77,16 @@ import static org.lwjgl.opengl.GL33C.*;
  */
 final class GlTerrainPass implements TerrainPass {
 
-    /** Sections uploaded in one frame — the rest arrive over the next few. */
-    private static final int MAX_UPLOADS_PER_FRAME = 16;
+    /**
+     * Arenas re-uploaded in one frame — the rest arrive over the next few.
+     *
+     * <p>An arena is up to sixty-four sections, so this is a few megabytes of
+     * {@code glBufferData} a frame at worst. Bounded for the reason the
+     * per-section upload was: the first seconds of a world dirty everything at
+     * once, and a frame that re-specified every buffer would be the stutter this
+     * whole path exists to remove.
+     */
+    private static final int MAX_REBUILDS_PER_FRAME = 8;
 
     /**
      * How opaque a fragment must be to survive the opaque pass.
@@ -96,7 +106,56 @@ final class GlTerrainPass implements TerrainPass {
         this.target = target;
     }
 
-    private final Map<Long, GlSectionBuffer> buffers = new HashMap<>();
+    /** Every arena that has ever been drawn, by its packed section coordinates. */
+    private final Map<Long, GlSectionArena> arenas = new HashMap<>();
+
+    /** The scratch packer every arena rebuild borrows; see {@link SectionBatch}. */
+    private final SectionBatch batch = new SectionBatch();
+
+    // This frame's arenas, in the order the walk first reached them, and which
+    // of each one's slots are visible. Reused between frames: a frame at ninety
+    // chunks touches several hundred arenas and allocating that list again every
+    // frame is the kind of garbage this path spent a commit removing.
+    private GlSectionArena[] order = new GlSectionArena[256];
+    private int[][] slots = newSlotRows(256);
+    private int[] slotCount = new int[256];
+    private int arenaCount;
+    private final Map<Long, Integer> seen = new HashMap<>();
+
+    /** Where {@code glMultiDrawArrays} reads its ranges from. */
+    private IntBuffer firstScratch = MemoryUtil.memAllocInt(SectionBatch.SLOTS);
+    private IntBuffer countScratch = MemoryUtil.memAllocInt(SectionBatch.SLOTS);
+
+    /**
+     * Arenas kept before the least recently seen are dropped.
+     *
+     * <p>A ninety-chunk view is on the order of two thousand of them, so this is
+     * several times what any frame needs — it exists because a player who walks
+     * a long way would otherwise leave a buffer on the card for every arena they
+     * have ever looked at, and video memory has no garbage collector.
+     */
+    private static final int MAX_ARENAS = 8192;
+
+    /** Counted up once per frame, so an arena knows when it was last wanted. */
+    private int frameStamp;
+
+    /**
+     * The arena the last section belonged to.
+     *
+     * <p>The walk hands sections over in breadth-first order, which is
+     * spatially coherent, so most of them land in the arena the one before did.
+     * Worth a field because the alternative is a boxed map lookup per visible
+     * section — tens of thousands a frame, which is the cost this path has
+     * twice now had to go and remove from somewhere else.
+     */
+    private long lastArenaKey;
+    private int lastArenaAt = -1;
+
+    private static int[][] newSlotRows(int rows) {
+        int[][] made = new int[rows][];
+        for (int i = 0; i < rows; i++) made[i] = new int[SectionBatch.SLOTS];
+        return made;
+    }
     private GlTerrainProgram program;
     private int atlasTexture = -1;
     private int atlasRevision = -1;
@@ -251,21 +310,8 @@ final class GlTerrainPass implements TerrainPass {
     /** The two passes themselves; {@link #drawTerrain} owns the state around them. */
     private void drawSections(List<SectionRenderList.Visible> visible, EyeCamera eye,
                               int tileSize, int fogArgb, double fogStart, double fogEnd) {
-        int uploads = 0;
-        for (SectionRenderList.Visible v : visible) {
-            long key = com.larsons.engine.graphics.chunk.TerrainSections
-                    .key(v.sx(), v.sy(), v.sz());
-            GlSectionBuffer buffer = buffers.get(key);
-            if (buffer == null) {
-                if (uploads >= MAX_UPLOADS_PER_FRAME) continue;
-                buffer = new GlSectionBuffer();
-                buffers.put(key, buffer);
-            }
-            if (!buffer.holds(v.mesh())) {
-                if (uploads++ >= MAX_UPLOADS_PER_FRAME) continue;
-                buffer.upload(v.mesh());
-            }
-        }
+        groupByArena(visible);
+        refreshArenas(tileSize);
 
         Mat4 projection = Mat4.perspective(eye.fov(),
                 eye.viewportWidth() / (double) eye.viewportHeight(),
@@ -294,47 +340,143 @@ final class GlTerrainPass implements TerrainPass {
         glBindTexture(GL_TEXTURE_2D, atlasTexture);
 
         double span = SectionMesh.SIZE * (double) tileSize;
-        // Opaque, near to far: a near section drawn first fills the depth
+        // Opaque, near to far — which the arena order already is, because the
+        // walk hands its sections over near-first and an arena is first seen
+        // when its nearest section is. A near arena drawn first fills the depth
         // buffer and everything behind it is thrown away before it is shaded.
-        for (SectionRenderList.Visible v : visible) {
-            GlSectionBuffer buffer = buffers.get(
-                    com.larsons.engine.graphics.chunk.TerrainSections
-                            .key(v.sx(), v.sy(), v.sz()));
-            if (buffer == null || buffer.opaqueVertexCount() == 0) continue;
-            bindSection(program, projection, view, v, span);
-            buffer.drawOpaque();
+        for (int i = 0; i < arenaCount; i++) {
+            drawArena(i, projection, view, span, true);
         }
 
         // See-through, far to near, and no depth writes: blending is not
-        // commutative, so this half is still ordered — by section rather than
-        // by face, which is a few hundred comparisons instead of thousands.
+        // commutative, so this half is still ordered. By arena rather than by
+        // section now, which is coarser than it was — sixty-four sections that
+        // share a buffer are drawn in whatever order they sit in it. Two panes
+        // of glass in one arena can therefore blend in the wrong order; that is
+        // the price of the draw count, and it is paid where it shows least,
+        // because an arena is sixty-four blocks across and the eye is rarely
+        // inside two of its translucent faces at once.
         glEnable(GL_BLEND);
         glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
         glDepthMask(false);
         program.setAlphaCut(0f);
-        for (int i = visible.size() - 1; i >= 0; i--) {
-            SectionRenderList.Visible v = visible.get(i);
-            GlSectionBuffer buffer = buffers.get(
-                    com.larsons.engine.graphics.chunk.TerrainSections
-                            .key(v.sx(), v.sy(), v.sz()));
-            if (buffer == null || buffer.translucentVertexCount() == 0) continue;
-            bindSection(program, projection, view, v, span);
-            buffer.drawTranslucent();
+        for (int i = arenaCount - 1; i >= 0; i--) {
+            drawArena(i, projection, view, span, false);
         }
     }
 
     /**
-     * Point the shader at one section: its own translation folded into the view
-     * and projection, so its vertices stay small floats near the origin.
+     * Sort this frame's sections into their arenas, keeping the walk's order.
+     *
+     * <p>Nearest-first is a property of the list handed in, and it survives:
+     * an arena takes its place the first time one of its sections is seen, so
+     * the arenas come out ordered by their nearest visible member.
      */
-    private static void bindSection(GlTerrainProgram program, Mat4 projection, Mat4 view,
-                                    SectionRenderList.Visible v, double span) {
-        Mat4 model = Mat4.translation(v.sx() * span, v.sz() * span, v.sy() * span);
-        Mat4 modelView = view.times(model);
-        program.setMatrices(projection.times(modelView).columnMajor(),
-                modelView.columnMajor());
+    private void groupByArena(List<SectionRenderList.Visible> visible) {
+        arenaCount = 0;
+        seen.clear();
+        lastArenaAt = -1;
+        frameStamp++;
+        for (SectionRenderList.Visible v : visible) {
+            long key = SectionBatch.arenaOf(v.sx(), v.sy(), v.sz());
+            int at;
+            if (lastArenaAt >= 0 && key == lastArenaKey) {
+                at = lastArenaAt;
+            } else {
+                Integer found = seen.get(key);
+                if (found != null) {
+                    at = found;
+                } else {
+                    if (arenaCount == order.length) grow();
+                    at = arenaCount++;
+                    seen.put(key, at);
+                    GlSectionArena arena = arenas.get(key);
+                    if (arena == null) {
+                        arena = new GlSectionArena(
+                                Math.floorDiv(v.sx(), SectionBatch.SPAN),
+                                Math.floorDiv(v.sy(), SectionBatch.SPAN),
+                                Math.floorDiv(v.sz(), SectionBatch.SPAN));
+                        arenas.put(key, arena);
+                    }
+                    order[at] = arena;
+                    slotCount[at] = 0;
+                }
+                lastArenaKey = key;
+                lastArenaAt = at;
+            }
+            order[at].seenAt(frameStamp);
+            int slot = SectionBatch.slotOf(v.sx(), v.sy(), v.sz());
+            order[at].offer(slot, v.mesh());
+            // A slot can only be offered once a frame — the walk marks each
+            // section seen and visits it once — so this is a straight append.
+            // Guarded anyway, because the alternative to a dropped section is
+            // writing past the end of the row mid-frame.
+            if (slotCount[at] < SectionBatch.SLOTS) slots[at][slotCount[at]++] = slot;
+        }
+        if (arenas.size() > MAX_ARENAS) evictArenas();
     }
 
+    /**
+     * Drop the arenas nothing has looked at for longest.
+     *
+     * <p>Video memory has no collector, so an arena's buffers live until
+     * something deletes them. A player who walks across a world would otherwise
+     * accumulate one for every arena they have ever seen.
+     */
+    private void evictArenas() {
+        int keepAfter = frameStamp - EVICT_AFTER_FRAMES;
+        arenas.values().removeIf(arena -> {
+            if (arena.lastSeen() > keepAfter) return false;
+            arena.close();
+            return true;
+        });
+    }
+
+    /** How stale an arena must be before it is dropped; see {@link #evictArenas}. */
+    private static final int EVICT_AFTER_FRAMES = 600;
+
+    /**
+     * Re-upload the arenas whose contents changed, a few per frame.
+     *
+     * <p>Bounded for the reason the per-section upload was: a teleport, or the
+     * first seconds of a world, dirties everything at once, and a frame that
+     * re-specified every buffer would be the stutter this whole path exists to
+     * remove. What is not rebuilt this frame is rebuilt next; until then the
+     * arena draws what it last held, which is the world a moment ago rather
+     * than a hole.
+     */
+    private void refreshArenas(int tileSize) {
+        int rebuilt = 0;
+        for (int i = 0; i < arenaCount && rebuilt < MAX_REBUILDS_PER_FRAME; i++) {
+            if (!order[i].isDirty()) continue;
+            order[i].rebuild(batch, tileSize);
+            rebuilt++;
+        }
+    }
+
+    private void drawArena(int at, Mat4 projection, Mat4 view, double span, boolean opaque) {
+        if (slotCount[at] == 0) return;
+        GlSectionArena arena = order[at];
+        // One position for sixty-four sections: the arena's own corner, with
+        // each section's offset inside it already folded into its vertices.
+        Mat4 model = Mat4.translation(
+                arena.arenaX() * SectionBatch.SPAN * span,
+                arena.arenaZ() * SectionBatch.SPAN * span,
+                arena.arenaY() * SectionBatch.SPAN * span);
+        Mat4 modelView = view.times(model);
+        program.setMatrices(projection.times(modelView).columnMajor(), modelView.columnMajor());
+        arena.draw(opaque, slots[at], slotCount[at], firstScratch, countScratch);
+    }
+
+    private void grow() {
+        int want = order.length * 2;
+        order = java.util.Arrays.copyOf(order, want);
+        slotCount = java.util.Arrays.copyOf(slotCount, want);
+        int[][] bigger = new int[want][];
+        System.arraycopy(slots, 0, bigger, 0, slots.length);
+        for (int i = slots.length; i < want; i++) bigger[i] = new int[SectionBatch.SLOTS];
+        slots = bigger;
+    }
 
     /**
      * Until a shader fails to compile, at which point this says no for the rest
@@ -352,8 +494,10 @@ final class GlTerrainPass implements TerrainPass {
 
     @Override
     public void dispose() {
-        for (GlSectionBuffer buffer : buffers.values()) buffer.close();
-        buffers.clear();
+        for (GlSectionArena arena : arenas.values()) arena.close();
+        arenas.clear();
+        arenaCount = 0;
+        seen.clear();
         if (program != null) {
             program.close();
             program = null;
@@ -362,6 +506,14 @@ final class GlTerrainPass implements TerrainPass {
             glDeleteTextures(atlasTexture);
             atlasTexture = -1;
             atlasRevision = -1;
+        }
+        if (firstScratch != null) {
+            MemoryUtil.memFree(firstScratch);
+            firstScratch = null;
+        }
+        if (countScratch != null) {
+            MemoryUtil.memFree(countScratch);
+            countScratch = null;
         }
         if (timeQuery >= 0) {
             if (timing) {
