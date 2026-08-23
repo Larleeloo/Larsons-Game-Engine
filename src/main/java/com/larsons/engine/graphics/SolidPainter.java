@@ -513,6 +513,17 @@ public final class SolidPainter {
          * then its own sort <em>is</em> the depth test.
          */
         float depth;
+        /**
+         * Queued to be drawn without a depth at all, whatever the painter is
+         * doing by the time the queue is flushed.
+         *
+         * <p>The horizon, and only the horizon. It is queued while
+         * {@link #distant} has the painter drawing flat and drawn later, from
+         * {@link #flush}, by which time the painter is back to depth-buffered —
+         * so the decision has to travel on the entry rather than be re-read off
+         * the painter when it is too late to be true.
+         */
+        boolean flat;
         // Billboard fields; sprite is null for a face.
         Runnable sprite;
         double screenX, screenY, scale, fade;
@@ -579,9 +590,11 @@ public final class SolidPainter {
      * Hand the blocks over to a depth-buffered backend, or take them back.
      *
      * <p>With this on, {@link #terrain()} sweeps only for the things a GPU mesh
-     * cannot hold — the plants — and only as far as they are drawn, and
-     * {@link #distant()} does nothing at all. Everything still queued is given
-     * a depth, so it composites against the world the backend drew.
+     * cannot hold — the plants — and only as far as they are drawn. Everything
+     * still queued is given a depth, so it composites against the world the
+     * backend drew. {@link #distant()} is the exception and stays flat: all of
+     * it is beyond the detailed reach, so a caller draws it <em>before</em> the
+     * backend's pass and lets the near world cover it.
      *
      * @param far the far plane the terrain pass is using, which the depths have
      *            to be measured against for the two to agree
@@ -1175,12 +1188,25 @@ public final class SolidPainter {
      * detailed pass, whatever the cell arithmetic says.
      */
     public void distant() {
-        if (level == null || eye == null || depthBuffered) return;
+        if (level == null || eye == null) return;
         int ts = level.tileSize;
         if (ts <= 0) return;
         double outermost = horizon();
         double inner = detailDistance;
         if (outermost <= inner) return;
+        // <b>The horizon is drawn flat, even when a depth-buffered backend is
+        // running the near world.</b> Every box of it starts where the detailed
+        // reach ends, so everything drawn afterwards is in front of all of it
+        // and there is nothing left for a depth test to decide — which means the
+        // caller draws this first and the near world simply covers it.
+        //
+        // Not a shortcut, a necessity: a depth per entry is a uniform change per
+        // entry, and a uniform change is a flush. On a GPU backend that is one
+        // draw call per coarse box, and a two-hundred-and-fifty-six-chunk
+        // horizon has thousands of them — a frame rate spent on an ordering the
+        // geometry already guarantees.
+        boolean buffered = depthBuffered;
+        depthBuffered = false;
         // As with the detailed sweep: what the horizon draws is the world that
         // is already there. A coarse box asks the level for the tallest column
         // in a group of cells, and on a generated world that is answered from
@@ -1198,6 +1224,7 @@ public final class SolidPainter {
             }
         } finally {
             level.setBuildOnRead(building);
+            depthBuffered = buffered;
         }
     }
 
@@ -2077,6 +2104,8 @@ public final class SolidPainter {
             // the terrain pass wrote into the depth buffer.
             eye.toEye((minX + maxX) / 2, (minY + maxY) / 2, (minZ + maxZ) / 2, point);
             e.depth = (float) EyeCamera.ndcDepth(point[2], depthFar);
+        } else {
+            e.flat = true;
         }
         keep();
         return e;
@@ -2189,6 +2218,7 @@ public final class SolidPainter {
         // against a fogged background and costs one alpha push.
         e.fade = 1 - fogAmount(distance);
         if (depthBuffered) e.depth = (float) EyeCamera.ndcDepth(depth, depthFar);
+        else e.flat = true;
         keep();
     }
 
@@ -2257,7 +2287,7 @@ public final class SolidPainter {
     private static final long QUANTA_MAX = 1L << 30;
 
     private void draw(Entry e) {
-        if (depthBuffered) {
+        if (depthBuffered && !e.flat) {
             target.pushDepth(e.depth);
             try {
                 paint(e);
@@ -2536,7 +2566,15 @@ public final class SolidPainter {
 
     private Entry claim() {
         if (used == pool.size()) pool.add(new Entry());
-        return pool.get(used);
+        Entry e = pool.get(used);
+        // Entries are reused, so a field nobody sets holds whatever the last
+        // thing in this slot put there. Every queue path does set the depth —
+        // but a stale one is a sprite clipped against a depth it was never
+        // standing at, which reads as flicker and points nowhere near here. In
+        // front of everything is the safe answer to have inherited.
+        e.depth = -1;
+        e.flat = false;
+        return e;
     }
 
     /**

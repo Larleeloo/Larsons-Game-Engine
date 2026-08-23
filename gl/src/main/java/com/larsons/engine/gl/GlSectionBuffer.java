@@ -75,6 +75,11 @@ final class GlSectionBuffer implements AutoCloseable {
 
     private static void write(int vao, int vbo, float[] vertices, int[] colours) {
         int count = colours.length;
+        // Whoever's vertex array was current stays current on the way out.
+        // Binding zero instead would look harmless and is not: this engine keeps
+        // its 2D attribute pointers in one long-lived VAO (GlContext), and a
+        // core-profile draw with none bound draws nothing at all.
+        int callersVao = glGetInteger(GL_VERTEX_ARRAY_BINDING);
         ByteBuffer data = MemoryUtil.memAlloc(count * SectionMesh.STRIDE_BYTES);
         try {
             for (int i = 0; i < count; i++) {
@@ -102,8 +107,8 @@ final class GlSectionBuffer implements AutoCloseable {
             glEnableVertexAttribArray(GlTerrainProgram.ATTRIB_COLOR);
             glVertexAttribPointer(GlTerrainProgram.ATTRIB_COLOR, 4, GL_UNSIGNED_BYTE, true,
                     stride, 20);
-            glBindVertexArray(0);
         } finally {
+            glBindVertexArray(callersVao);
             MemoryUtil.memFree(data);
         }
     }

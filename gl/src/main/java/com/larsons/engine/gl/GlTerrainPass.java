@@ -48,6 +48,30 @@ import static org.lwjgl.opengl.GL33C.*;
  * plants, the level's scenery — are drawn by the 2D target after this, and
  * telling it about the depth buffer is what lets a character stand behind a
  * hill instead of on top of it. See {@link #sharesDepthWithSprites}.
+ *
+ * <h2>Everything else is put back exactly as it was found</h2>
+ *
+ * <p>This runs in the <em>middle</em> of somebody else's frame — after the sky
+ * and before the sprites — so every piece of GL state it moves is state a
+ * {@link GlTarget} is relying on, and three of them are not obvious:
+ *
+ * <ul>
+ *   <li><b>The vertex array binding.</b> {@link GlContext} creates one VAO for
+ *       the whole engine and {@code GlBatch} records its attribute pointers into
+ *       it, once, at construction. A core-profile draw with no VAO bound is not
+ *       a draw — it is {@code GL_INVALID_OPERATION} and nothing on screen — so
+ *       leaving {@code glBindVertexArray(0)} behind here does not corrupt the
+ *       sprites, it <b>deletes every one of them</b>, along with the plants, the
+ *       HUD and the pause menu. Saved and restored, the way
+ *       {@code GlShaderChain} already does it.</li>
+ *   <li><b>The bound texture.</b> The atlas goes on unit 0, which is where the
+ *       2D batch keeps its own page — and that batch caches the id it last
+ *       bound, so the next sprite naming the same id would skip the rebind and
+ *       sample the block atlas. Hence {@code GlTarget.restoreAfterTerrain}.</li>
+ *   <li><b>The program.</b> Restored on <em>every</em> path out, including a
+ *       throw, because a frame that carried on with the terrain shader bound
+ *       would feed it 2D vertices through a 3D attribute layout.</li>
+ * </ul>
  */
 final class GlTerrainPass implements TerrainPass {
 
@@ -135,6 +159,35 @@ final class GlTerrainPass implements TerrainPass {
             }
         }
 
+        // The engine's one VAO, whose attribute pointers the 2D batch lives in.
+        // Read rather than assumed: this class does not own it and is not the
+        // only thing that borrows it.
+        int callersVao = glGetInteger(GL_VERTEX_ARRAY_BINDING);
+        try {
+            drawSections(visible, eye, tileSize, fogArgb, fogStart, fogEnd);
+        } finally {
+            glBindVertexArray(callersVao);
+            glDisable(GL_CULL_FACE);
+            // Handed back to the 2D target with the depth buffer intact and
+            // depth *writes* off: everything drawn after this — sprites,
+            // plants, the HUD — is tested against the world it is standing in
+            // but cannot occlude it. A painter that never calls pushDepth draws
+            // at the near plane and so passes the test unconditionally, which is
+            // what a HUD wants and is why this costs the rest of the engine
+            // nothing.
+            glEnable(GL_DEPTH_TEST);
+            glDepthFunc(GL_LEQUAL);
+            glDepthMask(false);
+            glEnable(GL_BLEND);
+            glBlendFuncSeparate(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA,
+                    GL_ONE, GL_ONE_MINUS_SRC_ALPHA);
+            if (flat != null) flat.restoreAfterTerrain();
+        }
+    }
+
+    /** The two passes themselves; {@link #drawTerrain} owns the state around them. */
+    private void drawSections(List<SectionRenderList.Visible> visible, EyeCamera eye,
+                              int tileSize, int fogArgb, double fogStart, double fogEnd) {
         int uploads = 0;
         for (SectionRenderList.Visible v : visible) {
             long key = com.larsons.engine.graphics.chunk.TerrainSections
@@ -162,7 +215,13 @@ final class GlTerrainPass implements TerrainPass {
         glClear(GL_DEPTH_BUFFER_BIT);
         glEnable(GL_CULL_FACE);
         glCullFace(GL_BACK);
-        glFrontFace(GL_CCW);
+        // Clockwise, and the sign is load-bearing: this engine's eye space has
+        // +Z forward, so a face wound counter-clockwise seen from outside — as
+        // SectionMesher winds every one of them — reaches the window clockwise.
+        // GL_CCW here keeps precisely the faces pointing away from the player.
+        // See Mat4.FRONT_FACES_WIND_CLOCKWISE.
+        glFrontFace(com.larsons.engine.graphics.Mat4.FRONT_FACES_WIND_CLOCKWISE
+                ? GL_CW : GL_CCW);
         glDisable(GL_BLEND);
 
         program.use();
@@ -199,21 +258,6 @@ final class GlTerrainPass implements TerrainPass {
             bindSection(program, projection, view, v, span);
             buffer.drawTranslucent();
         }
-
-        glBindVertexArray(0);
-        glDisable(GL_CULL_FACE);
-        // Handed back to the 2D target with the depth buffer intact and depth
-        // *writes* off: everything drawn after this — sprites, plants, the HUD —
-        // is tested against the world it is standing in but cannot occlude it.
-        // A painter that never calls pushDepth draws at the near plane and so
-        // passes the test unconditionally, which is what a HUD wants and is why
-        // this costs the rest of the engine nothing.
-        glEnable(GL_DEPTH_TEST);
-        glDepthFunc(GL_LEQUAL);
-        glDepthMask(false);
-        glEnable(GL_BLEND);
-        glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
-        if (flat != null) flat.restoreDepth();
     }
 
     /**
@@ -228,6 +272,13 @@ final class GlTerrainPass implements TerrainPass {
                 modelView.columnMajor());
     }
 
+
+    /**
+     * Until a shader fails to compile, at which point this says no for the rest
+     * of the process and the scene goes back to the painter with its blocks.
+     */
+    @Override
+    public boolean available() { return !unavailable; }
 
     /**
      * Yes: the depth buffer written here is the one the 2D target draws into

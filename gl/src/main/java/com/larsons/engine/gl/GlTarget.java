@@ -207,7 +207,6 @@ public final class GlTarget implements DrawTarget, AutoCloseable {
         alpha = 1f;
         depths.clear();
         depth = GlProgram.NEAREST_DEPTH;
-        program.setDepth(depth);
         // Off until something turns it on. The terrain pass does, mid-frame,
         // and hands it back enabled with writes off so the sprites behind it
         // stay behind it — but a frame that never draws terrain must not
@@ -240,7 +239,14 @@ public final class GlTarget implements DrawTarget, AutoCloseable {
         glClear(GL_STENCIL_BUFFER_BIT);
         glStencilMask(0x00);
 
+        // The program first, then the uniform: a uniform is set on whatever
+        // program is current, and after a frame that drew terrain the current
+        // one is not necessarily this class's.
         program.use(this.width, this.height);
+        program.setDepth(depth);
+        // Terrain writes depth and hands the buffer back read-only; a frame
+        // that draws none must not inherit that.
+        glDepthMask(true);
     }
 
     /** Submit whatever is still open. Nothing is on screen until this runs. */
@@ -1318,8 +1324,21 @@ public final class GlTarget implements DrawTarget, AutoCloseable {
         batch.flush();
     }
 
-    /** Put the depth back where the terrain pass found it. */
-    void restoreDepth() {
+    /**
+     * Put this target's own state back after the terrain pass has finished
+     * borrowing the context.
+     *
+     * <p>Three things, and the middle one is the one that is easy to miss. The
+     * program, because the terrain pass bound its own and a 2D vertex fed
+     * through a 3D attribute layout is not a picture. The <b>texture</b>,
+     * because the atlas went on unit 0 — where {@link GlBatch} keeps its page —
+     * and that batch skips a rebind when the id has not changed, so without
+     * this the next sprite naming the page it was already using would sample
+     * blocks instead. And the depth, which is what this method was originally
+     * for.
+     */
+    void restoreAfterTerrain() {
+        batch.forgetTexture();
         program.use(width, height);
         program.setDepth(depth);
     }

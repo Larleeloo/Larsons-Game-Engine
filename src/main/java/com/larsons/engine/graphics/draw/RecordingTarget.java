@@ -62,6 +62,17 @@ public final class RecordingTarget implements DrawTarget {
         /** A scoped state change: clip, alpha or transform, pushed or popped. */
         record State(String op, int[] coords, float alpha,
                      AffineTransform transform) implements Cmd {}
+
+        /**
+         * Where the triangles that follow sit in a depth buffer.
+         *
+         * <p>Its own record rather than a {@link State}, because it is the one
+         * scoped verb whose <em>count</em> is the thing worth asserting on: on a
+         * GPU backend it is a uniform, a uniform is a flush, and a flush is a
+         * draw call. A pass that pushes one per face has a frame rate problem
+         * that no assertion about colours would find.
+         */
+        record Depth(String op, float ndcZ) implements Cmd {}
     }
 
     private final List<Cmd> commands = new ArrayList<>();
@@ -406,6 +417,18 @@ public final class RecordingTarget implements DrawTarget {
     public void popAlpha() {
         stats.record(DrawStats.Kind.STATE, null);
         commands.add(new Cmd.State("popAlpha", new int[0], 1f, null));
+    }
+
+    @Override
+    public void pushDepth(float ndcZ) {
+        stats.record(DrawStats.Kind.STATE, null);
+        commands.add(new Cmd.Depth("pushDepth", ndcZ));
+    }
+
+    @Override
+    public void popDepth() {
+        stats.record(DrawStats.Kind.STATE, null);
+        commands.add(new Cmd.Depth("popDepth", 0f));
     }
 
     @Override

@@ -87,6 +87,104 @@ class GpuTerrainTest {
         }
     }
 
+    /**
+     * <b>Which way a face pointing at you comes out wound — the whole of the
+     * back-face cull, decided here rather than by a driver constant somebody
+     * guessed at.</b>
+     *
+     * <p>{@code SectionMesher} winds every face counter-clockwise seen from
+     * outside, which is the textbook front face and would reach the window
+     * counter-clockwise through the textbook projection. This engine's is not
+     * the textbook one: its eye space has <b>+Z forward</b>, because
+     * {@link EyeCamera} does, and that single sign reverses the answer. So the
+     * measurement is made here, on the real mesh through the real matrices, and
+     * {@link Mat4#FRONT_FACES_WIND_CLOCKWISE} — which is what the GL backend
+     * hands {@code glFrontFace} — has to agree with it.
+     *
+     * <p><b>Why this is worth a test rather than a comment.</b> Getting it
+     * backwards does not draw a mirrored world or a black screen, either of
+     * which would be obvious. It culls precisely the faces that were pointing at
+     * the player and keeps the ones that were pointing away: a flat plain draws
+     * nothing at all, and a lone block shows the two or three faces on its far
+     * side. That reads as "the ground is transparent", which is a very long way
+     * from "a cull constant is inverted".
+     */
+    @Test
+    void aFacePointingAtTheEyeWindsTheWayTheCullIsSetFor() {
+        Level lvl = bare();
+        lvl.setTile(4, 4, 5, stone(lvl));
+        float[] v = SectionMesher.build(lvl, atlas(), 0, 0, 0).opaqueVertices();
+        assertTrue(v.length > 0, "the block has to have meshed for this to mean anything");
+
+        double cx = 4.5 * TILE, cy = 4.5 * TILE, cz = 4.5 * TILE;
+        EyeCamera eye = new EyeCamera(W, H);
+        // Off one corner and above it, so some faces point this way and some
+        // point away — a camera square onto one face would prove only half of it.
+        eye.place(cx - 6 * TILE, cy - 5 * TILE, cz + 4 * TILE);
+        aim(eye, cx, cy, cz);
+        Mat4 viewProjection = Mat4.perspective(eye.fov(), W / (double) H,
+                EyeCamera.NEAR, 10_000).times(Mat4.view(eye));
+
+        int towardsClockwise = 0, towardsCounter = 0, awayClockwise = 0, awayCounter = 0;
+        int stride = SectionMesh.FLOATS_PER_VERTEX;
+        double[] clip = new double[4];
+        for (int t = 0; t + 3 * stride <= v.length; t += 3 * stride) {
+            double[][] p = new double[3][];
+            double[][] ndc = new double[3][];
+            boolean inFront = true;
+            for (int i = 0; i < 3; i++) {
+                int at = t + i * stride;
+                p[i] = new double[] {v[at], v[at + 1], v[at + 2]};
+                viewProjection.transform(p[i][0], p[i][1], p[i][2], clip);
+                if (clip[3] <= 0) { inFront = false; break; }
+                ndc[i] = new double[] {clip[0] / clip[3], clip[1] / clip[3]};
+            }
+            if (!inFront) continue;
+
+            // The triangle's own normal, and whether the eye is on its outward
+            // side. This is the ground truth the projection has to preserve.
+            double[] n = cross(p[0], p[1], p[2]);
+            boolean towards = n[0] * (eye.x() - p[0][0]) + n[1] * (eye.y() - p[0][1])
+                    + n[2] * (eye.z() - p[0][2]) > 0;
+            // Signed area in normalised device coordinates, where y is up —
+            // exactly the quantity GL computes to decide which way a triangle
+            // faces. Negative is clockwise.
+            double area = (ndc[1][0] - ndc[0][0]) * (ndc[2][1] - ndc[0][1])
+                    - (ndc[2][0] - ndc[0][0]) * (ndc[1][1] - ndc[0][1]);
+            if (Math.abs(area) < 1e-12) continue;       // edge-on, decides nothing
+            if (towards) {
+                if (area < 0) towardsClockwise++; else towardsCounter++;
+            } else {
+                if (area < 0) awayClockwise++; else awayCounter++;
+            }
+        }
+
+        assertTrue(towardsClockwise + towardsCounter > 0, "some face has to point at the eye");
+        assertTrue(awayClockwise + awayCounter > 0, "and some has to point away");
+        assertEquals(0, towardsCounter,
+                "faces pointing at the eye must all wind the same way, and "
+                        + towardsCounter + " of them went the other way");
+        assertEquals(0, awayClockwise, "and so must the ones pointing away");
+        assertEquals(Mat4.FRONT_FACES_WIND_CLOCKWISE, towardsClockwise > 0,
+                "Mat4.FRONT_FACES_WIND_CLOCKWISE is what the GL backend passes to "
+                        + "glFrontFace, and it now disagrees with the geometry: the "
+                        + "cull would keep exactly the faces pointing away from the "
+                        + "player");
+    }
+
+    /** {@code (b − a) × (c − a)}, a triangle's own outward normal. */
+    private static double[] cross(double[] a, double[] b, double[] c) {
+        double ux = b[0] - a[0], uy = b[1] - a[1], uz = b[2] - a[2];
+        double wx = c[0] - a[0], wy = c[1] - a[1], wz = c[2] - a[2];
+        return new double[] {uy * wz - uz * wy, uz * wx - ux * wz, ux * wy - uy * wx};
+    }
+
+    /** Point the camera at a world position, whatever it is standing on. */
+    private static void aim(EyeCamera eye, double tx, double ty, double tz) {
+        double dx = tx - eye.x(), dy = ty - eye.y(), dz = tz - eye.z();
+        eye.look(Math.atan2(dx, -dy), Math.atan2(dz, Math.hypot(dx, dy)));
+    }
+
     /** Depth comes out inside the buffer's range, and grows with distance. */
     @Test
     void depthIsMonotonicAndInsideTheBuffer() {
@@ -238,6 +336,38 @@ class GpuTerrainTest {
         assertTrue(levels(shaded) > 4,
                 "an overhang has to darken the vertices under it, and did not: "
                         + levels(shaded) + " brightnesses");
+    }
+
+    /**
+     * <b>The level's painted floor is geometry here too, and it has to be.</b>
+     *
+     * <p>Layer 0 is a lid at {@code z = 0} with no thickness rather than a cube,
+     * so it falls outside the layer-1-and-up loop the rest of the mesher runs.
+     * {@code SolidPainter} used to draw it and stands down the moment a
+     * depth-buffered backend takes the blocks over — so if nothing picked it up
+     * here, every column whose only content is the floor would be a hole through
+     * the world, which on a level built by hand is the entire ground.
+     */
+    @Test
+    void thePaintedFloorIsMeshedLikeAnythingElse() {
+        int size = SectionMesh.SIZE;
+        Level lvl = bare();
+        lvl.fillFloor(lvl.blocks.get("stone_path").id());
+
+        SectionMesh floor = SectionMesher.build(lvl, atlas(), 0, 0, 0);
+        assertEquals(size * size * SectionMesh.VERTICES_PER_QUAD, floor.opaqueVertexCount(),
+                "every cell of the section's floor is one upward quad");
+        assertTrue(SectionMesher.build(lvl, atlas(), 0, 1, 0).isEmpty(),
+                "and only the bottom section has a floor under it");
+
+        // A block standing on the floor hides the tile it is standing on — the
+        // same exposure rule as any other upward face — and contributes five of
+        // its own, its underside being the floor's business rather than its.
+        lvl.setTile(4, 4, 1, stone(lvl));
+        SectionMesh stood = SectionMesher.build(lvl, atlas(), 0, 0, 0);
+        assertEquals((size * size - 1 + 5) * SectionMesh.VERTICES_PER_QUAD,
+                stood.opaqueVertexCount(),
+                "the covered lid goes and the block's five exposed faces arrive");
     }
 
     /** A section of nothing meshes to nothing, and says so. */

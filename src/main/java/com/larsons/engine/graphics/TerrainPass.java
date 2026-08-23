@@ -54,6 +54,20 @@ public interface TerrainPass {
                      int fogArgb, double fogStart, double fogEnd);
 
     /**
+     * Whether this pass can actually draw.
+     *
+     * <p><b>The one question a caller must ask before standing the painter
+     * down.</b> A scene that hands the blocks over stops drawing them itself, so
+     * a pass that then declines — a shader the driver would not compile, a
+     * texture that would not upload — takes the whole world with it rather than
+     * degrading. There is no way to discover that from
+     * {@link Renderer#terrainPass()}, which answers before a shader has ever
+     * been asked to compile; this answers afterwards, and a backend that has
+     * given up says so from then on.
+     */
+    default boolean available() { return true; }
+
+    /**
      * Whether the depth buffer this pass wrote is available to whatever draws
      * next.
      *
