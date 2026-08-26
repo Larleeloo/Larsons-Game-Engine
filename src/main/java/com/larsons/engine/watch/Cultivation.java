@@ -142,7 +142,10 @@ public final class Cultivation {
 
     /** The tree a seed grows into, or {@code null} when it is a crop. */
     public static TreeSpecies treeFor(String seedKey) {
-        return TREE_SEEDS.get(seedKey);
+        // Null is "not a tree seed", not an exception: the key came out of a
+        // satchel that was loaded from disk or off the wire, and the map is
+        // immutable, so it throws on a null lookup rather than missing it.
+        return seedKey == null ? null : TREE_SEEDS.get(seedKey);
     }
 
     /** The seed a tree species drops, or {@code null}. */

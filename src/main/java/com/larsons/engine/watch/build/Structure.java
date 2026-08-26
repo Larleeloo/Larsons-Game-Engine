@@ -84,6 +84,14 @@ public final class Structure {
     /**
      * Place a piece, snapped to the grid.
      *
+     * <p><b>Does not consult {@link #blocked}</b>, and must not. This is the
+     * step after the decision, not the decision: on a host it runs once
+     * {@code WatchGame.build} has checked, and on a guest it runs to apply
+     * something the host has already decided. A guest that re-adjudicated would
+     * drop pieces whenever its copy of the world was a tick behind, which is
+     * the same class of bug as a client re-rolling a random. Callers that are
+     * deciding ask {@code blocked} first.
+     *
      * @param treeId the tree it is fixed to, or {@code 0} for the ground
      */
     public Placement place(BuildPiece piece, double x, double y, double z, int turn,

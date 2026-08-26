@@ -207,6 +207,15 @@ public final class WatchServer implements WatchGame.Sink {
             int id = nextPlayerId.getAndIncrement();
             conn.playerId = id;
             WatchPlayer player = game.join(id, conn.name);
+            if (player == null) {
+                // The game keeps the same cap and can refuse for reasons this
+                // loop cannot see. Two checks that could disagree must not end
+                // in a null dereference on the tick thread.
+                conn.playerId = 0;
+                conn.closeAfterFlush(Protocol.encode(WatchProto.error(
+                        "This walk is full (" + game.config().maxPlayers() + " players)")));
+                continue;
+            }
             conn.send(Protocol.encode(WatchProto.welcome(id, game.config().seed(),
                     game.config().worldName(), WatchProto.TICK_RATE,
                     game.config().maxPlayers())));

@@ -81,7 +81,16 @@ public final class WatchClock {
         return new WatchClock(zone, timeOfDay(ZonedDateTime.now(zone)), true);
     }
 
-    /** A clock fixed at a time of day — for tests, and for a client following a host. */
+    /**
+     * A clock started at a time of day rather than at this machine's — for
+     * tests, and for a client following a host.
+     *
+     * <p>Started, not frozen: it does not read the wall clock, but
+     * {@link #tick} still advances it. That is what a guest needs — the host's
+     * time arrives every few seconds and the sun has to keep moving between
+     * those, not step. A test that wants a still picture simply does not tick
+     * it.
+     */
     public static WatchClock at(double timeOfDay) {
         return new WatchClock(ZoneId.systemDefault(), timeOfDay, false);
     }
@@ -100,10 +109,18 @@ public final class WatchClock {
         return seconds / 86400.0;
     }
 
-    /** The inverse: what local time a time of day is, for the HUD's clock. */
+    /**
+     * The inverse: what local time a time of day is, for the HUD's clock.
+     *
+     * <p><b>Rounded, not floored.</b> A time of day is a division by 86400 and
+     * the multiplication back does not always land on the integer it came from:
+     * 07:17 leaves here as 0.3034722…, comes back as 26219.999999999996, and
+     * flooring that printed <em>07:16</em> on the HUD and in every sighting the
+     * guide recorded. Half a second of rounding costs nothing and is right.
+     */
     public static LocalTime localTimeOf(double timeOfDay) {
         double seconds = wrap(timeOfDay) * 86400;
-        return LocalTime.ofSecondOfDay((long) Math.floor(seconds) % 86400);
+        return LocalTime.ofSecondOfDay(Math.floorMod(Math.round(seconds), 86400L));
     }
 
     /** Real hours between two wall-clock stamps; what growth is measured in. */

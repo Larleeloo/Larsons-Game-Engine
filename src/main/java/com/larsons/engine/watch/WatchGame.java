@@ -198,8 +198,22 @@ public final class WatchGame implements Animal.Surroundings {
 
     // --- the party -------------------------------------------------------------------
 
-    /** Somebody arrives. */
+    /**
+     * Somebody arrives, or {@code null} if the walk is full or they are already
+     * on it.
+     *
+     * <p><b>The cap is enforced here and not only at the door.</b>
+     * {@link WatchServer} turns a ninth connection away with a reason, which is
+     * the right thing for a person to see — but it was the <em>only</em> thing
+     * stopping a ninth player, so {@link Config#maxPlayers()} was a number the
+     * simulation carried and never read. Anything that joins a game without
+     * going through a socket (a save being reopened, a test, whatever comes
+     * next) has to meet the same limit, and a rejoin on a live id has to be a
+     * rejection rather than a second player quietly replacing the first.
+     */
     public WatchPlayer join(int id, String name) {
+        if (players.containsKey(id)) return null;
+        if (players.size() >= Math.max(1, config.maxPlayers())) return null;
         double angle = rng.nextDouble() * Math.PI * 2;
         double radius = players.isEmpty() ? 0 : 4 + players.size() * 2.0;
         double x = Math.cos(angle) * radius;
