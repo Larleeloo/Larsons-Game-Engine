@@ -97,6 +97,25 @@ public interface TerrainPass {
      */
     default boolean sharesDepthWithSprites() { return false; }
 
+    /**
+     * The general triangle-mesh pass this backend offers, or {@code null}.
+     *
+     * <p><b>The seam a world that is not made of blocks arrives through.</b>
+     * Everything above this line is about voxels: sections, a cave-aware walk,
+     * a block atlas. A game whose ground is a continuous heightfield meshed
+     * into triangles has none of those and needs none of them — it needs
+     * "upload these triangles and draw them with a depth test", which is
+     * {@link MeshPass}.
+     *
+     * <p>It hangs off this interface rather than off {@link Renderer} for the
+     * same reason {@code DrawTarget.terrainPass()} does: a scene is handed a
+     * target and nothing else, and asking the target what it can do is the
+     * whole of how a scene stays backend-neutral. A backend with a depth buffer
+     * for blocks has one for anything, so in practice a renderer that answers
+     * this one non-null is the same renderer that answers the other.
+     */
+    default MeshPass meshPass() { return null; }
+
     /** Release whatever the backend is holding — buffers, textures, programs. */
     void dispose();
 }

@@ -27,7 +27,9 @@ public enum StandaloneGame {
     DECK_BUILDER("deckbuilder", "Council of Six", "deckbuilder · 2–6 online",
             "decklobby", new Color(120, 150, 232)),
     EVOLUTION("evolution", "Evolution", "artificial life simulator",
-            "evolutionlobby", new Color(112, 205, 140));
+            "evolutionlobby", new Color(112, 205, 140)),
+    FIELD_GUIDE("field_guide", "Field Guide", "explore &amp; catalog · 1–8 online",
+            "watchlobby", new Color(96, 152, 106));
 
     /** How many states a button sheet holds; see {@link #textureKey()}. */
     public static final int BUTTON_STATES = 3;
