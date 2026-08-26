@@ -229,10 +229,12 @@ class WatchNetTest {
         var animal = server.game().animals().get(0);
         finder.sendSpot(animal.id());
 
-        until("the discovery to reach the other player's book",
-                () -> friend.view().guide().seen(animal.def().key()));
-        assertTrue(finder.view().guide().seen(animal.def().key()),
-                "the finder's own book did not get it");
+        // Both books, in one wait. Waiting for one and then asserting on the
+        // other is a race: the guide reaches each client in its own message,
+        // and the order they arrive in is not the order they were sent.
+        until("the discovery to reach both players' books",
+                () -> friend.view().guide().seen(animal.def().key())
+                        && finder.view().guide().seen(animal.def().key()));
 
         // A satchel is private: Sam's is Sam's, and nothing Kara picked up is in it.
         assertTrue(friend.view().satchel().total() > 0, "Sam started with an empty satchel");

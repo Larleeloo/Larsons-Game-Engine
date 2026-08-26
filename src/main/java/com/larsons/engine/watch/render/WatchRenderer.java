@@ -335,10 +335,40 @@ public final class WatchRenderer {
             int base = index * MAX_CORNERS;
             System.arraycopy(cornerX, base, xs, 0, n);
             System.arraycopy(cornerY, base, ys, 0, n);
-            target.fillPolygon(xs, ys, n, colour[index]);
+            fillSealed(target, xs, ys, n, colour[index]);
             drawn++;
         }
         queued = 0;
+    }
+
+    /**
+     * <b>Why every opaque face is stroked in its own colour.</b>
+     *
+     * <p>Two triangles that share a world edge project to the same screen edge,
+     * and neither of them owns the pixels along it. A scan-converted fill takes
+     * the pixels whose centres fall inside it, so on a diagonal edge a centre
+     * can fall inside neither and the background shows through as a one-pixel
+     * dash; an <em>antialiased</em> fill is worse, because each triangle lays
+     * about half its colour over whatever is already there and half of a colour
+     * twice over a quarter of the sky is a pale hairline. The window turns
+     * antialiasing on, so this is the case that matters.
+     *
+     * <p>Fifty thousand terrain triangles all abutting draws that hairline
+     * along every one of them, and the ground comes out under a bright lattice
+     * — obvious in a screenshot and worse in motion, because the lattice
+     * crawls. Stroking each face in the colour it was just filled with covers
+     * exactly that half-pixel and nothing else.
+     *
+     * <p><b>Opaque faces only.</b> On something you can see through — water,
+     * mostly — there is no background showing through to cover, and a stroke
+     * would lay a second helping of alpha along the edge and draw a hard border
+     * around a soft thing. {@link com.larsons.engine.graphics.SolidPainter}
+     * reached the same two conclusions for the same reasons; this is that,
+     * applied to a mesh instead of a block.
+     */
+    private static void fillSealed(DrawTarget target, int[] xs, int[] ys, int n, int argb) {
+        target.fillPolygon(xs, ys, n, argb);
+        if ((argb >>> 24) >= 0xFF) target.drawPolygon(xs, ys, n, argb, 1f);
     }
 
     /**

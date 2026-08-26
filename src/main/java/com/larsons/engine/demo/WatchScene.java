@@ -814,9 +814,12 @@ public class WatchScene extends AbstractScene {
         String place = biome.displayName();
         String time = WatchClock.localTimeOf(clock.timeOfDay()).withSecond(0).withNano(0)
                 + " · " + clock.phase().label();
-        target.drawText(place, pad, pad + 18, HUD_BOLD, HUD_INK);
-        target.drawText(time, pad, pad + 38, HUD_FONT, HUD_DIM);
-        target.drawText(view.guide().discovered() + " / " + view.guide().total()
+        label(target, place, pad, pad + 18, HUD_BOLD, HUD_INK);
+        // Full ink, not dim: the clock is what tells you which animals are out,
+        // and it spends its life over a sky that is a different colour every
+        // hour of the day.
+        label(target, time, pad, pad + 38, HUD_FONT, HUD_INK);
+        label(target, view.guide().discovered() + " / " + view.guide().total()
                         + " species · " + view.guide().points() + " pts",
                 pad, pad + 56, HUD_SMALL, HUD_ACCENT);
 
@@ -826,7 +829,7 @@ public class WatchScene extends AbstractScene {
         for (WatchView.Walker walker : view.walkers()) {
             String label = walker.name()
                     + (walker.id() == view.selfId() ? " (you)" : "");
-            target.drawText(label, right - target.textWidth(label, HUD_FONT), row,
+            label(target, label, right - target.textWidth(label, HUD_FONT), row,
                     HUD_FONT, walker.id() == view.selfId() ? HUD_ACCENT : HUD_DIM);
             row += 18;
         }
@@ -845,7 +848,7 @@ public class WatchScene extends AbstractScene {
                 stillness > 0.7 ? HUD_ACCENT : HUD_WARN);
         String hint = crouching ? "Crouched — stay still and they will come back"
                 : "Stillness";
-        target.drawText(hint, viewportHeight > 0
+        label(target, hint, viewportHeight > 0
                 ? viewportWidth / 2 - target.textWidth(hint, HUD_SMALL) / 2 : 0,
                 barY - 6, HUD_SMALL, HUD_DIM);
 
@@ -857,7 +860,7 @@ public class WatchScene extends AbstractScene {
         List<String> log = view.log();
         for (int i = log.size() - 1; i >= 0 && i > log.size() - 6; i--) {
             String line = log.get(i);
-            target.drawText(line, right - target.textWidth(line, HUD_SMALL), logY,
+            label(target, line, right - target.textWidth(line, HUD_SMALL), logY,
                     HUD_SMALL, HUD_DIM);
             logY -= 16;
         }
@@ -866,17 +869,43 @@ public class WatchScene extends AbstractScene {
         drawRod(target, me);
 
         if (!prompt.isEmpty()) {
-            target.drawText(prompt,
+            label(target, prompt,
                     viewportWidth / 2 - target.textWidth(prompt, HUD_FONT) / 2,
                     viewportHeight / 2 + 42, HUD_FONT, HUD_INK);
         }
         if (panel == Panel.NONE) {
             String keys = "E pick · F feeder · R plant · C cross · V rod · B build "
                     + "· Tab satchel · G guide";
-            target.drawText(keys, pad, viewportHeight - pad - 22, HUD_SMALL,
+            label(target, keys, pad, viewportHeight - pad - 22, HUD_SMALL,
                     new Color(150, 168, 152));
         }
     }
+
+    /**
+     * HUD text drawn <b>over the world</b>, with a shadow under it.
+     *
+     * <p>Everything in this HUD sits on whatever the player happens to be
+     * looking at, and what they are looking at is not a colour this scene
+     * chooses — it is a sky that runs from near-white at noon to near-black at
+     * midnight, and a hillside that can be any of twenty biomes' greens, sands
+     * and snows. A single ink colour cannot be legible against all of that:
+     * measured on a pale dawn sky, the clock line and the guide's progress were
+     * both washed out to the point of being unreadable, which is a bad way to
+     * lose the one line that says what time the animals think it is.
+     *
+     * <p>A one-pixel shadow costs a second string and fixes every case, because
+     * a light glyph with a dark edge reads on anything. The panels do not use
+     * this: they lay their own dark card down first and have a background they
+     * control.
+     */
+    private static void label(DrawTarget target, String text, int x, int y, Font font,
+                              Color colour) {
+        target.drawText(text, x + 1, y + 1, font, SHADOW);
+        target.drawText(text, x, y, font, colour);
+    }
+
+    /** Under every line of HUD text; dark and soft rather than a hard outline. */
+    private static final Color SHADOW = new Color(0, 0, 0, 150);
 
     private void drawSatchelStrip(DrawTarget target, Satchel satchel, int x, int baseline) {
         if (satchel.kinds() == 0) return;
@@ -888,7 +917,7 @@ public class WatchScene extends AbstractScene {
             sb.append(satchel.count(key)).append("× ").append(Forage.nameOf(key));
         }
         if (satchel.kinds() > 6) sb.append("   +").append(satchel.kinds() - 6).append(" more");
-        target.drawText(sb.toString(), x, baseline, HUD_SMALL, HUD_DIM);
+        label(target, sb.toString(), x, baseline, HUD_SMALL, HUD_DIM);
     }
 
     /**
@@ -919,7 +948,7 @@ public class WatchScene extends AbstractScene {
             target.drawOval((int) point[0] - radius, (int) point[1] - radius,
                     radius * 2, radius * 2, ring, 2.5f);
             String label = light.label();
-            target.drawText(label, (int) point[0] - target.textWidth(label, HUD_SMALL) / 2,
+            label(target, label, (int) point[0] - target.textWidth(label, HUD_SMALL) / 2,
                     (int) point[1] - radius - 8, HUD_SMALL, ring);
         }
     }
@@ -929,7 +958,7 @@ public class WatchScene extends AbstractScene {
         String hint = me.rod().hint();
         if (hint.isEmpty()) return;
         Color colour = me.rod().stage() == Fishing.Stage.BITE ? HUD_WARN : HUD_INK;
-        target.drawText(hint,
+        label(target, hint,
                 viewportWidth / 2 - target.textWidth(hint, HUD_BOLD) / 2,
                 viewportHeight / 2 - 40, HUD_BOLD, colour);
     }
