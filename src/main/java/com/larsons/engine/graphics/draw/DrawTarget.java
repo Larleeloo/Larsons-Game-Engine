@@ -77,6 +77,29 @@ public interface DrawTarget {
 
     default void clear(Color color) { clear(color.getRGB()); }
 
+    /**
+     * Ask for smooth edges, or for exact ones — <b>a hint, not a mode.</b>
+     *
+     * <p>Most drawing wants antialiasing and gets it: text, a menu's rounded
+     * card, a ring drawn round an animal. <b>A field of abutting triangles does
+     * not.</b> Two of them sharing an edge each cover about half the pixels
+     * along it, and each blends that half against whatever is already there
+     * rather than against the other half — so the pair leaves a pale hairline,
+     * and a landscape made of fifty thousand of them comes out under a bright
+     * lattice that crawls as you walk. Turning smoothing off makes the shared
+     * edge exact, and the seam simply stops existing.
+     *
+     * <p>It is also, on the Java2D path, most of the cost: an antialiased fill
+     * computes coverage per pixel, and the same frame that took 122 ms smooth
+     * takes a fraction of that hard-edged. For a low-polygon world drawn by a
+     * software rasteriser, both of those point the same way.
+     *
+     * <p>Backends free to ignore it: a GL target antialiases per-sample if at
+     * all, has a depth buffer, and has no seam to fix. Callers must restore
+     * what they changed — the HUD drawn after a world pass expects smooth text.
+     */
+    default void setSmoothing(boolean on) { }
+
     // --- filled shapes ---------------------------------------------------------
 
     void fillRect(int x, int y, int w, int h, int argb);

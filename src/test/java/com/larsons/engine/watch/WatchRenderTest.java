@@ -277,6 +277,43 @@ class WatchRenderTest {
         return -1;
     }
 
+    /**
+     * The world is drawn hard-edged, and smoothing is handed back afterwards.
+     *
+     * <p>Both halves matter. Antialiasing a field of abutting triangles leaves
+     * a pale hairline along every shared edge — a lattice over the ground that
+     * crawls as you walk — and costs most of the frame doing it: the same
+     * frame measured 288 ms smooth (with the stroke that was covering the
+     * seam) against 35 ms hard-edged. Leaving smoothing off afterwards would
+     * hand the HUD jagged text.
+     */
+    @Test
+    void theWorldPassTurnsSmoothingOffAndPutsItBack() {
+        RecordingTarget target = new RecordingTarget(WIDTH, HEIGHT);
+        WatchRenderer renderer = new WatchRenderer();
+        renderer.begin(target, camera(), WIDTH, HEIGHT, WatchClock.at(0.5),
+                0x87CEEB, 0xB0C4DE);
+        renderer.submit(ground(30, 0x66AA66));
+        renderer.flush(target);
+        assertTrue(renderer.drawnTriangles() > 0, "nothing was drawn, so nothing was proved");
+
+        // Every polygon of the world has to fall inside an "off" window.
+        boolean smoothing = true;
+        int filled = 0;
+        for (RecordingTarget.Cmd cmd : target.commands()) {
+            if (cmd instanceof RecordingTarget.Cmd.Hint hint) {
+                smoothing = hint.on();
+            } else if (cmd instanceof RecordingTarget.Cmd.Shape shape
+                    && "fillPolygon".equals(shape.op())) {
+                assertFalse(smoothing,
+                        "a world polygon was filled with smoothing on — that is the seam");
+                filled++;
+            }
+        }
+        assertTrue(filled > 0, "no polygons reached the target");
+        assertTrue(smoothing, "smoothing was left off, so the HUD comes out jagged");
+    }
+
     // --- meshes ----------------------------------------------------------------------------
 
     @Test

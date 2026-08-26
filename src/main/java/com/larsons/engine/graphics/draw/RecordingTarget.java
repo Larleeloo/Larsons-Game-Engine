@@ -73,6 +73,18 @@ public final class RecordingTarget implements DrawTarget {
          * that no assertion about colours would find.
          */
         record Depth(String op, float ndcZ) implements Cmd {}
+
+        /**
+         * A rendering hint the caller asked for — today, whether edges are
+         * smoothed.
+         *
+         * <p>Recorded because it is not decoration: a pass that draws a field
+         * of abutting triangles has to turn smoothing <em>off</em> (or every
+         * shared edge leaves a pale seam) and has to put it back before anyone
+         * draws text. Both halves of that are worth an assertion, and neither
+         * shows up in the pixels a colour test would look at.
+         */
+        record Hint(String op, boolean on) implements Cmd {}
     }
 
     private final List<Cmd> commands = new ArrayList<>();
@@ -138,6 +150,11 @@ public final class RecordingTarget implements DrawTarget {
     public void clear(int argb) {
         stats.record(DrawStats.Kind.SHAPE, null);
         commands.add(new Cmd.Shape("clear", new int[]{0, 0, width, height}, argb, 0f));
+    }
+
+    @Override
+    public void setSmoothing(boolean on) {
+        commands.add(new Cmd.Hint("setSmoothing", on));
     }
 
     @Override

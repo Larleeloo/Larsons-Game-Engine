@@ -31,7 +31,9 @@ import java.util.List;
 import java.util.Set;
 import java.util.TreeSet;
 
+import static org.junit.jupiter.api.Assertions.assertDoesNotThrow;
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertNotNull;
 import static org.junit.jupiter.api.Assertions.assertTrue;
@@ -316,6 +318,65 @@ class WatchSceneTest {
             assertTrue(family.plural() != null && !family.plural().isBlank(),
                     family + " has no plural, and the guide groups by it");
         }
+    }
+
+    /**
+     * Pressing L ends the walk instead of ending the game.
+     *
+     * <p>It crashed: leaving closes the session and the streamer, and the rest
+     * of the same {@code update} call went on to use both of them. The verb is
+     * handled in the middle of a tick, so everything after it has to cope with
+     * the walk no longer being there.
+     */
+    @Test
+    void leavingTheWalkReturnsToTheLobbyWithoutCrashing(@TempDir Path dir) {
+        GameContext ctx = context(dir);
+        WatchStore store = new WatchStore(dir.resolve("walks").toString());
+        WatchScene walk = new WatchScene(ctx);
+        SceneManager scenes = new SceneManager();
+        scenes.setViewport(WIDTH, HEIGHT);
+        scenes.register(WatchLobbyScene.NAME, new WatchLobbyScene(ctx, store));
+        scenes.register(WatchScene.NAME, walk);
+
+        WatchGame game = new WatchGame(new WatchGame.Config(31L, "Leaving", 1));
+        game.join(1, "Kara");
+        com.larsons.engine.watch.net.WatchSession session =
+                com.larsons.engine.watch.net.WatchSession.solo(game);
+        session.setSelfId(1);
+        walk.adopt(session, store);
+        scenes.setScene(WatchScene.NAME);
+
+        InputManager input = new InputManager();
+        for (int i = 0; i < 4; i++) {
+            input.newFrame();
+            scenes.update(1.0 / 60, input);
+        }
+
+        // Leaving lives on the pause screen, so Esc first — which is exactly
+        // the sequence a player does, and exactly the branch that crashed.
+        press(input, java.awt.event.KeyEvent.VK_ESCAPE);
+        scenes.update(1.0 / 60, input);
+        press(input, java.awt.event.KeyEvent.VK_L);
+        assertDoesNotThrow(() -> scenes.update(1.0 / 60, input), "pressing L crashed");
+
+        // And the frames after it, which are the ones that actually blew up.
+        for (int i = 0; i < 5; i++) {
+            input.newFrame();
+            int frame = i;
+            assertDoesNotThrow(() -> scenes.update(1.0 / 60, input),
+                    "the frame after leaving crashed (" + frame + ")");
+            RecordingTarget target = new RecordingTarget(WIDTH, HEIGHT);
+            assertDoesNotThrow(() -> scenes.render(target, 0f), "drawing after leaving crashed");
+        }
+        assertNull(walk.session(), "the walk is still holding a session after leaving");
+    }
+
+    /** One key, on a fresh frame, the way the engine delivers it. */
+    private static void press(InputManager input, int keyCode) {
+        input.newFrame();
+        input.keyPressed(new java.awt.event.KeyEvent(new javax.swing.JPanel(),
+                java.awt.event.KeyEvent.KEY_PRESSED, 0, 0, keyCode,
+                java.awt.event.KeyEvent.CHAR_UNDEFINED));
     }
 
     /** Three scenes, three names, and the launch tile opens one of them. */
