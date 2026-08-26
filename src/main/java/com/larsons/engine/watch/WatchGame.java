@@ -138,7 +138,19 @@ public final class WatchGame implements Animal.Surroundings {
     private final WatchClock clock;
     private final Random rng;
 
+    /** How long the ground has to be left alone between handfuls, in millis. */
+    private static final long GROUND_FORAGE_MILLIS = 1200;
+
+    /** How long a picked bush or tree stays bare, in real hours. */
+    private static final double REGROW_HOURS = 6;
+
     private final Map<Integer, WatchPlayer> players = new LinkedHashMap<>();
+
+    /** What has been picked and when, so a bush is not an infinite supply. */
+    private final Map<Long, Long> picked = new LinkedHashMap<>();
+
+    /** When each player last took a handful off the ground. */
+    private final Map<Integer, Long> foraged = new LinkedHashMap<>();
     private final Map<Long, Animal> animals = new LinkedHashMap<>();
     private final Map<Long, Lure> lures = new LinkedHashMap<>();
     private final List<Spotlight> spotlights = new ArrayList<>();
@@ -363,29 +375,84 @@ public final class WatchGame implements Animal.Surroundings {
         WatchPlayer player = players.get(playerId);
         if (player == null) return null;
 
+        // Reaching happens in front of you, not around you. The first version
+        // had no direction in it at all and no way to fail: a bush out of reach
+        // fell through to a fruiting tree, that fell through to "a seed this
+        // biome has", and that fell through to "some material, always" — so
+        // holding E anywhere in the world produced an endless stream of things,
+        // and none of it had anything to do with what you were looking at.
+        double cp = Math.cos(player.pitch());
+        double dirX = Math.sin(player.yaw()) * cp;
+        double dirY = -Math.cos(player.yaw()) * cp;
+
         Flora.Bush bush = flora.nearestBush(ground, player.x(), player.y(), REACH);
-        if (bush != null && bush.ripe()) {
-            int n = 2 + rng.nextInt(3);
-            player.satchel().add(bush.berry(), n);
+        if (bush != null && bush.ripe()
+                && inFront(player, bush.x(), bush.y(), dirX, dirY)) {
+            // A picked bush is bare until it comes back. Without this you can
+            // stand at one and empty it into your satchel for ever.
+            if (bare(bushKey(bush))) return null;
+            picked.put(bushKey(bush), System.currentTimeMillis());
+            player.satchel().add(bush.berry(), 2 + rng.nextInt(3));
             return bush.berry();
         }
 
         TreeInstance tree = nearestFruitingTree(player.x(), player.y(), REACH + 1.5);
-        if (tree != null && tree.species().fruit() != null) {
+        if (tree != null && tree.species().fruit() != null
+                && inFront(player, tree.x(), tree.y(), dirX, dirY)) {
+            if (bare(tree.id())) return null;
+            picked.put(tree.id(), System.currentTimeMillis());
             player.satchel().add(tree.species().fruit(), 1 + rng.nextInt(3));
             return tree.species().fruit();
         }
 
+        // Nothing in reach in front of you. Foraging the ground itself is
+        // still a thing you can do — but it takes a moment and gives one thing,
+        // rather than answering every press.
+        long now = System.currentTimeMillis();
+        Long last = foraged.get(playerId);
+        if (last != null && now - last < GROUND_FORAGE_MILLIS) return null;
+        foraged.put(playerId, now);
+
         WatchBiome biome = field.biomeAt(player.x(), player.y());
         if (!biome.seeds().isEmpty() && rng.nextDouble() < 0.55) {
             String seed = biome.seeds().get(rng.nextInt(biome.seeds().size()));
-            player.satchel().add(seed, 1 + rng.nextInt(3));
+            player.satchel().add(seed, 1);
             return seed;
         }
-
         String material = materialUnderfoot(biome);
-        player.satchel().add(material, 1 + rng.nextInt(2));
+        player.satchel().add(material, 1);
         return material;
+    }
+
+    /**
+     * Whether something picked is still bare, and forget it once it is not —
+     * so the map holds what has been picked recently rather than everything
+     * that has ever been picked.
+     */
+    private boolean bare(long key) {
+        Long when = picked.get(key);
+        if (when == null) return false;
+        if (WatchClock.realHoursBetween(when, System.currentTimeMillis()) >= REGROW_HOURS) {
+            picked.remove(key);
+            return false;
+        }
+        return true;
+    }
+
+    /** Whether a spot is in the half-plane the player is facing, and in reach. */
+    private static boolean inFront(WatchPlayer player, double x, double y,
+                                   double dirX, double dirY) {
+        double dx = x - player.x(), dy = y - player.y();
+        double distance = Math.hypot(dx, dy);
+        if (distance > REACH || distance < 1e-6) return distance <= REACH;
+        // Generous: a bush is wide and you are standing at it, so this only has
+        // to rule out the one behind you.
+        return (dx * dirX + dy * dirY) / distance > 0.25;
+    }
+
+    private static long bushKey(Flora.Bush bush) {
+        return (long) Math.floor(bush.x() * 4) * 73_856_093L
+                ^ (long) Math.floor(bush.y() * 4) * 19_349_663L;
     }
 
     /** The fruiting tree nearest a point — wild or planted. */
@@ -877,6 +944,20 @@ public final class WatchGame implements Animal.Surroundings {
         lures.clear();
         for (Map<String, Object> row : WatchJson.objects(m, "lures")) {
             addLure(Lure.fromMap(row));
+        }
+        // The party, which {@link #toMap} has always written and this has never
+        // read. Reopening a walk therefore put you back at the world origin
+        // with an empty satchel, however far you had walked and however much
+        // you had picked up — the single most annoying possible bug in a game
+        // about going for a walk and collecting things.
+        players.clear();
+        for (Map<String, Object> row : WatchJson.objects(m, "players")) {
+            WatchPlayer player = new WatchPlayer(WatchJson.integer(row, "id", 1),
+                    WatchJson.str(row, "n", "Walker"), 0, 0, 0);
+            player.load(row);
+            if (players.size() < Math.max(1, config.maxPlayers())) {
+                players.put(player.id(), player);
+            }
         }
         // Time passes while a save is on disk, and everything that grows should
         // know about it: this is what makes a tree planted last week a tree.

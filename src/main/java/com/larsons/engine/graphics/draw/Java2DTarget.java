@@ -133,6 +133,13 @@ public final class Java2DTarget implements DrawTarget {
     }
 
     @Override
+    public void setSmoothing(boolean on) {
+        g.setRenderingHint(java.awt.RenderingHints.KEY_ANTIALIASING,
+                on ? java.awt.RenderingHints.VALUE_ANTIALIAS_ON
+                        : java.awt.RenderingHints.VALUE_ANTIALIAS_OFF);
+    }
+
+    @Override
     public void fillRect(int x, int y, int w, int h, int argb) {
         stats.record(DrawStats.Kind.SHAPE, null);
         paint(argb);

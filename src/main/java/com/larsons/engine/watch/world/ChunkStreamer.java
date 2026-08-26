@@ -224,7 +224,11 @@ public final class ChunkStreamer implements AutoCloseable {
             int lod = lodFor(at[0] - ccx, at[1] - ccy);
             WatchChunk chunk = WatchChunk.generate(field, flora, at[0], at[1],
                     revisions.getAndIncrement());
-            mesh(chunk, lod, true);
+            // The same grass gate the streaming path uses. Passing `true` here
+            // put individual blades on every chunk in the ring rather than on
+            // the near few, which is most of a frame's triangles and made any
+            // measurement taken through this method wrong about the game.
+            mesh(chunk, lod, lod == 0 && withinGrass(at[0] - ccx, at[1] - ccy));
             loaded.put(key, chunk);
             generated++;
         }

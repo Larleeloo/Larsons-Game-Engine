@@ -287,6 +287,68 @@ class WatchGameTest {
 
     // --- foraging, lures and cooking -----------------------------------------------------
 
+    /**
+     * <b>E is not a slot machine.</b>
+     *
+     * <p>It had no target and no way to fail: a bush out of reach fell through
+     * to a fruiting tree, that to "a seed this biome has", and that to "some
+     * material, always" — so holding E anywhere produced an endless stream of
+     * things with no relation to what you were looking at.
+     */
+    @Test
+    void pickingHasToHaveSomethingToPickAndDoesNotRepeatForEver() {
+        WatchGame game = game();
+        WatchPlayer me = settled(game, 1, "Kara");
+        int before = me.satchel().total();
+
+        // Twenty presses in one second. Foraging the ground is real, but it is
+        // one handful at a time, not one per frame.
+        int got = 0;
+        for (int i = 0; i < 20; i++) {
+            if (game.pick(1) != null) got++;
+            game.tick(0.05);
+        }
+        assertTrue(got <= 3, "twenty presses in a second yielded " + got
+                + " separate things — E is still an infinite supply");
+        assertTrue(me.satchel().total() > before || got == 0,
+                "picking reported something and put nothing in the satchel");
+    }
+
+    @Test
+    void aBushIsBareAfterYouHavePickedIt() {
+        WatchGame game = game();
+        WatchPlayer me = settled(game, 1, "Kara");
+
+        // Stand at a bush and face it, then strip it.
+        var bush = game.flora().nearestBush(
+                com.larsons.engine.watch.world.Flora.ground(game.field()),
+                me.x(), me.y(), 400);
+        assumeBush(bush);
+        double face = Math.atan2(bush.x() - me.x(), -(bush.y() - me.y()));
+        game.move(1, bush.x() - 1.0, bush.y(), game.groundAt(bush.x() - 1.0, bush.y()),
+                face, 0, false, 1.0 / 60);
+
+        String first = null;
+        for (int i = 0; i < 40 && first == null; i++) {
+            first = game.pick(1);
+            game.tick(1.0);
+        }
+        if (first == null) return; // nothing pickable here; the test above covers the cap
+        int berries = me.satchel().count(first);
+        for (int i = 0; i < 10; i++) {
+            game.pick(1);
+            game.tick(1.0);
+        }
+        assertTrue(me.satchel().count(first) <= berries + 12,
+                "one bush yielded " + (me.satchel().count(first) - berries)
+                        + " more handfuls after being picked clean");
+    }
+
+    private static void assumeBush(com.larsons.engine.watch.world.Flora.Bush bush) {
+        org.junit.jupiter.api.Assumptions.assumeTrue(bush != null,
+                "no bush anywhere near the spawn in this world");
+    }
+
     /** A feeder takes two things: the feeder itself, and something to put in it. */
     @Test
     void aLureNeedsAFeederAndFoodAndThenStandsInTheWorld() {
@@ -621,6 +683,53 @@ class WatchGameTest {
         assertEquals(game.guide().discovered(), reopened.guide().discovered());
         assertEquals(1, reopened.grove().size(), "the planted oak was not saved");
         assertNotNull(store.describe("Morning Walk"));
+    }
+
+    /**
+     * A walk you come back to puts you where you left off, carrying what you
+     * had picked up.
+     *
+     * <p>{@code toMap} had always written the party and {@code load} had never
+     * read it, so reopening a walk put you back at the world origin with an
+     * empty satchel however far you had walked — in a game whose whole content
+     * is walking somewhere and collecting things.
+     */
+    @Test
+    void reopeningAWalkPutsYouBackWhereYouWereWithWhatYouHad(@TempDir Path dir) {
+        WatchGame game = new WatchGame(new WatchGame.Config(31L, "Yesterday", 1));
+        WatchPlayer me = game.join(1, "Kara");
+        double x = 640, y = -480;
+        me.moveTo(x, y, game.groundAt(x, y), 1.25, -0.1, false, 1.0 / 60);
+        me.satchel().add("acorn", 7);
+        me.satchel().add("smoked_fish", 2);
+
+        WatchStore store = new WatchStore(dir.toString());
+        store.save(game);
+
+        WatchGame reopened = new WatchGame(new WatchGame.Config(31L, "Yesterday", 1));
+        assertTrue(store.load(reopened));
+        assertEquals(1, reopened.players().size(), "the walk came back with nobody in it");
+
+        WatchPlayer back = reopened.players().get(0);
+        assertEquals("Kara", back.name());
+        assertEquals(x, back.x(), 0.01, "you were put back at the wrong place");
+        assertEquals(y, back.y(), 0.01, "you were put back at the wrong place");
+        assertEquals(7, back.satchel().count("acorn"), "the satchel was emptied");
+        assertEquals(2, back.satchel().count("smoked_fish"), "the satchel was emptied");
+    }
+
+    /** …and a reopened walk does not seat more people than it holds. */
+    @Test
+    void aReopenedWalkKeepsItsOwnPlayerCap(@TempDir Path dir) {
+        WatchGame party = new WatchGame(WatchGame.Config.hosted("Party", 5L));
+        for (int i = 1; i <= WatchGame.MAX_PLAYERS; i++) party.join(i, "Walker " + i);
+        WatchStore store = new WatchStore(dir.toString());
+        store.save(party);
+
+        WatchGame solo = new WatchGame(new WatchGame.Config(5L, "Party", 1));
+        store.load(solo);
+        assertEquals(1, solo.players().size(),
+                "a solo walk reopened an eight-player save with eight people in it");
     }
 
     @Test

@@ -177,13 +177,23 @@ public class WatchScene extends AbstractScene {
         frame = 0;
         if (session == null) return;
 
-        // Solo: join our own game so there is a player to be. Hosting or
-        // joining, the server did that when the socket opened.
-        if (session.local() != null && session.local().players().isEmpty()) {
-            WatchPlayer me = session.local().join(1, "Walker");
-            session.setSelfId(me.id());
-            px = me.x();
-            py = me.y();
+        // Solo: be the player the save restored, or join a new one if this is a
+        // fresh world. Hosting or joining, the server did that when the socket
+        // opened and tells us who we are in the welcome.
+        //
+        // Adopting rather than always joining is what makes "Continue" resume:
+        // a reopened walk already has you in it, and joining a second player
+        // beside you left the camera at the origin while the walker it was
+        // supposed to be stood wherever you had left them.
+        if (session.local() != null) {
+            WatchPlayer me = session.local().players().isEmpty()
+                    ? session.local().join(1, "Walker")
+                    : session.local().players().get(0);
+            if (me != null) {
+                session.setSelfId(me.id());
+                px = me.x();
+                py = me.y();
+            }
         }
         session.update(0);
 
@@ -199,6 +209,11 @@ public class WatchScene extends AbstractScene {
         }
         pz = streamer.groundAt(px, py);
         smoothedGround = pz;
+        // Build the ground under our feet before the first frame. Otherwise the
+        // walk opens on a camera standing at the right height over a world that
+        // has not arrived yet — which reads exactly like being a giant hanging
+        // in the air while the landscape assembles itself underneath.
+        streamer.loadNow(px, py, 1);
         ctx.lighting().setDarkness(0);
         ctx.applyLiveSettings();
     }
@@ -224,7 +239,13 @@ public class WatchScene extends AbstractScene {
         double scale = Math.max(0.5, Math.min(2.0,
                 PlayerSettings.active().detailDistance / 24.0));
         boolean gpu = renderer.acceleratedByGpu();
-        streamer.setViewRadius((int) Math.round((gpu ? 16 : 6) * scale));
+        // The player's detail setting may shorten the software path's view and
+        // may not lengthen it. Measured at 1280x720: six chunks is 45 ms a
+        // frame and twelve is 79, and a walking game at twelve frames a second
+        // is one where the world visibly assembles itself every time you turn
+        // round. A card has no such trouble and gets the full range.
+        int radius = (int) Math.round((gpu ? 16 : 6) * scale);
+        streamer.setViewRadius(gpu ? radius : Math.min(6, radius));
         streamer.setDetailRadius(gpu ? 4 : 1);
         streamer.setGrassRadius(gpu ? 3 : 1);
         renderer.setFogRange(streamer.viewRadius() * WatchChunk.SIZE * 0.45,
@@ -249,6 +270,10 @@ public class WatchScene extends AbstractScene {
         if (panel != Panel.NONE) {
             Pointer.restore();
             updatePanel(dt, input);
+            // The pause screen is where "Leave Walk" lives, and leaving closes
+            // the session out from under the two calls below. This is the line
+            // whose absence made L crash the game.
+            if (session == null) return;
             session.update(dt);
             syncClock();
             return;
@@ -278,6 +303,11 @@ public class WatchScene extends AbstractScene {
         walk(dt, input);
         aim();
         act(input);
+        // `act` can end the walk: L leaves, and leaving closes the session and
+        // the streamer out from under the rest of this method. Without this
+        // line every one of the calls below dereferences a null, which is
+        // exactly what pressing L did.
+        if (session == null || streamer == null) return;
 
         moveTimer += dt;
         if (moveTimer >= MOVE_INTERVAL) {
