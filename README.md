@@ -127,6 +127,19 @@ over in a generic, data-driven form and wired to the same toggles:
   a reference book that ships empty on purpose. Discoveries are kept in two tiers, so the game can be **fully reset**
   whenever you like while your history of every organism ever found is kept
   forever. See [Evolution](#evolution-artificial-life-simulator).
+- **Field Guide** — a fourth complete standalone game mode, its own picture
+  button on the launch screen: an **animal-watching game for 1-8 players
+  online**, walked in first person across an endless low-poly world of
+  **twenty biomes**. Hold still and things come closer; spot one and **click
+  it, and it lights up for everyone else** for a few seconds. There are
+  **1323 species** to catalog, each with a generated Minecraft-style skin and
+  a boxy model that a Blockbench `.bbmodel` drops straight in for. Trees grow
+  through five stages in real hours — while you are away too — and
+  cross-pollinate into hybrid species that were not in the world when you
+  started; you fish, forage, cook, cultivate seed, set out feeders for the
+  diets you are missing, tame a few, and build a house or a tree house out of
+  what you found. **The sun follows your own clock.**
+  See [Field Guide](#field-guide-animal-watching-1-8-online).
 - **Custom key binds** — every action in the engine, from *jump* to the
   creative editor's *undo* to the auto battler's *reroll*, is rebindable to
   **any key or any mouse button** (side buttons included, with
@@ -2975,6 +2988,245 @@ thermometer overlay, **[** and **]** work the time warp, **H** explains the
 genetics, **Esc** pauses (and offers the full game reset).
 
 ---
+
+## Field Guide (animal watching, 1-8 online)
+
+**Field Guide** is a game about looking at things. There is no health bar and
+nothing to kill: you walk an endless procedurally generated world with up to
+seven friends, and you write down what you find.
+
+The whole game is one verb repeated — *hold still, and something comes closer*
+— wrapped in the reasons to keep walking: **1323 species** to catalog, twenty
+biomes to find them in, food to grow and cook so that the shy ones come to you,
+trees that take real days to grow and cross into varieties nobody has seen, and
+a house you build out of what you picked up on the way.
+
+```
+┌──────────────────────────────────────────────────────────────────────┐
+│ Pine Forest                                          06:41 · dawn    │
+│ 47 of 1323 · 1,180 pts                          Kara · Sam · Dustin  │
+│                                                                      │
+│                      ╱▔▔╲     ┌ ─ ─ ─ ┐                              │
+│                     ╱ ▂▂ ╲    │  ✦    │  ← Sam spotted a             │
+│                    ╱______╲   └ ─ ─ ─ ┘    Banded Crossbill          │
+│                                                                      │
+│  ▁▁▂▂▃▃▄▄▅▅▆▆▇▇███▇▇▆▆▅▅▄▄▃▃▂▂▁▁                                     │
+│                                                                      │
+│ STILLNESS ████████░░  [E] pick juniper      🜲 12  ✿ 3  ⚘ 6  ⌂ 4      │
+└──────────────────────────────────────────────────────────────────────┘
+```
+
+### Getting in
+
+The **Field Guide** button on the launch screen opens the lobby
+([`WatchLobbyScene`](src/main/java/com/larsons/engine/demo/WatchLobbyScene.java)):
+continue your last walk, start a new one, **host** one for up to eight, or
+**join** a friend's by address. Everyone who types in the same **seed** walks
+the same world, down to the crooked pine — see *One seed, no terrain on the
+wire* below.
+
+### The world
+
+Infinite, low-to-mid-polygon, and a **pure function of `(seed, x, y)`**
+([`TerrainField`](src/main/java/com/larsons/engine/watch/world/TerrainField.java)).
+Nothing about it is stored and nothing about it is sent.
+
+**Twenty biomes**, chosen by a three-axis climate field — temperature,
+humidity, and a *strangeness* axis that is near zero almost everywhere and
+only occasionally climbs far enough for the three fantasy biomes to claim
+anything:
+
+| | | | |
+|---|---|---|---|
+| Pine Forest | Deciduous Forest | Desert | Rainforest |
+| Tropics *(palms)* | Mountains | **Amethyst Grove** *(purple leaves)* | Autumn Birchwood |
+| Boreal Taiga | Alpine Meadow | Savanna | Wetland Marsh |
+| Mangrove Coast | Redwood Cathedral | Canyon Badlands | Tundra Barrens |
+| Bamboo Thicket | **Mushroom Hollow** | Sunflower Prairie | **Crystal Highlands** |
+
+The seven the brief named, plus thirteen more. Each supplies its own surface,
+cliff, shore and trail materials, its own tree species, its own grass length
+band and its own sky and fog. Height and relief are **blended across all
+twenty** by cubed fit weights while the *materials* come from the single best
+fit, which is what gives sharp biome borders over ground that never steps.
+
+- **Trails** lay themselves through it
+  ([`TrailNetwork`](src/main/java/com/larsons/engine/watch/world/TrailNetwork.java)) —
+  one node per 160 m cell, Bézier edges east and south, cached as sampled
+  points. A path is *cut*: the ground under it is pulled toward the level of
+  the undisturbed terrain in a ring around it, which takes the bumps out from
+  under your feet without pretending to flatten a mountain. Measured, a tread
+  is about a fifth less curvature and a few percent gentler than the country
+  it crosses.
+- **Grass of varying lengths**
+  ([`GrassField`](src/main/java/com/larsons/engine/watch/world/GrassField.java)) —
+  every biome has its own band, from cropped tundra to waist-high prairie, and
+  the blades sway on a wind field.
+- **Water** at height zero, with shallows, shores and fish in it.
+
+### Trees that grow, and cross
+
+**Thirty-six species**
+([`TreeSpecies`](src/main/java/com/larsons/engine/watch/world/TreeSpecies.java)),
+of which twenty-four grow wild and **twelve exist only as the child of two
+others**. Every tree passes through five stages — seedling, sapling, young,
+mature, ancient — and growth is measured in **real hours**, so a tree you plant
+on Tuesday is taller on Thursday whether or not the game was running. (The save stamps the wall clock; reopening it
+advances everything by the hours that passed.)
+
+Two mature trees within nine metres can be **cross-pollinated**, and the child
+carries a genome — vigour, canopy, hue, fruitfulness — mixed from both parents,
+so a line improved over five generations plants better than one bought off the
+shelf. Six crosses are first-generation; **six more need a hybrid parent**,
+which puts the last of them three generations from anything you can find
+growing:
+
+```
+first generation                     needs a hybrid parent
+  Pine   × Birch    → Silver Pine        Birch    × Silver Pine → Ghost Birch
+  Oak    × Amethyst → Amethyst Oak       Glowcap  × Glass Fir   → Starcap
+  Maple  × Amethyst → Blood Maple        Cedar    × Blood Maple → Dawn Cedar
+  Acacia × Redwood  → Emberwood          Palm     × Amethyst Oak → Moonpalm
+  …six in all                            …six in all
+```
+
+### The animals
+
+**1323 species**, built from **26 families × 7 lineages × 7 epithets**
+([`AnimalRegistry`](src/main/java/com/larsons/engine/watch/life/AnimalRegistry.java)),
+each deterministic from its own name — every machine has the same book. A
+species carries its family's build and motion, its own three colours, a body
+length, a diet, an activity window, a wariness, a rarity tier and the biomes it
+lives in.
+
+- **Rarity** runs Common → Uncommon → Scarce → Rare → Legendary (45 / 28 / 17 /
+  8 / 2%), and scales both how often something turns up and how far off it
+  flushes.
+- **Some can be kept as pets.** Feed a tameable species from a feeder enough
+  times and it follows you home and goes in the book as yours.
+- Animals live in a ring around the party — spawned between 22 m and 95 m,
+  simulated while anybody is near, forgotten past 170 m. A world with no edge
+  cannot hold a population, and one chaffinch is not tellable from another.
+
+**Stillness is the stat.** An animal judges you by an *apparent* distance that
+your own movement multiplies: standing still for nine seconds makes you seem
+far away, crouching more so, and running at a bird is the same as being three
+times closer to it. That is the entire skill of the game.
+
+**Spot it, and everybody sees it.** Click an animal
+(<kbd>Mouse 1</kbd>) and it is outlined for the whole party for four seconds,
+labelled with the species and who found it — the brief's headline verb, and
+the thing that makes walking together different from walking alone. A species
+nobody has recorded before is a **discovery**: it goes into the shared field
+guide, for everyone, with your name on the first sighting.
+
+### Bringing them in
+
+You do not chase things. You give them a reason to come.
+
+| | |
+|---|---|
+| **Forage** | Berries, seeds, nuts, mushrooms, sap, branches, stones — picked off the bushes and trees the world scattered. |
+| **Fish** | Cast into a lake, wait, and strike inside the bite window. Different waters hold different fish. |
+| **Cultivate** | Plant seed and it grows into a crop, or into a tree if it was a tree's seed. |
+| **Cook** | Seventeen recipes across bare hands (9), a fire (5) and a bench (3) — suet cake, grain loaf, berry mash, nectar and smoked fish for the animals, and the rod, the trowel, the feeder itself, planks, thatch and rope for you. Cooking outdraws foraging for most appetites, though a kingfisher would still rather have a live trout. |
+| **Feed** | Put a filled feeder down and the species whose diet matches come to it. A feeder holds several servings and the food spoils if you leave it out. |
+
+### Building
+
+Ten pieces — post, beam, floor, platform, wall, window wall, door, roof,
+ladder, rope bridge — each costing foraged material, snapped to a half-metre
+grid and turnable through eight facings
+([`BuildPiece`](src/main/java/com/larsons/engine/watch/build/BuildPiece.java)).
+Anything that anchors can be fixed **into a tree**, which is how the tree house
+happens.
+
+### The day
+
+**Real-life synchronised.** The sun follows the clock on your wall — noon is
+noon — and it decides the light, the sky, the fog, the tint on everything and
+which animals are out. Night has a deliberate floor: this is a game about
+identifying an animal by looking at it, and true darkness would be a game you
+cannot play between dusk and dawn. In a hosted walk everyone runs on **the
+host's clock**, so a party spread over three time zones is out at the same
+hour.
+
+### The book
+
+<kbd>G</kbd> opens the field guide
+([`WatchGuideScene`](src/main/java/com/larsons/engine/demo/WatchGuideScene.java)),
+sortable five ways — recently found, by family, where you are, by rarity, still
+missing. A page you have written shows the species' **actual model**, three
+quarters on, with where and when you saw it and who found it; a page you have
+not shows a silhouette, the family, and where to look — which is exactly the
+amount of information that sends somebody out of the door. Three bars along the
+bottom say how much of that family, that rarity tier and that biome is still
+blank.
+
+### One seed, no terrain on the wire
+
+The server owns one
+[`WatchGame`](src/main/java/com/larsons/engine/watch/WatchGame.java) and clients
+own none, exactly as the auto battler and the world server do. What crosses the
+wire is only what cannot be derived: where people are, what is alive near them,
+who spotted what, and the guide they are filling in together — no terrain, no
+tree, no blade of grass. A client is told the seed once and generates the same
+hillside the host is standing on.
+
+The **field guide is shared** and your **satchel is not**. Positions round to
+the centimetre; the tick rate is 20 Hz; a ninth player is turned away with a
+reason rather than dropped.
+
+### GPU and threads
+
+Chunks are 32 m square, generated and meshed on a pool of background workers
+([`ChunkStreamer`](src/main/java/com/larsons/engine/watch/world/ChunkStreamer.java)),
+nearest first, at a level of detail that falls off with distance — which is
+what the pure-function generator buys: any chunk, on any thread, in any order,
+byte-identical every time.
+
+Drawing goes through one backend-neutral seam
+([`MeshPass`](src/main/java/com/larsons/engine/graphics/MeshPass.java)). On the
+**OpenGL** backend a mesh becomes a VBO cached by identity and revision and the
+card does the projection, the clipping and the shading. On the **Java2D**
+backend the same triangles go through a painter's algorithm with no
+per-frame allocation. A texture pack recolours the first and fully textures the
+second from one set of files.
+
+### Controls
+
+<kbd>WASD</kbd> walks, the mouse looks, <kbd>Shift</kbd> crouches,
+<kbd>F5</kbd> goes third person. <kbd>Mouse 1</kbd> spots what you are looking
+at, <kbd>E</kbd> picks, <kbd>G</kbd> opens the book, <kbd>Tab</kbd> the
+satchel, <kbd>F</kbd> puts down a feeder, <kbd>R</kbd> plants, <kbd>C</kbd>
+cross-pollinates, <kbd>B</kbd> builds, <kbd>X</kbd> turns the piece,
+<kbd>V</kbd> casts and strikes, <kbd>L</kbd> leaves. All rebindable from
+**Controls (Key Binds)** in the walk's own lobby, which shows this game's keys
+rather than the engine's.
+
+### Bringing your own art
+
+Every animal ships with a generated 64×64 Minecraft-style skin and a boxy
+model. Both are placeholders and both are replaceable:
+
+- Drop a Blockbench **`.bbmodel`** into `resources/watch/models/` named after a
+  species (`songbird_finch_banded.bbmodel`) or a family
+  (`songbird.bbmodel`, which dresses all forty-nine at once) and it is used
+  instead — bones bind to joints by name, clips bind to the nine animation
+  states by name, and **any state you have not animated falls back to the
+  procedural pose**, so art can arrive one clip at a time.
+  [`resources/watch/models/README.md`](src/main/resources/watch/models/README.md)
+  is the full import guide: axes, units, pivots, the bone-name table, the clip
+  table, and how to tell it loaded.
+- A texture pack supplying `watch/animal/<species>` or `watch/animal/<family>`
+  reskins one or all of them; `watch/terrain/<material>` retextures the ground.
+  A model's boxes take their colour from their own region of that sheet, so a
+  pack reaches the world and not only the book.
+
+The engine ships no image files. Everything above is drawn at runtime.
+
+---
+
 
 ## The pause screen
 

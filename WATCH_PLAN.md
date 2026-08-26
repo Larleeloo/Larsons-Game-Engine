@@ -62,20 +62,24 @@ material, water depth, trail strength — from a stack of noise fields:
 1. **Climate** — slow temperature / humidity / weirdness fields.
 2. **Continents** — a very slow field that drops land below the water line.
 3. **Biome** — every biome scores itself against the climate; the winner
-   supplies materials, and a *weighted blend of the top few* supplies the
+   supplies materials, and a weighted blend of **all twenty** supplies the
    height target and relief. Blending the numbers while picking the materials
    is what gives sharp biome borders over ground that never steps — the same
-   trick `WorldGenerator` uses.
+   trick `WorldGenerator` uses. *(Built as "the top few" and changed: the
+   membership of a top-three set changes discontinuously as the climate moves,
+   and that discontinuity was a twelve-metre cliff. Blending everything, with
+   the weights cubed so distant biomes contribute nothing, is continuous
+   everywhere.)*
 4. **Relief** — ridged noise for spines, fbm for the lumps, warped by the
    biome's own `relief`.
 5. **Rivers and lakes** — a lake field dimples the land; anything under the
    water table is flooded.
-6. **Trails** — see below; a trail flattens the ground toward its own centre
-   line and replaces the surface material.
+6. **Trails** — see below; a trail cuts the ground toward the level of the
+   undisturbed terrain around it and replaces the surface material.
 
-A **chunk** is `WatchChunk.SIZE + 1` squared height samples (33×33 at
-`SIZE = 32`, one extra row and column so neighbouring chunks share an edge and
-the mesh has no seam), plus the flora, water and trail data for that tile. The
+A **chunk** is `WatchChunk.SAMPLES` squared height samples (17×17 for a 32 m
+tile sampled every 2 m — one extra row and column so neighbouring chunks share
+an edge and the mesh has no seam), plus the flora, water and trail data for that tile. The
 `ChunkStreamer` keeps a ring of them around every viewer on a small pool of
 daemon workers (`watch-chunk-N`), evicts by distance, and never blocks a frame:
 a frame draws what has arrived.
@@ -118,18 +122,19 @@ adding a row.
 Trails are generated the way the terrain is — as a pure function of position —
 so two players a kilometre apart agree about them without exchanging a byte.
 
-The world is cut into **trail cells** of 256 units. Each cell deterministically
-picks two or three *nodes* from its seed, and each node is joined to a node in
-a neighbouring cell by a path that is a quadratic Bézier with a
-noise-displaced control point. `strengthAt(x, y)` returns how close a point is
-to the nearest such path, and the terrain field uses it to (a) pull the height
-toward the path's own smoothed height, and (b) swap the surface material for
-the biome's `trailMaterial`. The result is a network of packed-earth paths that
+The world is cut into **trail cells** of 160 m. Each cell deterministically
+places one *node*, and joins it to its eastern and southern neighbours by a
+path that is a quadratic Bézier with a noise-displaced control point.
+`strengthAt(x, y)` returns how close a point is to the nearest such path, and
+the terrain field uses it to (a) pull the height toward the level of the
+undisturbed terrain in a ring outside the cut, and (b) swap the surface
+material for the biome's trail material. The result is a network of packed-earth paths that
 wander over ridges and along valleys, join up, and continue forever.
 
 ### 2.4 Trees that grow (`watch/world/TreeSpecies`, `TreeInstance`, `Grove`)
 
-Twenty-four tree species, each with **five growth stages** (`SEEDLING`,
+Thirty-six tree species — twenty-four that grow wild and twelve that exist only
+as the child of two others — each with **five growth stages** (`SEEDLING`,
 `SAPLING`, `YOUNG`, `MATURE`, `ANCIENT`) that change trunk height, canopy
 radius and the mesh that gets built. A tree carries:
 
@@ -238,7 +243,9 @@ scaled by the player's **stillness** — walk at one and it flushes at forty
 metres; crouch and wait and it will feed at five. Lures pull them in
 (`Lure.attract`), and a species will only come to a lure it eats.
 
-Some are **tameable** (`AnimalDef.tameable`, roughly one species in nine).
+Some are **tameable** (`AnimalDef.tameable`, about one species in four and a
+half — the share is per family, so a songbird is far likelier to come home with
+you than a bear is).
 Feeding a tameable animal its preferred food repeatedly raises `trust`; at full
 trust it becomes a **pet**, follows its owner, and is saved with the profile.
 
