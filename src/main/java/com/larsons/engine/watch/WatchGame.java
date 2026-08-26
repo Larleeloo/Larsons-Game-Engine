@@ -44,6 +44,28 @@ import java.util.Random;
  * walked away. That is not a fidelity compromise — the species table is what
  * makes the world consistent, and a specific chaffinch is not a thing anybody
  * can tell apart from another one.
+ *
+ * <h2>Threading</h2>
+ *
+ * <p><b>One thread simulates; any thread may look.</b> Everything that changes
+ * this object happens on the server's tick thread — the reader and writer
+ * threads behind each connection only move bytes onto and off queues, and
+ * {@link com.larsons.engine.watch.net.WatchServer} drains those queues from the
+ * tick loop. But the game is <em>read</em> from elsewhere: a host autosaving
+ * calls {@link #toMap()} on the frame thread while its own server is ticking,
+ * and so does anything that asks it what is alive.
+ *
+ * <p>That was a crash, not a theoretical one — {@code List.copyOf} over a
+ * {@link LinkedHashMap} whose size grew mid-copy throws
+ * {@code ArrayIndexOutOfBoundsException} from
+ * {@code LinkedHashMap.valuesToArray}, which is exactly what a snapshot taken
+ * during a spawn did. So every public method that touches the party, the
+ * animals, the feeders or the outlines is synchronised on this object. The lock
+ * is held for a tick at twenty ticks a second; a reader waits microseconds and
+ * gets a consistent answer instead of an exception.
+ *
+ * <p>The insertion-ordered maps stay: a concurrent map would fix the copy and
+ * lose the order that decides who the party's host is.
  */
 public final class WatchGame implements Animal.Surroundings {
 
@@ -147,7 +169,7 @@ public final class WatchGame implements Animal.Surroundings {
     }
 
     /** Where messages go; may be replaced when a solo game becomes a hosted one. */
-    public void setSink(Sink sink) { this.sink = sink; }
+    public synchronized void setSink(Sink sink) { this.sink = sink; }
 
     public Config config() { return config; }
 
@@ -173,12 +195,12 @@ public final class WatchGame implements Animal.Surroundings {
     public Structure structure() { return structure; }
 
     /** The party. */
-    public List<WatchPlayer> players() { return List.copyOf(players.values()); }
+    public synchronized List<WatchPlayer> players() { return List.copyOf(players.values()); }
 
-    public WatchPlayer player(int id) { return players.get(id); }
+    public synchronized WatchPlayer player(int id) { return players.get(id); }
 
     /** The player of a given name, or {@code null}. */
-    public WatchPlayer playerNamed(String name) {
+    public synchronized WatchPlayer playerNamed(String name) {
         for (WatchPlayer p : players.values()) {
             if (p.name().equals(name)) return p;
         }
@@ -186,15 +208,15 @@ public final class WatchGame implements Animal.Surroundings {
     }
 
     /** Every animal currently simulated. */
-    public List<Animal> animals() { return List.copyOf(animals.values()); }
+    public synchronized List<Animal> animals() { return List.copyOf(animals.values()); }
 
-    public Animal animal(long id) { return animals.get(id); }
+    public synchronized Animal animal(long id) { return animals.get(id); }
 
     /** Every feeder standing. */
-    public List<Lure> lures() { return List.copyOf(lures.values()); }
+    public synchronized List<Lure> lures() { return List.copyOf(lures.values()); }
 
     /** The outlines currently up. */
-    public List<Spotlight> spotlights() { return List.copyOf(spotlights); }
+    public synchronized List<Spotlight> spotlights() { return List.copyOf(spotlights); }
 
     // --- the party -------------------------------------------------------------------
 
@@ -211,7 +233,7 @@ public final class WatchGame implements Animal.Surroundings {
      * next) has to meet the same limit, and a rejoin on a live id has to be a
      * rejection rather than a second player quietly replacing the first.
      */
-    public WatchPlayer join(int id, String name) {
+    public synchronized WatchPlayer join(int id, String name) {
         if (players.containsKey(id)) return null;
         if (players.size() >= Math.max(1, config.maxPlayers())) return null;
         double angle = rng.nextDouble() * Math.PI * 2;
@@ -230,13 +252,13 @@ public final class WatchGame implements Animal.Surroundings {
     }
 
     /** Somebody leaves. Their pets stay in the book; their feeders stay standing. */
-    public void leave(int id) {
+    public synchronized void leave(int id) {
         WatchPlayer gone = players.remove(id);
         if (gone != null) say(gone.name() + " headed home");
     }
 
     /** A movement update from a client. */
-    public void move(int id, double x, double y, double z, double yaw, double pitch,
+    public synchronized void move(int id, double x, double y, double z, double yaw, double pitch,
                      boolean crouching, double dt) {
         WatchPlayer player = players.get(id);
         if (player == null) return;
@@ -256,7 +278,7 @@ public final class WatchGame implements Animal.Surroundings {
      * is a sparrow forty metres away in a tree and the reward for hitting it is
      * a line in a book rather than damage.
      */
-    public Animal lookingAt(int playerId) {
+    public synchronized Animal lookingAt(int playerId) {
         WatchPlayer player = players.get(playerId);
         if (player == null) return null;
         double cp = Math.cos(player.pitch());
@@ -298,7 +320,7 @@ public final class WatchGame implements Animal.Surroundings {
      * outline, and tells everybody. Returns the spotlight so a solo game can
      * use the same path as a hosted one.
      */
-    public Spotlight spot(int playerId, long animalId) {
+    public synchronized Spotlight spot(int playerId, long animalId) {
         WatchPlayer player = players.get(playerId);
         if (player == null) return null;
         Animal animal = animalId > 0 ? animals.get(animalId) : lookingAt(playerId);
@@ -321,7 +343,7 @@ public final class WatchGame implements Animal.Surroundings {
     }
 
     /** Adopt a spotlight sent by the host — what a client does. */
-    public void addSpotlight(Spotlight light) {
+    public synchronized void addSpotlight(Spotlight light) {
         if (light != null) spotlights.add(light);
     }
 
@@ -337,7 +359,7 @@ public final class WatchGame implements Animal.Surroundings {
      *
      * @return what went into the satchel, or {@code null} if there was nothing
      */
-    public String pick(int playerId) {
+    public synchronized String pick(int playerId) {
         WatchPlayer player = players.get(playerId);
         if (player == null) return null;
 
@@ -402,7 +424,7 @@ public final class WatchGame implements Animal.Surroundings {
     }
 
     /** Turn over a log: beetles and mealworms, which nothing insectivorous refuses. */
-    public String turnOverLog(int playerId) {
+    public synchronized String turnOverLog(int playerId) {
         WatchPlayer player = players.get(playerId);
         if (player == null) return null;
         if (!player.satchel().has("fallen_branch")) return null;
@@ -419,7 +441,7 @@ public final class WatchGame implements Animal.Surroundings {
      * @return the feeder, or {@code null} when the player has no feeder, no
      *         food, or is standing somewhere a feeder cannot go
      */
-    public Lure placeLure(int playerId, String food) {
+    public synchronized Lure placeLure(int playerId, String food) {
         WatchPlayer player = players.get(playerId);
         if (player == null) return null;
         Forage.Item item = Forage.byKey(food);
@@ -438,7 +460,7 @@ public final class WatchGame implements Animal.Surroundings {
     }
 
     /** Top a feeder up from the satchel. */
-    public boolean refillLure(int playerId, long lureId) {
+    public synchronized boolean refillLure(int playerId, long lureId) {
         WatchPlayer player = players.get(playerId);
         Lure lure = lures.get(lureId);
         if (player == null || lure == null) return false;
@@ -448,7 +470,7 @@ public final class WatchGame implements Animal.Surroundings {
     }
 
     /** Take a feeder back. */
-    public boolean removeLure(int playerId, long lureId) {
+    public synchronized boolean removeLure(int playerId, long lureId) {
         WatchPlayer player = players.get(playerId);
         Lure lure = lures.remove(lureId);
         if (player == null || lure == null) return false;
@@ -457,7 +479,7 @@ public final class WatchGame implements Animal.Surroundings {
     }
 
     /** Adopt a feeder sent by the host. */
-    public void addLure(Lure lure) {
+    public synchronized void addLure(Lure lure) {
         if (lure != null) {
             lures.put(lure.id(), lure);
             nextLureId = Math.max(nextLureId, lure.id() + 1);
@@ -475,7 +497,7 @@ public final class WatchGame implements Animal.Surroundings {
      *
      * @return a line for the HUD, or {@code null} when it could not be planted
      */
-    public String plant(int playerId, String seed) {
+    public synchronized String plant(int playerId, String seed) {
         WatchPlayer player = players.get(playerId);
         if (player == null || !Cultivation.plantable(seed)) return null;
         if (!player.satchel().has("trowel") || !player.satchel().has(seed)) return null;
@@ -500,7 +522,7 @@ public final class WatchGame implements Animal.Surroundings {
      * which is the whole point: a line improved over five generations has to
      * carry its parents' vigour into the ground with it.
      */
-    public TreeInstance plantCross(int playerId, Grove.Cross cross) {
+    public synchronized TreeInstance plantCross(int playerId, Grove.Cross cross) {
         WatchPlayer player = players.get(playerId);
         if (player == null || cross == null) return null;
         double z = field.heightAt(player.x(), player.y());
@@ -509,7 +531,7 @@ public final class WatchGame implements Animal.Surroundings {
     }
 
     /** Cross the two planted trees nearest a player. */
-    public Grove.Cross pollinate(int playerId) {
+    public synchronized Grove.Cross pollinate(int playerId) {
         WatchPlayer player = players.get(playerId);
         if (player == null) return null;
         List<TreeInstance> near = grove.near(player.x(), player.y(), Grove.POLLEN_REACH);
@@ -529,7 +551,7 @@ public final class WatchGame implements Animal.Surroundings {
     }
 
     /** Pull up the ripe crop a player is standing over. */
-    public String harvest(int playerId) {
+    public synchronized String harvest(int playerId) {
         WatchPlayer player = players.get(playerId);
         if (player == null) return null;
         for (Cultivation.Crop crop : crops.near(player.x(), player.y(), REACH)) {
@@ -548,7 +570,7 @@ public final class WatchGame implements Animal.Surroundings {
      * @param turn  which of the eight compass turns it takes
      * @param inTree whether to fix it to the nearest trunk instead of the ground
      */
-    public Structure.Placement build(int playerId, BuildPiece piece, int turn,
+    public synchronized Structure.Placement build(int playerId, BuildPiece piece, int turn,
                                      boolean inTree) {
         WatchPlayer player = players.get(playerId);
         if (player == null || piece == null) return null;
@@ -597,7 +619,7 @@ public final class WatchGame implements Animal.Surroundings {
     }
 
     /** Cook, or make gear, out of a player's satchel. */
-    public boolean craft(int playerId, Recipes.Recipe recipe, Recipes.Station station) {
+    public synchronized boolean craft(int playerId, Recipes.Recipe recipe, Recipes.Station station) {
         WatchPlayer player = players.get(playerId);
         if (player == null) return false;
         return Recipes.craft(recipe, player.satchel(), station);
@@ -606,7 +628,7 @@ public final class WatchGame implements Animal.Surroundings {
     // --- fishing ---------------------------------------------------------------------
 
     /** Cast into the water a player is looking at. */
-    public boolean castRod(int playerId) {
+    public synchronized boolean castRod(int playerId) {
         WatchPlayer player = players.get(playerId);
         if (player == null || !player.satchel().has("rod")) return false;
         // Straight out in front, ten metres; the water has to be there.
@@ -625,7 +647,7 @@ public final class WatchGame implements Animal.Surroundings {
      * the guide like anything else, and catching one is the only way most
      * people will ever see it.
      */
-    public AnimalDef strike(int playerId) {
+    public synchronized AnimalDef strike(int playerId) {
         WatchPlayer player = players.get(playerId);
         if (player == null) return null;
         AnimalDef fish = player.rod().strike();
@@ -653,7 +675,7 @@ public final class WatchGame implements Animal.Surroundings {
      * session resumed the next morning advances a night's worth of growth in
      * the first tick.
      */
-    public void tick(double dt) {
+    public synchronized void tick(double dt) {
         clock.tick(dt);
 
         long now = System.currentTimeMillis();
@@ -757,7 +779,7 @@ public final class WatchGame implements Animal.Surroundings {
      * Which species turns up at a point: one that lives in that biome, weighted
      * by how rare it is and by whether it is awake at this hour.
      */
-    public AnimalDef pickSpecies(double x, double y) {
+    public synchronized AnimalDef pickSpecies(double x, double y) {
         WatchBiome biome = field.biomeAt(x, y);
         List<AnimalDef> here = AnimalRegistry.inBiome(biome.key());
         if (here.isEmpty()) return null;
@@ -778,7 +800,7 @@ public final class WatchGame implements Animal.Surroundings {
     @Override public double groundAt(double x, double y) { return field.heightAt(x, y); }
 
     @Override
-    public double disturbanceAt(double x, double y) {
+    public synchronized double disturbanceAt(double x, double y) {
         double nearest = Double.MAX_VALUE;
         for (WatchPlayer player : players.values()) {
             nearest = Math.min(nearest, player.apparentDistanceTo(x, y));
@@ -787,7 +809,7 @@ public final class WatchGame implements Animal.Surroundings {
     }
 
     @Override
-    public boolean nearestLure(double x, double y, Diet diet, double[] out) {
+    public synchronized boolean nearestLure(double x, double y, Diet diet, double[] out) {
         double bestAppeal = 0;
         boolean found = false;
         double[] appeal = new double[2];
@@ -812,7 +834,7 @@ public final class WatchGame implements Animal.Surroundings {
     }
 
     @Override
-    public boolean playerPosition(String name, double[] out) {
+    public synchronized boolean playerPosition(String name, double[] out) {
         WatchPlayer player = playerNamed(name);
         if (player == null) return false;
         out[0] = player.x();
@@ -828,7 +850,7 @@ public final class WatchGame implements Animal.Surroundings {
     // --- persistence ------------------------------------------------------------------
 
     /** Everything worth keeping, as JSON. Animals are not: they are weather. */
-    public Map<String, Object> toMap() {
+    public synchronized Map<String, Object> toMap() {
         Map<String, Object> m = new LinkedHashMap<>();
         m.put("seed", config.seed());
         m.put("world", config.worldName());
@@ -847,7 +869,7 @@ public final class WatchGame implements Animal.Surroundings {
     }
 
     /** Put a saved world back. */
-    public void load(Map<String, Object> m) {
+    public synchronized void load(Map<String, Object> m) {
         guide.load(WatchJson.map(m, "guide"));
         grove.load(WatchJson.map(m, "grove"));
         crops.load(WatchJson.map(m, "crops"));

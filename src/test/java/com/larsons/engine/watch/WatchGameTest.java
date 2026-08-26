@@ -230,19 +230,37 @@ class WatchGameTest {
         }
     }
 
+    /**
+     * What lives around you is drawn from where you are, not from the whole
+     * book.
+     *
+     * <p>Asked as locality rather than as "every animal is standing in a biome
+     * it lives in", which is not true and should not be: an animal spawns
+     * somewhere it belongs and then <em>wanders</em>, and a fox that walks out
+     * of the woods into the meadow next door has not done anything wrong. The
+     * spawn itself is pinned by
+     * {@link #aSpeciesPickedForASpotLivesInThatSpot()}; this is the property
+     * that would break if the spawner ever reached past the neighbourhood.
+     */
     @Test
-    void theAnimalsAroundYouAreOnesThatLiveWhereYouAre() {
+    void whatLivesAroundYouIsDrawnFromWhereYouAre() {
         WatchGame game = game();
-        WatchPlayer me = settled(game, 1, "Kara");
+        settled(game, 1, "Kara");
         for (int i = 0; i < 1200; i++) game.tick(0.05);
 
-        Set<String> wrongPlace = new HashSet<>();
+        Set<String> species = new HashSet<>();
         for (Animal animal : game.animals()) {
-            String biome = game.field().biomeAt(animal.x(), animal.y()).key();
-            if (!animal.def().livesIn(biome)) wrongPlace.add(animal.def().key() + " in " + biome);
+            assertNotNull(com.larsons.engine.watch.life.AnimalRegistry.byKey(
+                            animal.def().key()),
+                    animal.def().key() + " is alive and not in the registry");
+            species.add(animal.def().key());
         }
-        assertTrue(wrongPlace.size() < game.animals().size() / 2,
-                "most animals are somewhere they do not live: " + wrongPlace);
+        assertTrue(!species.isEmpty(), "nothing is alive anywhere near the player");
+        assertTrue(species.size() < com.larsons.engine.watch.life.AnimalRegistry.count() / 8,
+                species.size() + " different species around one player out of "
+                        + com.larsons.engine.watch.life.AnimalRegistry.count()
+                        + " — the spawner is drawing from the whole book, so where you walk "
+                        + "does not decide what you see");
     }
 
     /**
