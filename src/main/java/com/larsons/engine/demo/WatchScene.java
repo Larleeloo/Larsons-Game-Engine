@@ -819,8 +819,9 @@ public class WatchScene extends AbstractScene {
         // and it spends its life over a sky that is a different colour every
         // hour of the day.
         label(target, time, pad, pad + 38, HUD_FONT, HUD_INK);
+        int points = view.guide().points();
         label(target, view.guide().discovered() + " / " + view.guide().total()
-                        + " species · " + view.guide().points() + " pts",
+                        + " species · " + points + (points == 1 ? " pt" : " pts"),
                 pad, pad + 56, HUD_SMALL, HUD_ACCENT);
 
         // Top right: the party.

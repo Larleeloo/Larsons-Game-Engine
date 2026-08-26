@@ -312,8 +312,11 @@ public class WatchGuideScene extends AbstractScene {
                 if (first != null) {
                     row = wrappedTo(target, first.describe(), x + 16, row, width, floor,
                             SMALL, INK);
-                    row = wrappedTo(target, "Seen " + guide.timesSeen(def.key())
-                            + " times · " + def.rarity().points() + " points",
+                    int times = guide.timesSeen(def.key());
+                    int points = def.rarity().points();
+                    row = wrappedTo(target,
+                            (times == 1 ? "Seen once" : "Seen " + times + " times")
+                                    + " · " + points + (points == 1 ? " point" : " points"),
                             x + 16, row, width, floor, SMALL, DIM);
                 }
                 if (guide.tamed(def.key())) {
