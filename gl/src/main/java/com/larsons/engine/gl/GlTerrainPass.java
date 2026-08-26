@@ -157,6 +157,10 @@ final class GlTerrainPass implements TerrainPass {
         return made;
     }
     private GlTerrainProgram program;
+
+    /** The general mesh pass, for worlds that are not made of blocks. */
+    private GlMeshPass meshes;
+
     private int atlasTexture = -1;
     private int atlasRevision = -1;
     private boolean unavailable;
@@ -277,6 +281,19 @@ final class GlTerrainPass implements TerrainPass {
 
     @Override
     public double lastGpuMillis() { return gpuMillis; }
+
+    /**
+     * The general triangle-mesh pass, built on first use.
+     *
+     * <p>Lazily, because most games in this engine are made of blocks and never
+     * ask: a renderer that is only ever handed sections should not be paying
+     * for a second shader program it will not use.
+     */
+    @Override
+    public com.larsons.engine.graphics.MeshPass meshPass() {
+        if (meshes == null) meshes = new GlMeshPass(target);
+        return meshes;
+    }
 
     /** Take last frame's answer if the card has finished with it. */
     private void collectGpuTime() {
@@ -494,6 +511,10 @@ final class GlTerrainPass implements TerrainPass {
 
     @Override
     public void dispose() {
+        if (meshes != null) {
+            meshes.dispose();
+            meshes = null;
+        }
         for (GlSectionArena arena : arenas.values()) arena.close();
         arenas.clear();
         arenaCount = 0;

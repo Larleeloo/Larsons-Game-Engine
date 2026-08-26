@@ -214,7 +214,37 @@ public enum GameAction {
     EVO_FASTER("evo_faster", "Speed Time", Category.EVOLUTION,
             InputBinding.key(KeyEvent.VK_CLOSE_BRACKET)),
     EVO_INSPECT("evo_inspect", "Inspect Tool", Category.EVOLUTION,
-            InputBinding.key(KeyEvent.VK_I), InputBinding.key(KeyEvent.VK_BACK_QUOTE));
+            InputBinding.key(KeyEvent.VK_I), InputBinding.key(KeyEvent.VK_BACK_QUOTE)),
+
+    // --- the field guide ------------------------------------------------------------------
+    //
+    // Movement, looking and crouching are the engine's own MOVEMENT and CAMERA
+    // actions — walking is walking — so only the verbs this game invents are
+    // here. The one that matters is WATCH_SPOT: pointing at an animal is the
+    // whole game, and it is bound to the left mouse button because that is what
+    // "point at that" means everywhere else.
+    WATCH_SPOT("watch_spot", "Spot / Point At Animal", Category.WATCH,
+            InputBinding.mouse(MouseEvent.BUTTON1)),
+    WATCH_PICK("watch_pick", "Pick / Forage", Category.WATCH,
+            InputBinding.key(KeyEvent.VK_E)),
+    WATCH_GUIDE("watch_guide", "Open Field Guide", Category.WATCH,
+            InputBinding.key(KeyEvent.VK_G)),
+    WATCH_SATCHEL("watch_satchel", "Satchel & Cooking", Category.WATCH,
+            InputBinding.key(KeyEvent.VK_TAB)),
+    WATCH_FEEDER("watch_feeder", "Put Out Feeder", Category.WATCH,
+            InputBinding.key(KeyEvent.VK_F)),
+    WATCH_PLANT("watch_plant", "Plant Seed", Category.WATCH,
+            InputBinding.key(KeyEvent.VK_R)),
+    WATCH_CROSS("watch_cross", "Cross-Pollinate", Category.WATCH,
+            InputBinding.key(KeyEvent.VK_C)),
+    WATCH_BUILD("watch_build", "Build Mode", Category.WATCH,
+            InputBinding.key(KeyEvent.VK_B)),
+    WATCH_ROD("watch_rod", "Cast / Strike", Category.WATCH,
+            InputBinding.key(KeyEvent.VK_V)),
+    WATCH_TURN_PIECE("watch_turn_piece", "Turn Build Piece", Category.WATCH,
+            InputBinding.key(KeyEvent.VK_X)),
+    WATCH_LEAVE("watch_leave", "Leave Walk (while paused)", Category.WATCH,
+            InputBinding.key(KeyEvent.VK_L));
 
     /**
      * How the controls menu is grouped, and the scope a conflict is reported in.
@@ -236,7 +266,8 @@ public enum GameAction {
         EDITOR("Creative Editor", true),
         AUTO_BATTLER("Auto Battler", false),
         DECK("Council of Six", false),
-        EVOLUTION("Evolution", false);
+        EVOLUTION("Evolution", false),
+        WATCH("Field Guide", false);
 
         private final String label;
         private final boolean engine;

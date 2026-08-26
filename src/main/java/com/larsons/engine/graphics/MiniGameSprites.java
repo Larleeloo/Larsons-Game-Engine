@@ -134,6 +134,7 @@ public final class MiniGameSprites {
             case AUTO_BATTLER -> paintAutoBattler(g, s, accent, ink);
             case DECK_BUILDER -> paintDeck(g, s, accent, ink);
             case EVOLUTION -> paintEvolution(g, s, accent, ink);
+            case FIELD_GUIDE -> paintFieldGuide(g, s, accent, ink);
         }
         g.translate(-nudge, -nudge);
     }
@@ -194,6 +195,47 @@ public final class MiniGameSprites {
         g.setColor(shade(accent, 0.45));
         g.fillOval(cx - cell + cell / 3, cy - cell / 2 + cell / 3, cell / 3, cell / 3);
         g.fillOval(cx + cell / 3, cy - cell / 3 + cell / 3, cell / 3, cell / 3);
+    }
+
+    /** A pair of binoculars over a hill, which is the whole game. */
+    private static void paintFieldGuide(Graphics2D g, int s, Color accent, Color ink) {
+        int cx = s / 2, cy = s / 2;
+        // The hill behind, so the glyph reads as outdoors rather than as a pair
+        // of circles.
+        g.setColor(shade(accent, 0.72));
+        g.fillArc(cx - s / 2, cy, s, s, 0, 180);
+        g.setColor(brighten(accent, 0.30));
+        g.fillArc(cx - s / 3, cy + s / 12, (s / 3) * 2, s / 2, 0, 180);
+
+        // The binoculars: two barrels, a bridge, and two eyecups.
+        int barrel = Math.max(5, s / 4);
+        int top = cy - s / 4;
+        g.setColor(ink);
+        g.fillRoundRect(cx - barrel - 2, top, barrel, (int) (barrel * 1.45),
+                barrel / 3, barrel / 3);
+        g.fillRoundRect(cx + 2, top, barrel, (int) (barrel * 1.45),
+                barrel / 3, barrel / 3);
+        g.fillRect(cx - 3, top + barrel / 3, 6, Math.max(2, barrel / 4));
+        g.setColor(shade(ink, 0.62));
+        g.fillRect(cx - barrel - 2, top - Math.max(2, barrel / 4), barrel,
+                Math.max(2, barrel / 3));
+        g.fillRect(cx + 2, top - Math.max(2, barrel / 4), barrel,
+                Math.max(2, barrel / 3));
+
+        // A lens each, catching the light.
+        g.setColor(brighten(accent, 0.55));
+        int lens = Math.max(3, barrel / 2);
+        g.fillOval(cx - barrel - 2 + (barrel - lens) / 2,
+                top + (int) (barrel * 1.45) - lens - 1, lens, lens);
+        g.fillOval(cx + 2 + (barrel - lens) / 2,
+                top + (int) (barrel * 1.45) - lens - 1, lens, lens);
+
+        // …and a bird, because that is what you are pointing them at.
+        g.setColor(shade(ink, 0.55));
+        int by = cy - s / 3;
+        g.setStroke(new BasicStroke(Math.max(1.4f, s / 30f)));
+        g.drawArc(cx + s / 5, by, s / 7, s / 9, 0, 150);
+        g.drawArc(cx + s / 5 + s / 8, by, s / 7, s / 9, 30, 150);
     }
 
     private static Color shade(Color c, double by) {

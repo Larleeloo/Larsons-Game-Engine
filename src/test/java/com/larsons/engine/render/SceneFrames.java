@@ -21,6 +21,8 @@ import com.larsons.engine.demo.NewLevelScene;
 import com.larsons.engine.demo.SaveSelectScene;
 import com.larsons.engine.demo.SkinEditorScene;
 import com.larsons.engine.demo.StartupScene;
+import com.larsons.engine.demo.WatchGuideScene;
+import com.larsons.engine.demo.WatchLobbyScene;
 import com.larsons.engine.evolution.EvolutionGame;
 import com.larsons.engine.evolution.EvolutionStore;
 import com.larsons.engine.evolution.Nucleotide;
@@ -30,6 +32,10 @@ import com.larsons.engine.input.KeyBindStore;
 import com.larsons.engine.render.GoldenFrames.Frame;
 import com.larsons.engine.scene.Scene;
 import com.larsons.engine.scene.SceneManager;
+import com.larsons.engine.watch.Sighting;
+import com.larsons.engine.watch.WatchStore;
+import com.larsons.engine.watch.WatchView;
+import com.larsons.engine.watch.world.WatchBiomes;
 
 import java.io.IOException;
 import java.io.UncheckedIOException;
@@ -106,7 +112,16 @@ public final class SceneFrames {
             // (AutoBattlerSceneTest, DeckGameTest); that is a live server with
             // live timing, which is the one thing a fixed picture cannot be.
             "AutoBattlerScene",
-            "DeckGameScene");
+            "DeckGameScene",
+            // The walk is lit by the player's own wall clock — that is the
+            // feature, not an oversight — so its sky, its fog and every face in
+            // it are a function of what time it is when the test runs. On top
+            // of that its terrain arrives from a pool of streaming threads, so
+            // how much world exists after two fixed ticks depends on how fast
+            // the machine is. Neither is fixable without goldening something
+            // that is not the scene. WatchSceneTest drives it instead, and
+            // asserts on what it built rather than on how it looked.
+            "WatchScene");
 
     // --- the catalogue ---------------------------------------------------------
 
@@ -136,6 +151,13 @@ public final class SceneFrames {
         frames.add(scene("scene-evolution-catalog",
                 ctx -> new EvolutionCatalogScene(ctx, evolutionStore())));
         frames.add(scene("scene-auto-battler-guide", ctx -> new AutoBattlerGuideScene(ctx)));
+        frames.add(scene("scene-watch-lobby",
+                ctx -> new WatchLobbyScene(ctx, new WatchStore(scratch("watch").toString()))));
+        frames.add(scene("scene-watch-guide", ctx -> {
+            WatchGuideScene guide = new WatchGuideScene(ctx);
+            guide.show(writtenGuide(), WatchLobbyScene.NAME);
+            return guide;
+        }));
         frames.add(scene("scene-creative", ctx -> new CreativeScene(ctx)));
         frames.add(scene("scene-play", ctx -> new PlayScene(ctx, SAMPLE_LEVEL)));
         frames.add(scene("scene-evolution", ctx -> {
@@ -230,6 +252,37 @@ public final class SceneFrames {
 
     private static EvolutionStore evolutionStore() {
         return new EvolutionStore(scratch("evolution").toString());
+    }
+
+    /**
+     * A field guide with a few pages written in it, for the book's frame.
+     *
+     * <p>An empty guide would golden the "nothing here yet" branch, which is
+     * the screen a player sees for about ninety seconds and never again; a
+     * written one goldens the list, the portrait, the record and the three
+     * progress bars, which is the screen the feature actually is.
+     *
+     * <p><b>Every sighting is stamped zero on purpose.</b> {@code Sighting}
+     * prints its moment in the machine's own time zone, so a real timestamp
+     * would make this picture a function of where the developer lives — a red
+     * test in Berlin for a change made in California. Zero takes the branch
+     * that formats a fixed clock instead, which is the same drawing code
+     * against an input that does not move.
+     */
+    private static WatchView writtenGuide() {
+        WatchView view = new WatchView();
+        String biome = WatchBiomes.defaultBiome().key();
+        List<com.larsons.engine.watch.life.AnimalDef> all =
+                com.larsons.engine.watch.life.AnimalRegistry.all();
+        // Spread across the registry rather than taking the first six, so the
+        // page shows more than one family and more than one rarity tier.
+        for (int i = 0; i < 6; i++) {
+            var def = all.get(i * 137 % all.size());
+            view.guide().record(new Sighting(def.key(), 0L, 0.35, biome, "Kara",
+                    12.5 * i, -8.25 * i, true));
+        }
+        view.guide().tame(all.get(0).key(), "Pip", "Kara", 0L);
+        return view;
     }
 
     /**

@@ -103,6 +103,19 @@ public final class TextureKeys {
      * {@link com.larsons.engine.ui.SpriteButton}.
      */
     public static final String UI = "ui";
+    /**
+     * The Field Guide's ground, foliage and built materials — the tiles its
+     * low-poly terrain is textured from ({@code watch/terrain/grass} →
+     * {@code watch_terrain/grass.png}).
+     */
+    public static final String WATCH_TERRAIN = "watch_terrain";
+    /**
+     * The Field Guide's animal skins. A file named after a species dresses that
+     * one species; a file named after its family dresses all forty-nine of
+     * them, which is what makes redressing the whole game twenty-six files
+     * rather than thirteen hundred.
+     */
+    public static final String WATCH_ANIMALS = "watch_animals";
     /** Where keys from an unrecognised namespace land. */
     public static final String OTHER = "other";
 
@@ -224,8 +237,27 @@ public final class TextureKeys {
             // ui/minigame/evolution -> ui/minigame_evolution.png, falling back
             // to ui/minigame.png so one sheet can dress every button at once.
             case "ui" -> progressive(UI, parts);
+            // watch/terrain/grass -> watch_terrain/grass.png
+            // watch/animal/songbird_finch_banded -> watch_animals/<that>.png,
+            // falling back to watch_animals/songbird.png, so one file can dress
+            // a family and a second can override one bird in it.
+            case "watch" -> watchPaths(parts);
             default -> List.of(OTHER + "/" + key.replace('/', '_'));
         };
+    }
+
+    /**
+     * The pack paths a Field Guide key accepts.
+     *
+     * <p>Terrain tiles are flat: one file per material. Animal skins fall back
+     * one segment — a species first, then whatever the caller passed as the
+     * family — which is the same progressive rule mobs use and for the same
+     * reason: a pack should be finishable one file at a time.
+     */
+    private static List<String> watchPaths(String[] parts) {
+        if (parts.length < 3) return List.of(OTHER + "/" + join(parts, 0, parts.length));
+        String folder = "terrain".equals(parts[1]) ? WATCH_TERRAIN : WATCH_ANIMALS;
+        return List.of(folder + "/" + join(parts, 2, parts.length).replace('/', '_'));
     }
 
     /**
@@ -404,6 +436,24 @@ public final class TextureKeys {
                     "minigame_" + game.key(),
                     game.title() + " — button (" + StandaloneGame.BUTTON_STATES
                             + " states: static, hover, clicked)", List.of()));
+        }
+        // The Field Guide's terrain materials — one tile each, sampled by the
+        // GPU path per fragment and averaged by the Java2D one per triangle,
+        // so a pack recolours both builds from one set of files.
+        for (var material : com.larsons.engine.watch.world.WatchMaterial.values()) {
+            out.add(new Entry("Field Guide terrain", WATCH_TERRAIN,
+                    material.textureKey(), material.key(),
+                    material.key().replace('_', ' '), List.of()));
+        }
+        // …and its animals, listed by family rather than by species. Thirteen
+        // hundred rows would drown the file that exists to tell a creator what
+        // they can draw; the twenty-six that dress the whole game are the ones
+        // worth naming, and a single species is still overridable by key.
+        for (var family : com.larsons.engine.watch.life.AnimalFamily.values()) {
+            out.add(new Entry("Field Guide animals", WATCH_ANIMALS,
+                    family.textureKey(), family.key(),
+                    family.plural() + " — skin sheet (64×64; overrides all "
+                            + "species in this family)", List.of()));
         }
         return out;
     }
