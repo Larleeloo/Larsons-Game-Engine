@@ -53,12 +53,22 @@ public final class WatchBiomes {
     /** How many there are — twenty. */
     public static int count() { return ALL.size(); }
 
-    /** The biome with this key, or {@code null}. */
-    public static WatchBiome byKey(String key) { return BY_KEY.get(key); }
+    /**
+     * The biome with this key, or {@code null} — including for a null key.
+     *
+     * <p>The null guard is not defensive habit. Every caller of this is holding
+     * a string that came out of a save file or off the wire ({@code Sighting}
+     * printing where an animal was seen, a client loading a party's guide), and
+     * {@code Map.of} throws on a null key rather than missing it. A truncated
+     * packet would have taken out the guide page.
+     */
+    public static WatchBiome byKey(String key) {
+        return key == null ? null : BY_KEY.get(key);
+    }
 
     /** The biome with this key, or {@link #defaultBiome()} when unknown. */
     public static WatchBiome of(String key) {
-        WatchBiome found = BY_KEY.get(key);
+        WatchBiome found = byKey(key);
         return found != null ? found : defaultBiome();
     }
 

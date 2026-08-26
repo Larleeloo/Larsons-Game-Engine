@@ -88,11 +88,17 @@ public final class Forage {
     public static List<Item> all() { return List.copyOf(ITEMS.values()); }
 
     /** The item with this key, or {@code null}. */
-    public static Item byKey(String key) { return ITEMS.get(key); }
+    public static Item byKey(String key) {
+        // A null key is an unknown item, not an exception: these strings come
+        // out of satchels loaded from disk and off the wire, and the map is
+        // immutable, which means it throws on a null lookup rather than
+        // missing it.
+        return key == null ? null : ITEMS.get(key);
+    }
 
     /** What a player sees an item called; the key itself when it is unknown. */
     public static String nameOf(String key) {
-        Item item = ITEMS.get(key);
+        Item item = byKey(key);
         return item != null ? item.name() : key;
     }
 

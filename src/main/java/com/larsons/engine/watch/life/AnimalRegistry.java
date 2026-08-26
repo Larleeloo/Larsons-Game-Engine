@@ -116,11 +116,22 @@ public final class AnimalRegistry {
     /** How many species there are. */
     public static int count() { return ALL.size(); }
 
-    /** The species with this key, or {@code null}. */
-    public static AnimalDef byKey(String key) { return BY_KEY.get(key); }
+    /**
+     * The species with this key, or {@code null} — including for a null key.
+     *
+     * <p>Every string reaching this came from a save file or off the wire, and
+     * {@code Map.of} throws on a null key rather than missing it. A sighting
+     * whose species field did not survive the trip has to read as "a species I
+     * do not know", which the callers all handle, and not as an exception on
+     * the frame thread.
+     */
+    public static AnimalDef byKey(String key) {
+        return key == null ? null : BY_KEY.get(key);
+    }
 
     /** Every species that lives in a biome, in registry order. */
     public static List<AnimalDef> inBiome(String biomeKey) {
+        if (biomeKey == null) return List.of();
         return BY_BIOME.getOrDefault(biomeKey, List.of());
     }
 
