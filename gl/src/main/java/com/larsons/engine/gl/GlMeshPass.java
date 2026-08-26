@@ -202,7 +202,6 @@ final class GlMeshPass implements MeshPass {
         Mat4 projection = Mat4.perspective(eye.fov(),
                 eye.viewportWidth() / (double) eye.viewportHeight(),
                 EyeCamera.NEAR, Math.max(EyeCamera.NEAR * 2, fogEnd * 1.5));
-        Mat4 view = Mat4.view(eye);
 
         glEnable(GL_DEPTH_TEST);
         glDepthFunc(GL_LEQUAL);
@@ -223,13 +222,13 @@ final class GlMeshPass implements MeshPass {
         glActiveTexture(GL_TEXTURE0);
         glBindTexture(GL_TEXTURE_2D, texture);
 
-        for (Draw draw : opaque) issue(draw, projection, view, eye);
+        for (Draw draw : opaque) issue(draw, projection, eye);
 
         glEnable(GL_BLEND);
         glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
         glDepthMask(false);
         program.setAlphaCut(0f);
-        for (Draw draw : translucent) issue(draw, projection, view, eye);
+        for (Draw draw : translucent) issue(draw, projection, eye);
 
         evict();
     }
@@ -242,7 +241,7 @@ final class GlMeshPass implements MeshPass {
     }
 
     /** Upload if needed, set the matrices, and draw one mesh. */
-    private void issue(Draw draw, Mat4 projection, Mat4 view, EyeCamera eye) {
+    private void issue(Draw draw, Mat4 projection, EyeCamera eye) {
         Buffer buffer = buffers.computeIfAbsent(draw.key(), k -> new Buffer());
         buffer.lastSeen = frameStamp;
         if (buffer.revision != draw.revision()) {
@@ -260,13 +259,18 @@ final class GlMeshPass implements MeshPass {
         }
         if (buffer.vao < 0 || buffer.vertexCount == 0) return;
 
-        // The model matrix is a translation relative to the eye, built in
-        // double and handed down as floats. A world with no edge cannot be
-        // expressed in float at centimetre precision, and this is how every
-        // renderer of that size avoids having to.
-        Mat4 model = Mat4.translation(draw.originX() - eye.x(),
-                draw.originY() - eye.y(), draw.originZ() - eye.z());
-        Mat4 modelView = view.times(model);
+        // Vertices reach the card measured from the mesh's own origin, and the
+        // origin reaches it measured from the eye, in double: a world with no
+        // edge cannot be expressed in float at centimetre precision, and this
+        // is how every renderer of that size avoids having to.
+        //
+        // Composed by Mat4 rather than here, because the pairing is the trap.
+        // This once multiplied an eye-relative model by the eye-relative
+        // Mat4.view and subtracted the camera twice — a self-consistent picture
+        // drawn from twice the altitude, while every ray the game traced came
+        // from the real camera.
+        Mat4 modelView = Mat4.eyeRelativeModelView(eye,
+                draw.originX(), draw.originY(), draw.originZ());
         program.setMatrices(projection.times(modelView).columnMajor(),
                 modelView.columnMajor());
 

@@ -135,13 +135,62 @@ public final class Mat4 {
      * rather than a second opinion about where the camera is looking.
      */
     public static Mat4 view(EyeCamera eye) {
+        return view(eye, true);
+    }
+
+    /**
+     * The same camera's axes with the eye left at the origin —
+     * <b>for a renderer whose model matrices are already relative to it.</b>
+     *
+     * <p>A world with no edge cannot be expressed in {@code float} at
+     * centimetre precision, so a renderer of one hands the card coordinates
+     * measured from the camera rather than from the world origin: the model
+     * matrix carries {@code (origin − eye)} in {@code double}, and everything
+     * downstream stays small. That trick and {@link #view(EyeCamera)} do the
+     * same subtraction, and a pass that uses both does it <b>twice</b> — which
+     * is a camera that appears to hover at its own altitude above where it
+     * really is, growing worse the higher the ground gets. It shipped, and on
+     * ground twenty-eight metres up it drew the world two thousand pixels
+     * below where the crosshair was pointing.
+     *
+     * <p>So: absolute model matrices take {@link #view(EyeCamera)},
+     * eye-relative ones take this.
+     */
+    public static Mat4 viewRotation(EyeCamera eye) {
+        return view(eye, false);
+    }
+
+    /**
+     * The model-view of a mesh whose vertices are stored relative to
+     * {@code (originX, originY, originZ)} — the whole eye-relative chain in one
+     * call, so that no caller has to remember which of the two view matrices
+     * goes with it.
+     *
+     * <p>It lives here rather than in the GL backend because that is the only
+     * way it can be checked: a headless test can multiply matrices and compare
+     * the result against {@link EyeCamera#project}, and cannot open a GL
+     * context. The bug this exists to prevent — pairing an eye-relative model
+     * with the eye-relative {@link #view(EyeCamera)} and subtracting the camera
+     * twice — produced a picture that was perfectly self-consistent and drawn
+     * from the wrong place, which no screenshot and no test of the backend
+     * alone would have called wrong.
+     */
+    public static Mat4 eyeRelativeModelView(EyeCamera eye,
+                                            double originX, double originY, double originZ) {
+        return viewRotation(eye).times(translation(
+                originX - eye.x(), originY - eye.y(), originZ - eye.z()));
+    }
+
+    private static Mat4 view(EyeCamera eye, boolean translate) {
         double yaw = eye.yaw(), pitch = eye.pitch();
         double cy = Math.cos(yaw), sy = Math.sin(yaw);
         double cp = Math.cos(pitch), sp = Math.sin(pitch);
         double rx = cy, ry = sy, rz = 0;
         double ux = -sy * sp, uy = cy * sp, uz = cp;
         double fx = sy * cp, fy = -cy * cp, fz = sp;
-        double ex = eye.x(), ey = eye.y(), ez = eye.z();
+        double ex = translate ? eye.x() : 0;
+        double ey = translate ? eye.y() : 0;
+        double ez = translate ? eye.z() : 0;
         float[] out = new float[16];
         // Column major: out[col * 4 + row].
         out[0] = (float) rx; out[4] = (float) ry; out[8] = (float) rz;

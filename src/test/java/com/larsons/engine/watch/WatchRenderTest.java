@@ -1,6 +1,7 @@
 package com.larsons.engine.watch;
 
 import com.larsons.engine.graphics.EyeCamera;
+import com.larsons.engine.graphics.Mat4;
 import com.larsons.engine.graphics.draw.DrawTarget;
 import com.larsons.engine.graphics.draw.RecordingTarget;
 import com.larsons.engine.watch.life.AnimState;
@@ -312,6 +313,85 @@ class WatchRenderTest {
         }
         assertTrue(filled > 0, "no polygons reached the target");
         assertTrue(smoothing, "smoothing was left off, so the HUD comes out jagged");
+    }
+
+    /**
+     * <b>The GPU draws the world from the same camera the crosshair aims
+     * with.</b>
+     *
+     * <p>It did not. {@code GlMeshPass} hands the card model matrices measured
+     * from the eye — the standard way a world with no edge stays inside
+     * {@code float} precision — and then multiplied them by a view matrix that
+     * moves the eye to the origin as well, subtracting the camera twice. The
+     * result is a picture drawn from a camera at double the altitude while
+     * every ray the game traces — what you are looking at, what is in reach —
+     * comes from the real one. On ground twenty-eight metres up that is two
+     * thousand pixels of disagreement: you appear to stand at treetop height,
+     * animals sit well below the crosshair that can nonetheless spot them, and
+     * you can still pick things off a ground you seem to be nowhere near.
+     *
+     * <p>Java2D never had it, because that path projects through
+     * {@link EyeCamera} itself. So this asserts the two <em>agree</em>, which
+     * is the only formulation that could have caught a backend drawing a
+     * self-consistent picture of the wrong place.
+     */
+    @Test
+    void theGpuMatricesPutAVertexWhereTheCameraSaysItIs() {
+        int w = 1280, h = 720;
+        EyeCamera eye = new EyeCamera(w, h);
+        // High ground and away from the origin: at (0, 0, 0) a doubled camera
+        // offset is zero and every wrong answer looks right.
+        eye.place(3, -7, 28.46);
+        eye.look(0.35, -0.08);
+
+        Mat4 projection = Mat4.perspective(eye.fov(), w / (double) h,
+                EyeCamera.NEAR, 2000);
+
+        double[] onScreen = new double[3];
+        double[] clip = new double[4];
+        // A mesh whose origin is a chunk corner, with vertices stored relative
+        // to it — exactly how the watch's meshes reach the card.
+        for (double[] origin : new double[][]{{0, 0, 0}, {64, -32, 0}, {-96, 64, 0}}) {
+            // The exact composition GlMeshPass issues, which is why it lives on
+            // Mat4: a headless test can check matrices and cannot open a GL
+            // context.
+            Mat4 mvp = projection.times(
+                    Mat4.eyeRelativeModelView(eye, origin[0], origin[1], origin[2]));
+
+            for (double[] world : new double[][]{{0, -20, 28}, {10, -30, 30},
+                    {0, -80, 20}, {-14, -45, 31}}) {
+                if (!eye.project(world[0], world[1], world[2], onScreen)) continue;
+                mvp.transform(world[0] - origin[0], world[1] - origin[1],
+                        world[2] - origin[2], clip);
+                assertTrue(clip[3] > 0, "the card put a visible vertex behind the camera");
+
+                double gx = (clip[0] / clip[3] * 0.5 + 0.5) * w;
+                double gy = (1 - (clip[1] / clip[3] * 0.5 + 0.5)) * h;
+                assertEquals(onScreen[0], gx, 0.5, "the card and the camera disagree about x");
+                assertEquals(onScreen[1], gy, 0.5, String.format(
+                        "the card draws this vertex %.0f px from where the camera aims at it",
+                        gy - onScreen[1]));
+            }
+        }
+    }
+
+    /** And the absolute form still translates, for the passes that use it. */
+    @Test
+    void theTwoViewMatricesDifferByExactlyTheEye() {
+        EyeCamera eye = new EyeCamera(640, 480);
+        eye.place(12, -34, 56);
+        eye.look(0.9, 0.2);
+
+        double[] moved = new double[4];
+        double[] fixed = new double[4];
+        Mat4.view(eye).transform(12, -34, 56, moved);
+        Mat4.viewRotation(eye).transform(12, -34, 56, fixed);
+
+        assertEquals(0.0, moved[0], 1e-6, "view() should put the eye at the origin");
+        assertEquals(0.0, moved[1], 1e-6);
+        assertEquals(0.0, moved[2], 1e-6);
+        assertTrue(Math.abs(fixed[0]) + Math.abs(fixed[1]) + Math.abs(fixed[2]) > 1,
+                "viewRotation() moved the eye, which is the whole thing it must not do");
     }
 
     // --- meshes ----------------------------------------------------------------------------

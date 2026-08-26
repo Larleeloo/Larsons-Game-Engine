@@ -218,7 +218,27 @@ class LiquidSimBoundedTest {
                         + "(small " + small / 1_000_000 + " ms, large " + large / 1_000_000 + " ms)");
     }
 
+    /**
+     * The best of three, because the small case is the denominator.
+     *
+     * <p>The pond on a 60×40 level takes about two milliseconds, and the
+     * assertion above divides by it. One scheduling hiccup or one JIT
+     * recompilation inside those two milliseconds moves the ratio by tens of
+     * percent, which is enough to fail a test about algorithmic complexity for
+     * reasons that have nothing to do with the algorithm — and it did, as soon
+     * as unrelated tests were added elsewhere in the suite and the machine got
+     * busier. The minimum of a few runs is the usual answer: noise only ever
+     * adds time, so the fastest observation is the closest to the truth.
+     */
     private static long timePour(int w, int h) {
+        long best = Long.MAX_VALUE;
+        for (int attempt = 0; attempt < 3; attempt++) {
+            best = Math.min(best, timeOnePour(w, h));
+        }
+        return best;
+    }
+
+    private static long timeOnePour(int w, int h) {
         Level lvl = level(LevelFormat.SIDE_SCROLLER, w, h);
         lvl.setTile(10, 5, id(lvl, "water"));
         LiquidSim sim = new LiquidSim();
