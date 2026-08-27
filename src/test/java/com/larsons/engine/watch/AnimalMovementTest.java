@@ -1,5 +1,6 @@
 package com.larsons.engine.watch;
 
+import com.larsons.engine.watch.life.AnimState;
 import com.larsons.engine.watch.life.Animal;
 import com.larsons.engine.watch.life.AnimalDef;
 import com.larsons.engine.watch.life.AnimalRegistry;
@@ -7,7 +8,11 @@ import com.larsons.engine.watch.life.Diet;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.Timeout;
 
+import java.util.HashMap;
+import java.util.HashSet;
 import java.util.List;
+import java.util.Map;
+import java.util.Set;
 
 import static org.junit.jupiter.api.Assertions.assertNotNull;
 import static org.junit.jupiter.api.Assertions.assertTrue;
@@ -213,6 +218,141 @@ class AnimalMovementTest {
             checked++;
         }
         assertTrue(checked >= 5, "only checked " + checked + " species");
+    }
+
+    // --- fleeing ---------------------------------------------------------------------
+    //
+    // The reported symptom was precise and worth restating: an animal "runs
+    // across the screen and then reaches some kind of invisible boundary and
+    // freezes in place as they are still in the running animation". Three
+    // separate causes produced it, and these tests pin all three plus the
+    // invariant that would have made any of them invisible.
+
+    /**
+     * An animal that is chased does not stop.
+     *
+     * <p>Fleeing used to pick <em>one</em> escape at the moment of the flush
+     * and never another: while a player stayed inside the flush distance the
+     * decision loop returned early every tick, so the animal ran to that point,
+     * arrived, and then played its running animation on the spot indefinitely.
+     * Measured before the fix, on a fallow deer with a player five metres off:
+     * fifty-three metres of running, then a hundred and fourteen seconds
+     * frozen.
+     */
+    @Test
+    void aChasedAnimalKeepsRunning() {
+        WatchGame game = new WatchGame(WatchGame.Config.hosted("Chase", 4242L));
+        game.join(1, "Larson");
+        for (int i = 0; i < 20 * 30; i++) game.tick(1.0 / 20);
+
+        Animal quarry = null;
+        for (Animal animal : game.animals()) {
+            if (!animal.def().airborne() && !animal.def().aquatic()) {
+                quarry = animal;
+                break;
+            }
+        }
+        assertNotNull(quarry, "nothing on legs spawned to chase");
+
+        double travelled = 0;
+        double lastX = quarry.x(), lastY = quarry.y();
+        for (int i = 0; i < 20 * 60; i++) {
+            // Stand five metres off, wherever it goes. Nothing escapes this, so
+            // nothing should ever stop running either.
+            game.move(1, quarry.x() + 5, quarry.y(), 0, 0, 0, false, 1.0 / 20);
+            game.tick(1.0 / 20);
+            if (game.animal(quarry.id()) == null) break;
+            travelled += Math.hypot(quarry.x() - lastX, quarry.y() - lastY);
+            lastX = quarry.x();
+            lastY = quarry.y();
+        }
+        // One flee target is 24–54 m. Anything in that range means it ran once
+        // and then stood still, which is the bug.
+        assertTrue(travelled > 120,
+                quarry.def().name() + " covered only " + Math.round(travelled)
+                        + " m in a minute of being followed — it stopped at its"
+                        + " first escape instead of choosing another");
+    }
+
+    /**
+     * Nothing is ever drawn walking or running while standing still.
+     *
+     * <p>The invariant, checked over a whole population and a player walking a
+     * circuit through it — which is the situation that produced the report,
+     * because a moving player counts as much closer and keeps everything
+     * inside its flush distance. This is deliberately a statement about the
+     * <em>animation</em> rather than about any one cause: the pose comes from
+     * what an animal intends and the position from what is possible, and any
+     * future disagreement between the two would look exactly like this bug.
+     */
+    @Test
+    void nothingRunsOnTheSpot() {
+        for (long seed : new long[]{4242L, 7L, 999L}) {
+            WatchGame game = new WatchGame(WatchGame.Config.hosted("Still", seed));
+            game.join(1, "Larson");
+            Map<Long, double[]> was = new HashMap<>();
+            Map<Long, Integer> frozen = new HashMap<>();
+
+            for (int i = 0; i < 20 * 150; i++) {
+                double t = i / 20.0;
+                double px = Math.cos(t * 0.15) * 60, py = Math.sin(t * 0.15) * 60;
+                game.move(1, px, py, game.field().heightAt(px, py), 0, 0, false, 1.0 / 20);
+                game.tick(1.0 / 20);
+
+                for (Animal animal : game.animals()) {
+                    AnimState state = animal.state();
+                    boolean afoot = state == AnimState.WALK || state == AnimState.RUN;
+                    double[] before = was.get(animal.id());
+                    if (before != null && afoot) {
+                        boolean still = Math.hypot(animal.x() - before[0],
+                                animal.y() - before[1]) < 1e-4;
+                        int streak = still ? frozen.getOrDefault(animal.id(), 0) + 1 : 0;
+                        frozen.put(animal.id(), streak);
+                        assertTrue(streak < 10,
+                                animal.def().name() + " (" + animal.behaviour() + ", "
+                                        + state + ") has been " + state
+                                        + " without moving for " + streak / 20.0
+                                        + " s on seed " + seed);
+                    }
+                    was.put(animal.id(), new double[]{animal.x(), animal.y()});
+                }
+            }
+        }
+    }
+
+    /**
+     * A flushed animal actually leaves.
+     *
+     * <p>The other half of the report — "they should probably be simulated to
+     * exit the vicinity of the player at some point". They could not, because
+     * one flee target is at most fifty-four metres and the despawn radius is a
+     * hundred and seventy, so an animal that never chose a second target could
+     * never reach it.
+     */
+    @Test
+    void aFlushedAnimalLeavesTheVicinity() {
+        WatchGame game = new WatchGame(WatchGame.Config.hosted("Leave", 4242L));
+        game.join(1, "Larson");
+        for (int i = 0; i < 20 * 30; i++) game.tick(1.0 / 20);
+
+        Set<Long> present = new HashSet<>();
+        for (Animal animal : game.animals()) present.add(animal.id());
+        assertTrue(present.size() > 5, "not enough spawned to be worth measuring");
+
+        // A steady walk in one direction, straight through the middle of them.
+        for (int i = 0; i < 20 * 240; i++) {
+            double px = i / 20.0 * 1.2;
+            game.move(1, px, 0, game.field().heightAt(px, 0), 0, 0, false, 1.0 / 20);
+            game.tick(1.0 / 20);
+        }
+
+        int gone = 0;
+        for (long id : present) {
+            if (game.animal(id) == null) gone++;
+        }
+        assertTrue(gone > present.size() / 2,
+                "only " + gone + " of " + present.size()
+                        + " animals left the area in four minutes of being walked at");
     }
 
     /** The real game keeps its animals out of the ground too, over a long run. */

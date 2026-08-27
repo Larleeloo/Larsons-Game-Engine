@@ -156,6 +156,34 @@ public final class Animal {
     /** Deeper than this and a walker will not go, in metres. */
     private static final double WADE_LIMIT = 1.1;
 
+    /** Nearest a fleeing animal aims, in metres. */
+    private static final double FLEE_NEAR = 24;
+
+    /** …and furthest. */
+    private static final double FLEE_FAR = 54;
+
+    /**
+     * How close to its escape an animal gets before choosing the next one, in
+     * metres. See {@link #needsNewEscape}.
+     */
+    private static final double FLEE_RETARGET = 1.5;
+
+    /** Directions considered when looking for a way out. */
+    private static final int FLEE_SAMPLES = 8;
+
+    /**
+     * How far a blocked step may be turned aside, in radians, tried in order.
+     *
+     * <p>Straight on first, because that is what nearly every step in the world
+     * is and it costs one sample. Then progressively sharper deflections, out
+     * to eighty degrees — enough to follow a shoreline, and short of the
+     * hundred and eighty that would have an animal turn round and call it
+     * progress. See {@link #advance}.
+     */
+    private static final double[] DEFLECTIONS = {
+        0, Math.toRadians(30), Math.toRadians(55), Math.toRadians(80)
+    };
+
     private final long id;
     private final AnimalDef def;
     private final Random rng;
@@ -178,6 +206,16 @@ public final class Animal {
     /** How long it has been failing to make progress toward it. */
     private double stallTime;
 
+    /**
+     * Which way it turns to get round something, {@code +1} or {@code −1}.
+     *
+     * <p>Held rather than chosen per step so an animal commits to one side of
+     * an obstacle. Re-deciding every frame is how a thing ends up jittering on
+     * the spot at the point of a headland, having gone left, then right, then
+     * left again. See {@link #advance}.
+     */
+    private double slideSign = 1;
+
     public Animal(long id, AnimalDef def, double x, double y, double z, long seed) {
         this.id = id;
         this.def = def;
@@ -186,6 +224,9 @@ public final class Animal {
         this.z = z;
         this.rng = new Random(seed);
         this.yaw = rng.nextDouble() * Math.PI * 2;
+        // Half of them go round an obstacle one way and half the other, which
+        // is what stops a herd flushed into the same headland forming a queue.
+        this.slideSign = rng.nextBoolean() ? 1 : -1;
         this.targetX = x;
         this.targetY = y;
         this.altitude = Math.max(0, def.perch());
@@ -269,11 +310,40 @@ public final class Animal {
             ownerNear = dx * dx + dy * dy < 900;
         }
 
+        double wasX = x, wasY = y;
         decide(dt, around, disturbance, ownerNear, scratch);
         move(dt, around);
+        poseFor(Math.hypot(x - wasX, y - wasY));
 
         phase += dt * state.cyclesPerSecond();
         phase -= Math.floor(phase);
+    }
+
+    /**
+     * Make the animation agree with what the animal actually did.
+     *
+     * <p><b>The backstop, and the reason this is a rule rather than a series of
+     * fixes.</b> Every freeze reported against this class looked the same from
+     * outside — something sprinting on the spot — because the pose came from
+     * the <em>intent</em> ({@code I am fleeing}) while the position came from
+     * what was possible ({@code there is a lake in the way}). Whenever those
+     * two disagreed, the disagreement was on screen.
+     *
+     * <p>The causes are fixed above — fleeing re-targets, steps go round
+     * obstacles, arrivals stop the run — but the class of bug is worth closing
+     * for good, because the next one will look identical and there is no reason
+     * for it to be visible. So the last thing a tick does is check the ground
+     * actually covered, and an animal that covered none is drawn standing.
+     *
+     * <p>The threshold is "did not move at all" rather than "moved slowly", so
+     * a creeping animal still gets its walk cycle and nothing flickers.
+     */
+    private void poseFor(double covered) {
+        AnimState intended = stateFor(behaviour);
+        boolean moving = intended == AnimState.WALK || intended == AnimState.RUN;
+        // A flier holding station is hovering, which FLY already reads as; only
+        // things with feet look wrong standing still in a walk cycle.
+        state = moving && covered < 1e-4 ? AnimState.ALERT : intended;
     }
 
     private void decide(double dt, Surroundings around, double disturbance,
@@ -284,21 +354,35 @@ public final class Animal {
         if (tame()) flush *= 0.15;
 
         if (disturbance < flush * 0.5) {
-            enter(Behaviour.FLEE);
             flushed = true;
             alertTime = 0;
             // Being startled costs trust: a pet is made by patience and unmade
             // by charging at it.
             addTrust(-0.02);
+            keepFleeing(around);
             return;
         }
         if (disturbance < flush) {
-            if (behaviour != Behaviour.FLEE) enter(Behaviour.ALERT);
+            // Still too close for comfort. An animal that is already running
+            // keeps running — see keepFleeing for why that line is the whole
+            // fix — and one that is not merely watches.
+            if (behaviour == Behaviour.FLEE) keepFleeing(around);
+            else enter(Behaviour.ALERT);
             alertTime = 0;
             return;
         }
 
         if (behaviour == Behaviour.FLEE || behaviour == Behaviour.ALERT) {
+            // Far enough away to start calming down. An animal that has reached
+            // its escape stops running <em>now</em> rather than at the end of
+            // the cooling-off period: it has arrived, and standing on the spot
+            // in a running animation for three and a half seconds is the last
+            // of the freezes this class had. Standing alert is what an animal
+            // that has just got clear actually does, and it is a pose the model
+            // already has.
+            if (behaviour == Behaviour.FLEE && needsNewEscape()) {
+                enter(Behaviour.ALERT);
+            }
             alertTime += dt;
             if (alertTime < ALERT_PATIENCE) return;
             flushed = false;
@@ -380,19 +464,13 @@ public final class Animal {
      */
     private void pickWanderTarget(Surroundings around) {
         boolean swims = def.aquatic();
-        boolean flies = def.airborne();
         for (int attempt = 0; attempt < 6; attempt++) {
             double reach = 6 + rng.nextDouble() * 22;
             double angle = rng.nextDouble() * Math.PI * 2;
             double tx = x + Math.cos(angle) * reach;
             double ty = y + Math.sin(angle) * reach;
             // A flier goes where it likes; it is over the ground, not on it.
-            if (flies) {
-                aimAt(tx, ty);
-                return;
-            }
-            double depth = around.waterDepthAt(tx, ty);
-            if (swims ? depth >= SWIM_DEPTH : depth <= WADE_LIMIT) {
+            if (habitable(around, tx, ty)) {
                 aimAt(tx, ty);
                 return;
             }
@@ -417,17 +495,111 @@ public final class Animal {
         stallTime = 0;
     }
 
+    /**
+     * Run, and <b>keep</b> running while there is something to run from.
+     *
+     * <p>This is the fix for an animal that sprints away, stops dead at nothing
+     * at all, and then plays its running animation on the spot for as long as
+     * you care to watch. The cause was that fleeing picked <em>one</em> escape
+     * and never picked another: {@code enter} chose a point twenty-four to
+     * fifty-four metres off at the moment of the flush, and while a player
+     * stayed inside the flush distance {@link #decide} returned early on every
+     * subsequent tick without ever reconsidering. So the animal ran to that
+     * point, arrived — and {@link #move}'s "am I there yet" guard then did
+     * nothing at all, not even count the standstill as a stall, so the
+     * give-up timer could not rescue it either. The behaviour stayed
+     * {@code FLEE}, the animation stayed {@code RUN}, and the animal stood
+     * there running until the player walked away. Measured on a fallow deer
+     * with a player five metres off: fifty-three metres of running, then a
+     * hundred and fourteen seconds frozen.
+     *
+     * <p>It also fixes where the escape pointed. The old direction was
+     * {@code yaw + π} — behind wherever the animal happened to be <em>facing</em>,
+     * which after a turn or two has nothing to do with where the danger is. Now
+     * the ring is sampled and the calmest point wins, which is away from the
+     * player by construction, handles two players closing from both sides, and
+     * needs no new question asked of the world.
+     *
+     * <p>And it only offers points the animal can actually occupy, so a deer no
+     * longer flees into a lake and a fish no longer flees onto a beach. An
+     * animal genuinely cornered — an island, a blind canyon — stops and watches
+     * instead, which is both what a real one does and the honest animation for
+     * standing still.
+     */
+    private void keepFleeing(Surroundings around) {
+        if (behaviour == Behaviour.FLEE && !needsNewEscape()) return;
+        if (findEscape(around)) enter(Behaviour.FLEE);
+        else enter(Behaviour.ALERT);
+    }
+
+    /**
+     * Whether the current escape has been used up.
+     *
+     * <p>Deliberately generous about "arrived": re-targeting a metre and a half
+     * out means the next leg is chosen while the animal is still moving, so a
+     * long flight is a curve rather than a series of stops and starts.
+     */
+    private boolean needsNewEscape() {
+        double dx = targetX - x, dy = targetY - y;
+        return dx * dx + dy * dy <= FLEE_RETARGET * FLEE_RETARGET || givenUp();
+    }
+
+    /**
+     * Aim at the calmest reachable point on a ring, and say whether there was
+     * one.
+     *
+     * <p>{@link Surroundings#disturbanceAt} is how loud a place is, so the
+     * quietest sample is the best way out. Eight of them, spun by a random
+     * offset so a herd does not leave along eight identical spokes.
+     */
+    private boolean findEscape(Surroundings around) {
+        double reach = FLEE_NEAR + rng.nextDouble() * (FLEE_FAR - FLEE_NEAR);
+        // Two rings: the far one first, and a short hop if the animal is boxed
+        // in. Something with one metre of room should still take it.
+        for (double scale : new double[]{1.0, 0.45}) {
+            double bestCalm = -1;
+            double bestX = 0, bestY = 0;
+            boolean found = false;
+            double spin = rng.nextDouble() * Math.PI * 2;
+            for (int i = 0; i < FLEE_SAMPLES; i++) {
+                double angle = spin + i * Math.PI * 2 / FLEE_SAMPLES;
+                double tx = x + Math.cos(angle) * reach * scale;
+                double ty = y + Math.sin(angle) * reach * scale;
+                if (!habitable(around, tx, ty)) continue;
+                double calm = around.disturbanceAt(tx, ty);
+                if (calm > bestCalm) {
+                    bestCalm = calm;
+                    bestX = tx;
+                    bestY = ty;
+                    found = true;
+                }
+            }
+            if (found) {
+                aimAt(bestX, bestY);
+                return true;
+            }
+        }
+        return false;
+    }
+
+    /**
+     * Whether this animal could stand, swim or perch at a point.
+     *
+     * <p>The medium test, in one place, so that choosing a target and taking a
+     * step cannot disagree about what is passable — see {@link #accept}, which
+     * is the same rule applied to a step rather than to a destination.
+     */
+    private boolean habitable(Surroundings around, double px, double py) {
+        if (def.airborne()) return true;
+        double depth = around.waterDepthAt(px, py);
+        return def.aquatic() ? depth >= SWIM_DEPTH : depth <= WADE_LIMIT;
+    }
+
     private void enter(Behaviour next) {
         if (behaviour == next) return;
         behaviour = next;
         stateTime = 0;
         state = stateFor(next);
-        if (next == Behaviour.FLEE) {
-            // Straight away from whatever it is, as far as it can be bothered.
-            double away = yaw + Math.PI + (rng.nextDouble() - 0.5);
-            double reach = 24 + rng.nextDouble() * 30;
-            aimAt(x + Math.cos(away) * reach, y + Math.sin(away) * reach);
-        }
     }
 
     /** Which animation a behaviour is drawn as, given how this family moves. */
@@ -456,12 +628,10 @@ public final class Animal {
             double distance = Math.sqrt(dx * dx + dy * dy);
             if (distance > 0.05) {
                 double step = Math.min(distance, speed * dt);
-                double nx = x + dx / distance * step;
-                double ny = y + dy / distance * step;
-                double moved = accept(around, nx, ny) ? step : 0;
+                double moved = advance(around, Math.atan2(dy, dx), step);
                 if (moved > 0) {
-                    x = nx;
-                    y = ny;
+                    dx = targetX - x;
+                    dy = targetY - y;
                     // Turn toward where it is going, rather than snapping: a
                     // bird that pivots instantly reads as a sprite, not an
                     // animal.
@@ -473,6 +643,15 @@ public final class Animal {
                 // not going to be reached. Time it, and let `decide` retarget.
                 stallTime = moved < speed * dt * STALL_SPEED_FRACTION
                         ? stallTime + dt : 0;
+            } else {
+                // Standing on its own target while its behaviour still says it
+                // is going somewhere. That is a stall like any other and has to
+                // be counted like one: without this branch the give-up timer
+                // never ran for an animal that had <em>arrived</em>, only for
+                // one that was blocked, which is why a fleeing animal that
+                // reached its escape stood there playing its running animation
+                // rather than choosing another. See keepFleeing.
+                stallTime += dt;
             }
         } else {
             travelTime = 0;
@@ -508,6 +687,52 @@ public final class Animal {
         // on its way is still an animal in the terrain for those frames.
         if (altitude < 0) altitude = 0;
         z = ground + altitude;
+    }
+
+    /**
+     * Take a step, <b>going round whatever is in the way rather than into it.</b>
+     *
+     * <p>Choosing a destination the animal could occupy is not the same as
+     * choosing one it can walk to, and conflating them is the second half of
+     * the freezing bug. A deer's escape can be a perfectly good meadow on the
+     * far side of a lake: every candidate the ring offered passed the
+     * habitability test, and the straight line to it crosses eight metres of
+     * water, so every step was refused and the animal stood on the bank at a
+     * dead run until the give-up timer noticed — then picked another point
+     * across the same lake and did it again.
+     *
+     * <p>So a refused step is not the end of the move. The heading is deflected
+     * by up to eighty degrees either way and the first direction that is open
+     * wins, which is a run along the shoreline instead of a run into it. The
+     * animal commits to one side ({@link #slideSign}) until that side is
+     * blocked too, so it goes round an obstacle rather than jittering at the
+     * point of it.
+     *
+     * <p>Cheap on the common path: the undeflected step is tried first and
+     * costs one sample, which is what nearly every step in the world is.
+     *
+     * @return how far it actually got, in metres; {@code 0} if it is cornered
+     */
+    private double advance(Surroundings around, double heading, double step) {
+        for (double deflection : DEFLECTIONS) {
+            for (int side = 0; side < (deflection == 0 ? 1 : 2); side++) {
+                // The committed side first, then the other one.
+                double sign = side == 0 ? slideSign : -slideSign;
+                double angle = heading + deflection * sign;
+                double nx = x + Math.cos(angle) * step;
+                double ny = y + Math.sin(angle) * step;
+                if (!accept(around, nx, ny)) continue;
+                x = nx;
+                y = ny;
+                if (deflection != 0) slideSign = sign;
+                // A deflected step covers `step` of ground but less of the
+                // distance to the target. Reporting the ground is what matters
+                // here: the caller uses this to decide whether the animal is
+                // stuck, and one running along a bank is not stuck.
+                return step;
+            }
+        }
+        return 0;
     }
 
     /**

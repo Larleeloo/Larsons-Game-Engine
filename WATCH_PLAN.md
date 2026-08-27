@@ -446,6 +446,42 @@ leave that medium are refused; anything *already* out of its medium may move
 toward it, which is what stops the fix creating a new stuck case; and altitude
 is clamped so nothing is ever inside the ground.
 
+### The fourth, reported after the first three were fixed
+
+**An animal would sprint away and then freeze in place, still playing its
+running animation.** Three causes, all producing the same picture, because the
+pose came from what the animal *intended* while the position came from what was
+*possible*:
+
+1. **Fleeing chose one escape and never another.** `enter(FLEE)` picked a point
+   24–54 m off at the moment of the flush, and while a player stayed inside the
+   flush distance `decide` returned early on every subsequent tick without
+   reconsidering. The animal ran there, arrived, and stood at a dead run — and
+   `move`'s "am I there yet" guard did nothing at all, not even count the
+   standstill as a stall, so the give-up timer could not rescue it either.
+   Measured on a fallow deer with a player five metres off: 53 m of running,
+   then **114 seconds frozen**. This is also why animals never left the area —
+   one escape is at most 54 m and the despawn radius is 170.
+2. **The escape was chosen without a route.** The ring only tested whether the
+   *destination* was habitable, so a deer's way out could be a good meadow on
+   the far side of a lake: every step was then refused and it pressed into the
+   bank until the timer fired, then picked another point across the same lake.
+3. **A cooling-off animal kept the running pose.** Having got clear, it spent
+   `ALERT_PATIENCE` (3.5 s) still in `FLEE` before settling.
+
+Fixed respectively by `keepFleeing` (re-target on arrival or stall, direction
+chosen as the calmest point on a sampled ring, so it is away from the players
+by construction), `advance` (a blocked step is deflected up to 80° and the
+animal commits to one side, so it runs *along* a shoreline; genuinely cornered
+becomes `ALERT`), and stopping the run at arrival rather than at the end of the
+cool-down.
+
+And then the class of bug is closed rather than the instances: `poseFor` checks
+the ground actually covered at the end of every tick, so an animal that did not
+move is never drawn moving, whatever the cause. Measured after: **zero** frozen
+frames across four worlds and twenty-seven minutes of simulation, and 26 of 26
+animals now leave the area when walked at.
+
 ### The eight that were missing
 
 | Asked for | Where |
@@ -539,7 +575,12 @@ what widened is which fish you find where.
 * `AnimalMovementTest` — over a controlled shoreline: a walker covers ground
   for four minutes and never wades out of its depth, a fish never leaves the
   water or enters the bed, a stranded fish finds its way back, and nothing in a
-  spread across the registry ever ends up inside the ground.
+  spread across the registry ever ends up inside the ground. Then, over the
+  real game: a chased animal keeps running rather than stopping at its first
+  escape, **nothing is ever drawn walking or running while standing still**
+  across a whole population and a player walking a circuit through it, and a
+  flushed animal leaves the area. The first two fail on the code as it stood
+  before the freeze was fixed, with the numbers quoted above.
 * `ChunkCacheTest` — ground walked away from is kept rather than rebuilt, the
   cache honours its ceiling, a zero budget still plays, and a re-mesh bumps the
   revision a backend keys its buffers on.

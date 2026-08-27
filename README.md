@@ -3132,6 +3132,17 @@ lives in.
 - Animals live in a ring around the party — spawned between 22 m and 95 m,
   simulated while anybody is near, forgotten past 170 m. A world with no edge
   cannot hold a population, and one chaffinch is not tellable from another.
+- **A flushed animal keeps going until it is clear.** Fleeing picks a fresh
+  escape whenever it reaches the last one, so being walked at moves an animal
+  right out of the area rather than fifty metres and no further — and the
+  direction is the calmest point on a sampled ring, so it is away from *you*
+  (and away from both of you, if there are two of you) rather than away from
+  wherever it happened to be facing. A blocked step is deflected by up to
+  eighty degrees rather than refused, so an animal runs *along* a shoreline
+  instead of pressing into it, and one that is genuinely cornered stands and
+  watches instead. Finally, the pose is checked against the ground actually
+  covered: nothing is ever drawn running while standing still, whatever the
+  reason.
 - **They stay in the half of the world they belong to.** A wander target is
   chosen in the animal's own medium and a step that would leave it is refused,
   so a fish does not swim up a hillside and a fox does not wade into a lake —
