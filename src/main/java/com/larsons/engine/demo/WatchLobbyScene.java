@@ -164,6 +164,10 @@ public class WatchLobbyScene extends AbstractScene {
         form.addText("Your name", () -> playerName, v -> playerName = v, 24);
         form.addText("Host address", () -> hostAddress, v -> hostAddress = v, 40);
         form.addInt("Port", () -> port, v -> port = v, 1024, 65535, 1);
+        form.addNote(() -> "Connecting to " + hostOf(hostAddress) + " on port "
+                + portOf(hostAddress, port));
+        form.addNote("An address may carry its own port — \"example.com:7799\" — "
+                + "and that wins over the box above.");
         form.addNote("The host's world, the host's clock, and the host's field guide.");
         form.addAction("Join", this::join);
         form.addAction("Cancel", this::backToMenu);
@@ -227,15 +231,85 @@ public class WatchLobbyScene extends AbstractScene {
     }
 
     private void join() {
+        String host = hostOf(hostAddress);
+        int at = portOf(hostAddress, port);
+        if (host.isEmpty()) {
+            fail("Type the host's address — a name or an IP, "
+                    + "optionally with \":port\" after it.");
+            return;
+        }
         try {
-            WatchClient client = WatchClient.connect(hostAddress.trim(), port,
-                    playerName);
+            WatchClient client = WatchClient.connect(host, at, playerName);
             handOff(WatchSession.joining(client));
         } catch (IOException e) {
-            fail("Could not reach " + hostAddress.trim() + ":" + port
-                    + " — " + e.getMessage());
+            fail("Could not reach " + host + ":" + at + " — " + reasonFor(e, at));
         }
     }
+
+    /**
+     * The host out of whatever was typed in the address box.
+     *
+     * <p><b>People paste what they were given</b>, and what they were given is
+     * usually {@code host:7799}. The first version handed the whole string to
+     * the resolver, so pasting an address with its port on the end tried to
+     * look up a machine literally called "1.2.3.4:7799" and timed out, while
+     * the port box beside it sat there being ignored. An address may carry its
+     * own port and it wins; the box is the fallback.
+     *
+     * <p>Also copes with a bracketed IPv6 literal ({@code [::1]:7799}), where
+     * the colons inside the brackets are not a port separator.
+     */
+    public static String hostOf(String typed) {
+        String text = typed == null ? "" : typed.trim();
+        if (text.startsWith("[")) {
+            int close = text.indexOf(']');
+            return close < 0 ? text : text.substring(1, close);
+        }
+        int colon = text.lastIndexOf(':');
+        // A bare IPv6 literal has several colons and no port; only a single
+        // trailing ":number" is a port.
+        if (colon > 0 && text.indexOf(':') == colon) return text.substring(0, colon).trim();
+        return text;
+    }
+
+    /** The port out of the address if it carries one, else {@code fallback}. */
+    public static int portOf(String typed, int fallback) {
+        String text = typed == null ? "" : typed.trim();
+        int colon = text.startsWith("[") ? text.indexOf("]:") + 1 : text.lastIndexOf(':');
+        if (colon <= 0 || (!text.startsWith("[") && text.indexOf(':') != colon)) {
+            return fallback;
+        }
+        try {
+            int parsed = Integer.parseInt(text.substring(colon + 1).trim());
+            return parsed >= 1 && parsed <= 65535 ? parsed : fallback;
+        } catch (NumberFormatException e) {
+            return fallback;
+        }
+    }
+
+    /**
+     * Something a person can act on, rather than the exception's own words.
+     *
+     * <p>{@code ConnectException} says "Connection refused" and
+     * {@code UnknownHostException} says only the name it could not resolve —
+     * which, printed after "Could not reach &lt;name&gt;", reads as the name
+     * twice and tells you nothing about what to do.
+     */
+    private static String reasonFor(IOException e, int port) {
+        if (e instanceof java.net.UnknownHostException) {
+            return "no machine of that name. Check the address.";
+        }
+        if (e instanceof java.net.SocketTimeoutException) {
+            return "it did not answer. The host has to have the walk open, and "
+                    + "port " + port + " forwarded to their machine.";
+        }
+        if (e instanceof java.net.ConnectException) {
+            return "nothing is listening there. Is the walk open, and the port forwarded?";
+        }
+        String message = e.getMessage();
+        return message == null || message.isBlank() ? e.getClass().getSimpleName() : message;
+    }
+
 
     private void handOff(WatchSession session) {
         if (scenes.get(WatchScene.NAME) instanceof WatchScene scene) {

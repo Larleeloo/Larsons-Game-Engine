@@ -371,6 +371,44 @@ class WatchSceneTest {
         assertNull(walk.session(), "the walk is still holding a session after leaving");
     }
 
+    /**
+     * The address box takes what people paste into it.
+     *
+     * <p>What a host gives a friend is {@code their-ip:7799}, and the first
+     * version handed that whole string to the resolver — so it looked up a
+     * machine literally called "1.2.3.4:7799", timed out, and reported the
+     * timeout while the port box beside it sat there being ignored.
+     */
+    @Test
+    void anAddressMayCarryItsOwnPort() {
+        assertEquals("1.2.3.4", WatchLobbyScene.hostOf("1.2.3.4:7799"));
+        assertEquals(7799, WatchLobbyScene.portOf("1.2.3.4:7799", 1234));
+
+        assertEquals("example.com", WatchLobbyScene.hostOf("example.com:7799"));
+        assertEquals("1.2.3.4", WatchLobbyScene.hostOf("  1.2.3.4:7799  "),
+                "a pasted address with spaces around it was not trimmed");
+
+        // No port on it: the box beside the field is what decides.
+        assertEquals("1.2.3.4", WatchLobbyScene.hostOf("1.2.3.4"));
+        assertEquals(1234, WatchLobbyScene.portOf("1.2.3.4", 1234));
+
+        // Nonsense after the colon falls back rather than failing.
+        assertEquals("host", WatchLobbyScene.hostOf("host:not-a-port"));
+        assertEquals(1234, WatchLobbyScene.portOf("host:not-a-port", 1234));
+        assertEquals(1234, WatchLobbyScene.portOf("host:99999", 1234));
+    }
+
+    /** An IPv6 literal is full of colons and only the bracketed form has a port. */
+    @Test
+    void anIpv6LiteralIsNotMistakenForAHostAndPort() {
+        assertEquals("::1", WatchLobbyScene.hostOf("::1"));
+        assertEquals(1234, WatchLobbyScene.portOf("::1", 1234),
+                "the last colon of an IPv6 address was read as a port separator");
+
+        assertEquals("::1", WatchLobbyScene.hostOf("[::1]:7799"));
+        assertEquals(7799, WatchLobbyScene.portOf("[::1]:7799", 1234));
+    }
+
     /** One key, on a fresh frame, the way the engine delivers it. */
     private static void press(InputManager input, int keyCode) {
         input.newFrame();
