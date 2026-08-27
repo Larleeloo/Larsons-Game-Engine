@@ -42,6 +42,28 @@ import java.util.concurrent.atomic.AtomicLong;
  * cadence with the wind field advanced, which is how a meadow sways without
  * costing a single operation on a normal frame.
  *
+ * <h2>Ground that has been built stays built</h2>
+ *
+ * <p>A chunk walked away from is <b>retained, not destroyed</b>. It moves out
+ * of the active ring into a least-recently-used cache sized from the heap this
+ * JVM was given ({@link com.larsons.engine.graphics.ChunkMemory}), and walking
+ * back into it is a map lookup rather than a regeneration.
+ *
+ * <p>That is the single biggest thing this class does for how the game feels,
+ * and it was previously not done at all: a chunk more than
+ * {@link #EVICT_MARGIN} outside the view radius was dropped on the floor, so
+ * walking to the lake and back rebuilt the entire path there — a few
+ * milliseconds of noise per chunk, on the very workers that should have been
+ * building the ground <em>ahead</em> of the player. Pacing back and forth over
+ * a chunk boundary could regenerate the same ground indefinitely. On a machine
+ * with sixteen gigabytes in it, throwing that work away to save forty megabytes
+ * is the wrong trade by two orders of magnitude.
+ *
+ * <p>The cache is only ever an optimisation: a chunk is a pure function of
+ * {@code (seed, x, y)}, so a cache miss is indistinguishable from a cache that
+ * was never there. Which means the budget can be as small as a small heap
+ * wants, and nothing else in the game has to know.
+ *
  * <h2>Threads</h2>
  *
  * <p>{@code min(6, cores − 1)} of them, named {@code watch-chunk-N}, daemons so
@@ -73,6 +95,23 @@ public final class ChunkStreamer implements AutoCloseable {
     private final AtomicLong revisions = new AtomicLong(1);
     private final AtomicInteger inFlight = new AtomicInteger();
 
+    /**
+     * Chunks that have been built and walked away from, newest use last.
+     *
+     * <p>A {@link LinkedHashMap} in access order <em>is</em> the LRU, and its
+     * {@code removeEldestEntry} hook is the eviction. Synchronised on itself
+     * rather than concurrent: it is touched once per chunk that crosses the
+     * ring's edge — a handful per second at a walking pace — and access-ordered
+     * maps mutate on read, so a concurrent one would be neither.
+     */
+    private final Map<Long, WatchChunk> retained;
+
+    /** How many chunks the cache may hold, from the heap this JVM was given. */
+    private final int cacheBudget;
+
+    /** How many times a chunk was taken back out of the cache instead of built. */
+    private long recalled;
+
     private ExecutorService workers;
     private final int workerCount;
     private final int maxInFlight;
@@ -89,11 +128,26 @@ public final class ChunkStreamer implements AutoCloseable {
     }
 
     public ChunkStreamer(TerrainField field) {
+        this(field, com.larsons.engine.graphics.ChunkMemory.chunkCacheBudget());
+    }
+
+    /**
+     * A streamer with a stated cache size — for tests, which need to be able to
+     * ask what happens when the cache is full without allocating a heap.
+     */
+    public ChunkStreamer(TerrainField field, int cacheBudget) {
         this.field = field;
         this.flora = new Flora(field.seed(), field);
         this.grassField = new GrassField(field.seed());
         this.workerCount = Math.max(1, Math.min(6, Runtime.getRuntime().availableProcessors() - 1));
         this.maxInFlight = workerCount * 3;
+        this.cacheBudget = Math.max(0, cacheBudget);
+        this.retained = new java.util.LinkedHashMap<>(64, 0.75f, true) {
+            @Override
+            protected boolean removeEldestEntry(Map.Entry<Long, WatchChunk> eldest) {
+                return size() > ChunkStreamer.this.cacheBudget;
+            }
+        };
     }
 
     /** The generator underneath — what the physics asks for ground it cannot see. */
@@ -222,6 +276,15 @@ public final class ChunkStreamer implements AutoCloseable {
             long key = WatchChunk.key(at[0], at[1]);
             if (loaded.containsKey(key)) continue;
             int lod = lodFor(at[0] - ccx, at[1] - ccy);
+            WatchChunk kept = recall(key);
+            if (kept != null) {
+                loaded.put(key, kept);
+                recalled++;
+                if (kept.lod() != lod) {
+                    mesh(kept, lod, lod == 0 && withinGrass(at[0] - ccx, at[1] - ccy));
+                }
+                continue;
+            }
             WatchChunk chunk = WatchChunk.generate(field, flora, at[0], at[1],
                     revisions.getAndIncrement());
             // The same grass gate the streaming path uses. Passing `true` here
@@ -262,18 +325,72 @@ public final class ChunkStreamer implements AutoCloseable {
         return out;
     }
 
+    /**
+     * Move everything outside the ring into the cache.
+     *
+     * <p>Retired rather than destroyed — see the class note. A chunk here keeps
+     * its meshes and its revision, so recalling it draws with the buffers a
+     * backend already has rather than forcing a fresh upload.
+     */
     private void evictBeyond(int ccx, int ccy) {
         int limit = viewRadius + EVICT_MARGIN;
-        loaded.keySet().removeIf(key -> {
+        for (Map.Entry<Long, WatchChunk> entry : loaded.entrySet()) {
+            long key = entry.getKey();
             int cx = (int) (key >> 32);
             int cy = (int) (key & 0xFFFFFFFFL);
-            return Math.max(Math.abs(cx - ccx), Math.abs(cy - ccy)) > limit;
-        });
+            if (Math.max(Math.abs(cx - ccx), Math.abs(cy - ccy)) <= limit) continue;
+            WatchChunk gone = loaded.remove(key);
+            if (gone != null) retire(key, gone);
+        }
     }
+
+    private void retire(long key, WatchChunk chunk) {
+        if (cacheBudget == 0) return;
+        synchronized (retained) {
+            retained.put(key, chunk);
+        }
+    }
+
+    /** Take a chunk back out of the cache, or {@code null} if it is not there. */
+    private WatchChunk recall(long key) {
+        if (cacheBudget == 0) return null;
+        synchronized (retained) {
+            return retained.remove(key);
+        }
+    }
+
+    /** How many chunks are being kept against a return visit. */
+    public int cachedCount() {
+        synchronized (retained) {
+            return retained.size();
+        }
+    }
+
+    /** The ceiling on that, from the heap this JVM was given. */
+    public int cacheBudget() { return cacheBudget; }
+
+    /** How many chunks have been recalled rather than regenerated. */
+    public long recalledCount() { return recalled; }
 
     private void queueBuild(int cx, int cy, int lod) {
         long key = WatchChunk.key(cx, cy);
         if (building.putIfAbsent(key, Boolean.TRUE) != null) return;
+
+        // Built before, and kept. Ground that has already been generated is
+        // ground that never has to be generated again, and putting it straight
+        // back is the whole point of holding on to it: no worker, no noise, no
+        // frame of missing hillside where the player has just turned round.
+        WatchChunk kept = recall(key);
+        if (kept != null) {
+            loaded.put(key, kept);
+            recalled++;
+            building.remove(key);
+            // Its detail may not be what this distance wants any more; that is
+            // a re-mesh of data it already has, queued the usual way below.
+            if (kept.lod() != lod) queueMesh(kept, lod, false);
+            return;
+        }
+
         inFlight.incrementAndGet();
         submit(() -> {
             try {
@@ -305,6 +422,10 @@ public final class ChunkStreamer implements AutoCloseable {
 
     /** Build a chunk's four meshes and hand them over in one call. */
     private void mesh(WatchChunk chunk, int lod, boolean withGrass) {
+        // Claim the revision first: all four meshes carry it, and it is what
+        // tells a backend that has already uploaded this chunk that what it
+        // holds is now the wrong level of detail. See WatchChunk.beginMesh.
+        chunk.beginMesh();
         Mesh ground = TerrainMesher.ground(chunk, lod);
         Mesh water = TerrainMesher.water(chunk, lod);
         Mesh flora = FloraMesher.flora(chunk, lod);
@@ -341,10 +462,13 @@ public final class ChunkStreamer implements AutoCloseable {
         return workers;
     }
 
-    /** Throw every chunk away, keeping the workers. */
+    /** Throw every chunk away — the cache included — keeping the workers. */
     public void clear() {
         loaded.clear();
         building.clear();
+        synchronized (retained) {
+            retained.clear();
+        }
     }
 
     @Override
@@ -353,7 +477,6 @@ public final class ChunkStreamer implements AutoCloseable {
             workers.shutdownNow();
             workers = null;
         }
-        loaded.clear();
-        building.clear();
+        clear();
     }
 }

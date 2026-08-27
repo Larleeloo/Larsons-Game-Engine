@@ -56,7 +56,7 @@ public final class TerrainMesher {
         int stride = 1 << Math.max(0, Math.min(WatchChunk.MAX_LOD, lod));
         int n = WatchChunk.SAMPLES;
         double ox = chunk.originX(), oy = chunk.originY();
-        Mesh.Builder mesh = Mesh.builder(ox, oy, 0, false, (int) chunk.revision());
+        Mesh.Builder mesh = Mesh.builder(ox, oy, 0, false, chunk.meshRevision());
         float[] uv = new float[4];
 
         for (int iy = 0; iy + stride < n; iy += stride) {
@@ -106,7 +106,7 @@ public final class TerrainMesher {
         int stride = 1 << Math.max(0, Math.min(WatchChunk.MAX_LOD, lod));
         int n = WatchChunk.SAMPLES;
         double ox = chunk.originX(), oy = chunk.originY();
-        Mesh.Builder mesh = Mesh.builder(ox, oy, 0, true, (int) chunk.revision());
+        Mesh.Builder mesh = Mesh.builder(ox, oy, 0, true, chunk.meshRevision());
         float[] uv = new float[4];
         WatchMaterials.uv(WatchMaterial.WATER, uv);
         float surface = (float) TerrainField.WATER_LEVEL;

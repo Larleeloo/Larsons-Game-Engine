@@ -30,7 +30,12 @@ public final class WatchView {
 
     /** One person, as drawn. */
     public record Walker(int id, String name, double x, double y, double z,
-                         double yaw, double pitch, double stillness, boolean crouching) {}
+                         double yaw, double pitch, double stillness, boolean crouching,
+                         boolean submerged, double breath, long boatId) {
+
+        /** Whether they are rowing rather than walking. */
+        public boolean inBoat() { return boatId != 0; }
+    }
 
     /** One animal, as drawn. */
     public record Creature(long id, AnimalDef def, double x, double y, double z,
@@ -56,6 +61,8 @@ public final class WatchView {
     private final Grove grove = new Grove();
     private final Cultivation crops = new Cultivation();
     private final Structure structure = new Structure();
+    private Weather weather = new Weather(0);
+    private Boats boats = new Boats(0);
 
     /** How many lines of party chatter are kept. */
     private static final int LOG_LIMIT = 40;
@@ -68,7 +75,27 @@ public final class WatchView {
     /** The world's seed, so the client can generate the same terrain. */
     public long seed() { return seed; }
 
-    public void setSeed(long seed) { this.seed = seed; }
+    /**
+     * Take the world's seed, and rebuild everything derived from it.
+     *
+     * <p>The boats are a pure function of the seed, so a view told which world
+     * it is looking at can work out where they all are without being sent one —
+     * which is the whole reason they are generated rather than placed. Only the
+     * handful somebody has rowed elsewhere arrive over the wire.
+     */
+    public void setSeed(long seed) {
+        if (this.seed != seed) {
+            this.boats = new Boats(seed);
+            this.weather = new Weather(seed);
+        }
+        this.seed = seed;
+    }
+
+    /** What the sky is doing — the host's, when there is one. */
+    public Weather weather() { return weather; }
+
+    /** Where the boats are. */
+    public Boats boats() { return boats; }
 
     public String worldName() { return worldName; }
 
@@ -156,7 +183,8 @@ public final class WatchView {
         for (WatchPlayer player : game.players()) {
             walkers.add(new Walker(player.id(), player.name(), player.x(), player.y(),
                     player.z(), player.yaw(), player.pitch(), player.stillness(),
-                    player.crouching()));
+                    player.crouching(), player.submerged(), player.breath(),
+                    player.boatId()));
         }
         creatures.clear();
         for (Animal animal : game.animals()) {
@@ -168,6 +196,8 @@ public final class WatchView {
         lures.addAll(game.lures());
         spotlights.clear();
         spotlights.addAll(game.spotlights());
+        weather = game.weather();
+        boats = game.boats();
 
         WatchPlayer me = game.player(selfId);
         if (me != null) {
@@ -189,7 +219,9 @@ public final class WatchView {
                     WatchJson.str(row, "n", "?"), WatchJson.num(row, "x", 0),
                     WatchJson.num(row, "y", 0), WatchJson.num(row, "z", 0),
                     WatchJson.num(row, "yaw", 0), WatchJson.num(row, "p", 0),
-                    WatchJson.num(row, "st", 1), WatchJson.bool(row, "c", false)));
+                    WatchJson.num(row, "st", 1), WatchJson.bool(row, "c", false),
+                    WatchJson.bool(row, "uw", false), WatchJson.num(row, "air", 1),
+                    WatchJson.big(row, "boat", 0)));
         }
     }
 

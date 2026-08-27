@@ -250,13 +250,13 @@ public final class WatchServer implements WatchGame.Sink {
 
     private void broadcastState() {
         toAll(WatchProto.state(tick, game.clock().timeOfDay(), game.players(),
-                game.animals(), game.lures()));
+                game.animals(), game.lures(), game.weather().toMap()));
         if (tick % WatchProto.WORLD_SYNC_TICKS == 0) sendWorld();
     }
 
     private void sendWorld() {
         toAll(WatchProto.world(game.grove().toMap(), game.crops().toMap(),
-                game.structure().toMap()));
+                game.structure().toMap(), game.boats().toMap()));
     }
 
     // --- requests -------------------------------------------------------------------
@@ -300,6 +300,17 @@ public final class WatchServer implements WatchGame.Sink {
             case "pick" -> {
                 String got = game.pick(id);
                 if (got != null) bagChanged(id, "Picked " + nameOf(got));
+            }
+
+            case "use" -> {
+                String line = game.use(id);
+                if (line != null) {
+                    bagChanged(id, line);
+                    // A boat taken or a crop pulled is world state as well as
+                    // satchel state; the sync is cheap and the alternative is
+                    // a boat that only the person who moved it can see.
+                    sendWorld();
+                }
             }
 
             case "log" -> {
@@ -364,6 +375,17 @@ public final class WatchServer implements WatchGame.Sink {
                 Recipes.Station station = stationOf(WatchJson.str(message, "st", "HANDS"));
                 if (game.craft(id, recipe, station)) {
                     bagChanged(id, "Made " + recipe.name());
+                }
+            }
+
+            case "boat" -> {
+                String line = game.useBoat(id);
+                if (line != null) {
+                    conn.send(Protocol.encode(WatchProto.info(line)));
+                    // Where a boat is left is world state, not a snapshot
+                    // field: it is set once when somebody steps out and read
+                    // for ever after by everyone who walks that shore.
+                    sendWorld();
                 }
             }
 
