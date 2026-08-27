@@ -708,9 +708,11 @@ class WatchGameTest {
 
         WatchGame reopened = new WatchGame(new WatchGame.Config(31L, "Yesterday", 1));
         assertTrue(store.load(reopened));
-        assertEquals(1, reopened.players().size(), "the walk came back with nobody in it");
-
-        WatchPlayer back = reopened.players().get(0);
+        // A saved walker rests until somebody arrives to be them; joining is
+        // what resumes one. See aSavedWalkerWaitsRatherThanOccupyingASeat.
+        WatchPlayer back = reopened.join(1, "Kara");
+        assertNotNull(back, "the walk came back with nobody able to join it");
+        assertEquals(1, reopened.players().size());
         assertEquals("Kara", back.name());
         assertEquals(x, back.x(), 0.01, "you were put back at the wrong place");
         assertEquals(y, back.y(), 0.01, "you were put back at the wrong place");
@@ -718,18 +720,80 @@ class WatchGameTest {
         assertEquals(2, back.satchel().count("smoked_fish"), "the satchel was emptied");
     }
 
-    /** …and a reopened walk does not seat more people than it holds. */
+    /**
+     * A saved walker is a place kept, not a body standing in the way.
+     *
+     * <p>Restoring them straight into the party broke hosting outright: they
+     * held a seat nobody was controlling, and — because the server hands out
+     * ids from one, and a save's first player <em>is</em> id one — the host's
+     * own connection collided with the ghost of itself and was turned away
+     * with "this walk is full". Loading a hosted world put you back in the
+     * lobby.
+     */
     @Test
-    void aReopenedWalkKeepsItsOwnPlayerCap(@TempDir Path dir) {
+    void aSavedWalkerWaitsRatherThanOccupyingASeat(@TempDir Path dir) {
+        WatchGame first = new WatchGame(new WatchGame.Config(5L, "Shared", 1));
+        WatchPlayer me = first.join(1, "Larson");
+        me.moveTo(120, -80, first.groundAt(120, -80), 0, 0, false, 1.0 / 60);
+        me.satchel().add("acorn", 9);
+        WatchStore store = new WatchStore(dir.toString());
+        store.save(first);
+
+        // Hosted, as the lobby does it: load the save, then let people connect.
+        WatchGame hosted = new WatchGame(WatchGame.Config.hosted("Shared", 5L));
+        assertTrue(store.load(hosted));
+        assertEquals(0, hosted.players().size(),
+                "the save's walker was seated before anybody connected");
+
+        // The very id the server hands out first, which used to collide.
+        WatchPlayer back = hosted.join(1, "Larson");
+        assertNotNull(back, "the host could not join their own saved walk");
+        assertEquals(120, back.x(), 0.01, "the host did not resume where they were");
+        assertEquals(9, back.satchel().count("acorn"), "the host lost their satchel");
+
+        WatchPlayer friend = hosted.join(2, "Sam");
+        assertNotNull(friend, "a friend could not join");
+        assertEquals(2, hosted.players().size());
+    }
+
+    /** Somebody who has not been back keeps their place across another save. */
+    @Test
+    void aWalkerWhoHasNotBeenBackIsNotForgotten(@TempDir Path dir) {
         WatchGame party = new WatchGame(WatchGame.Config.hosted("Party", 5L));
-        for (int i = 1; i <= WatchGame.MAX_PLAYERS; i++) party.join(i, "Walker " + i);
+        party.join(1, "Larson").satchel().add("acorn", 4);
+        party.join(2, "Sam").satchel().add("trout", 2);
         WatchStore store = new WatchStore(dir.toString());
         store.save(party);
 
-        WatchGame solo = new WatchGame(new WatchGame.Config(5L, "Party", 1));
-        store.load(solo);
-        assertEquals(1, solo.players().size(),
-                "a solo walk reopened an eight-player save with eight people in it");
+        // Larson plays on alone and saves again.
+        WatchGame alone = new WatchGame(WatchGame.Config.hosted("Party", 5L));
+        store.load(alone);
+        alone.join(1, "Larson");
+        store.save(alone);
+
+        // Sam comes back to what they left.
+        WatchGame later = new WatchGame(WatchGame.Config.hosted("Party", 5L));
+        store.load(later);
+        WatchPlayer sam = later.join(1, "Sam");
+        assertEquals(2, sam.satchel().count("trout"),
+                "Sam's satchel was dropped because they missed a session");
+    }
+
+    /** …and a solo walk resumes its one walker whatever they were called. */
+    @Test
+    void aSoloWalkResumesItsOnlyWalkerByBeingTheOnlyOne(@TempDir Path dir) {
+        WatchGame first = new WatchGame(new WatchGame.Config(5L, "Alone", 1));
+        first.join(1, "Kara").satchel().add("acorn", 3);
+        WatchStore store = new WatchStore(dir.toString());
+        store.save(first);
+
+        WatchGame again = new WatchGame(new WatchGame.Config(5L, "Alone", 1));
+        store.load(again);
+        // The scene joins as "Walker"; there is only one walker resting, so it
+        // is unambiguously them.
+        WatchPlayer me = again.join(1, "Walker");
+        assertEquals(3, me.satchel().count("acorn"),
+                "a solo walk did not resume its only walker");
     }
 
     @Test

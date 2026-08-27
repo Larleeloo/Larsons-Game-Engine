@@ -177,18 +177,13 @@ public class WatchScene extends AbstractScene {
         frame = 0;
         if (session == null) return;
 
-        // Solo: be the player the save restored, or join a new one if this is a
-        // fresh world. Hosting or joining, the server did that when the socket
-        // opened and tells us who we are in the welcome.
-        //
-        // Adopting rather than always joining is what makes "Continue" resume:
-        // a reopened walk already has you in it, and joining a second player
-        // beside you left the camera at the origin while the walker it was
-        // supposed to be stood wherever you had left them.
-        if (session.local() != null) {
-            WatchPlayer me = session.local().players().isEmpty()
-                    ? session.local().join(1, "Walker")
-                    : session.local().players().get(0);
+        // Solo: join our own game. Joining is what resumes a save — a walker a
+        // save left behind is woken by whoever arrives (WatchGame.wake), so
+        // this both starts a fresh world and picks up an old one. Hosting or
+        // joining, the server did it when the socket opened and tells us who we
+        // are in the welcome.
+        if (session.local() != null && session.local().players().isEmpty()) {
+            WatchPlayer me = session.local().join(1, "Walker");
             if (me != null) {
                 session.setSelfId(me.id());
                 px = me.x();

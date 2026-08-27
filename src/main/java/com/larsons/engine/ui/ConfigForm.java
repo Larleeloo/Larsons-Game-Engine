@@ -200,23 +200,140 @@ public class ConfigForm {
         @Override void activate() { adjust(1); }
     }
 
+    /**
+     * A text field you can actually edit.
+     *
+     * <p>It began as append-and-backspace: no caret, no {@code Delete}, no
+     * arrow keys, no {@code Home}/{@code End}, and no clipboard. That is fine
+     * for typing a world's name once and miserable for correcting an address
+     * somebody sent you, which is the field people actually spend time in.
+     *
+     * <p>So it keeps a <b>caret</b> and an <b>anchor</b>. When the two are
+     * equal there is no selection and the caret is a line between characters;
+     * when they differ, the span between them is selected, and typing, pasting
+     * or deleting replaces it. That is the whole model, and it is enough for
+     * every shortcut a person expects.
+     *
+     * <p>The value itself still lives behind the supplier and consumer it was
+     * built with — this class owns where the caret is, not what the text is,
+     * so a form whose field is changed from underneath still shows the truth.
+     */
     static final class TextOption extends Option {
         final Supplier<String> get; final Consumer<String> set; final int maxLen;
+        /** Where the next character goes, and where a selection started. */
+        int caret = -1, anchor = -1;
+
         TextOption(String label, Supplier<String> get, Consumer<String> set, int maxLen) {
             super(label); this.get = get; this.set = set; this.maxLen = maxLen;
         }
         @Override public Control control() { return Control.TEXT; }
         @Override String valueText() { return get.get(); }
         @Override boolean isText() { return true; }
-        @Override void typeChars(String s) {
-            String cur = get.get();
-            StringBuilder sb = new StringBuilder(cur);
-            for (int i = 0; i < s.length() && sb.length() < maxLen; i++) sb.append(s.charAt(i));
-            set.accept(sb.toString());
+
+        /** The caret, clamped — the value can change without us being told. */
+        int caret() {
+            int len = get.get().length();
+            if (caret < 0 || caret > len) caret = len;   // first focus, or a value replaced
+            return caret;
         }
-        @Override void backspace() {
+
+        int anchor() {
+            int len = get.get().length();
+            if (anchor < 0 || anchor > len) anchor = caret();
+            return anchor;
+        }
+
+        int selectionStart() { return Math.min(caret(), anchor()); }
+
+        int selectionEnd() { return Math.max(caret(), anchor()); }
+
+        boolean hasSelection() { return selectionStart() != selectionEnd(); }
+
+        String selectedText() {
+            return get.get().substring(selectionStart(), selectionEnd());
+        }
+
+        /** Put the caret somewhere, dragging the anchor with it unless extending. */
+        void moveCaret(int to, boolean extend) {
+            int len = get.get().length();
+            caret = Math.max(0, Math.min(len, to));
+            if (!extend) anchor = caret;
+        }
+
+        void selectAll() {
+            anchor = 0;
+            caret = get.get().length();
+        }
+
+        /** Replace whatever is selected (or insert at the caret) with {@code text}. */
+        void replaceSelection(String text) {
             String cur = get.get();
-            if (!cur.isEmpty()) set.accept(cur.substring(0, cur.length() - 1));
+            int from = selectionStart(), to = selectionEnd();
+            StringBuilder sb = new StringBuilder(cur);
+            sb.delete(from, to);
+            // Only what fits. A field with a length limit should stop taking
+            // characters, not silently truncate what was already there.
+            int room = Math.max(0, maxLen - sb.length());
+            String fits = text.length() > room ? text.substring(0, room) : text;
+            sb.insert(from, fits);
+            set.accept(sb.toString());
+            caret = from + fits.length();
+            anchor = caret;
+        }
+
+        @Override void typeChars(String s) {
+            StringBuilder printable = new StringBuilder();
+            for (int i = 0; i < s.length(); i++) {
+                char c = s.charAt(i);
+                // Control characters arrive here as typed input — Ctrl+V is a
+                // 0x16, Enter a 0x0A — and none of them belong in a field.
+                if (c >= ' ' && c != 127) printable.append(c);
+            }
+            if (printable.length() > 0) replaceSelection(printable.toString());
+        }
+
+        @Override void backspace() {
+            if (hasSelection()) {
+                replaceSelection("");
+                return;
+            }
+            int at = caret();
+            if (at == 0) return;
+            String cur = get.get();
+            set.accept(cur.substring(0, at - 1) + cur.substring(at));
+            caret = at - 1;
+            anchor = caret;
+        }
+
+        /** Forward delete: the character the caret is sitting in front of. */
+        void deleteForward() {
+            if (hasSelection()) {
+                replaceSelection("");
+                return;
+            }
+            int at = caret();
+            String cur = get.get();
+            if (at >= cur.length()) return;
+            set.accept(cur.substring(0, at) + cur.substring(at + 1));
+            caret = at;
+            anchor = at;
+        }
+
+        /** The start of the word before the caret — what Ctrl+Backspace eats. */
+        int wordStart() {
+            String cur = get.get();
+            int at = caret();
+            while (at > 0 && cur.charAt(at - 1) == ' ') at--;
+            while (at > 0 && cur.charAt(at - 1) != ' ') at--;
+            return at;
+        }
+
+        int wordEnd() {
+            String cur = get.get();
+            int at = caret();
+            while (at < cur.length() && cur.charAt(at) != ' ') at++;
+            while (at < cur.length() && cur.charAt(at) == ' ') at++;
+            return at;
         }
     }
 
@@ -506,11 +623,10 @@ public class ConfigForm {
         // the tick they arrived in, so a field only ever receives what was
         // typed while it was the one selected.
         if (selText) {
-            String typed = input.consumeTypedChars();
-            if (!typed.isEmpty()) sel.typeChars(typed);
-            if (input.isKeyJustPressed(KeyEvent.VK_BACK_SPACE)) sel.backspace();
+            editText((TextOption) sel, input);
         }
 
+        // (see editText)
         // Mouse: hover selects, click hits sub-controls.
         int mx = input.getMouseX(), my = input.getMouseY();
         boolean click = input.isMouseJustPressed();
@@ -585,6 +701,126 @@ public class ConfigForm {
         capturing.binds.set(capturing.action, captureSlot, pressed);
         capturing = null;
         if (bindListener != null) bindListener.run();
+    }
+
+    /**
+     * Everything a person expects a text field to do.
+     *
+     * <p>Arrows and {@code Home}/{@code End} move the caret, with {@code Shift}
+     * extending the selection and {@code Ctrl} moving by words;
+     * {@code Backspace} and {@code Delete} cut either side of it;
+     * {@code Ctrl+A} selects all, and {@code Ctrl+C}/{@code X}/{@code V} talk
+     * to the system clipboard. Before this the field could only append and
+     * backspace, which meant fixing a typo near the start of a pasted address
+     * required deleting everything after it.
+     *
+     * <p>The clipboard is asked for defensively: a headless run, a locked
+     * clipboard, or another application holding it all throw, and none of them
+     * is a reason for a menu to stop working.
+     */
+    private void editText(TextOption text, InputManager input) {
+        boolean ctrl = input.isKeyDown(KeyEvent.VK_CONTROL)
+                || input.isKeyDown(KeyEvent.VK_META);
+        boolean shift = input.isKeyDown(KeyEvent.VK_SHIFT);
+
+        if (ctrl && input.isKeyJustPressed(KeyEvent.VK_A)) {
+            text.selectAll();
+        } else if (ctrl && input.isKeyJustPressed(KeyEvent.VK_C)) {
+            toClipboard(text.hasSelection() ? text.selectedText() : text.valueText());
+        } else if (ctrl && input.isKeyJustPressed(KeyEvent.VK_X)) {
+            toClipboard(text.hasSelection() ? text.selectedText() : text.valueText());
+            if (!text.hasSelection()) text.selectAll();
+            text.replaceSelection("");
+        } else if (ctrl && input.isKeyJustPressed(KeyEvent.VK_V)) {
+            String pasted = fromClipboard();
+            if (!pasted.isEmpty()) text.typeChars(pasted);
+        }
+
+        if (input.isKeyJustPressed(KeyEvent.VK_LEFT)) {
+            text.moveCaret(ctrl ? text.wordStart() : text.caret() - 1, shift);
+        }
+        if (input.isKeyJustPressed(KeyEvent.VK_RIGHT)) {
+            text.moveCaret(ctrl ? text.wordEnd() : text.caret() + 1, shift);
+        }
+        if (input.isKeyJustPressed(KeyEvent.VK_HOME)) text.moveCaret(0, shift);
+        if (input.isKeyJustPressed(KeyEvent.VK_END)) {
+            text.moveCaret(text.valueText().length(), shift);
+        }
+
+        if (input.isKeyJustPressed(KeyEvent.VK_BACK_SPACE)) {
+            if (ctrl && !text.hasSelection()) text.moveCaret(text.wordStart(), true);
+            text.backspace();
+        }
+        if (input.isKeyJustPressed(KeyEvent.VK_DELETE)) {
+            if (ctrl && !text.hasSelection()) text.moveCaret(text.wordEnd(), true);
+            text.deleteForward();
+        }
+
+        // Typed characters last, so a Ctrl chord that also produces a character
+        // does not get typed as well as acted on.
+        String typed = input.consumeTypedChars();
+        if (!typed.isEmpty() && !ctrl) text.typeChars(typed);
+    }
+
+    /**
+     * Where cut, copy and paste go — the system clipboard, unless a test says
+     * otherwise.
+     *
+     * <p>It is a seam because the alternative is a feature nobody can check: a
+     * headless build has no system clipboard, every call throws, and a paste
+     * that silently does nothing looks exactly like a paste that works. With
+     * this, the editing can be driven end to end and the AWT adapter is the
+     * only part taken on trust.
+     */
+    public interface Clipboard {
+        /** Whatever is on it, or {@code ""}. */
+        String read();
+
+        /** Put {@code text} on it. */
+        void write(String text);
+    }
+
+    /** The real one: AWT's, guarded, because any of it can throw. */
+    private static final Clipboard SYSTEM = new Clipboard() {
+        @Override public String read() {
+            try {
+                Object data = java.awt.Toolkit.getDefaultToolkit().getSystemClipboard()
+                        .getData(java.awt.datatransfer.DataFlavor.stringFlavor);
+                return data instanceof String s ? s : "";
+            } catch (Exception e) {
+                return "";
+            }
+        }
+
+        @Override public void write(String text) {
+            try {
+                java.awt.Toolkit.getDefaultToolkit().getSystemClipboard()
+                        .setContents(new java.awt.datatransfer.StringSelection(text), null);
+            } catch (RuntimeException e) {
+                // No clipboard here; copying doing nothing beats a crash.
+            }
+        }
+    };
+
+    private static Clipboard clipboard = SYSTEM;
+
+    /** Point cut/copy/paste somewhere else. Pass {@code null} to restore AWT's. */
+    public static void setClipboard(Clipboard replacement) {
+        clipboard = replacement == null ? SYSTEM : replacement;
+    }
+
+    private static void toClipboard(String text) {
+        if (text == null || text.isEmpty()) return;
+        clipboard.write(text);
+    }
+
+    private static String fromClipboard() {
+        String text = clipboard.read();
+        if (text == null) return "";
+        // One line: these are single-line fields, and a pasted newline should
+        // not silently swallow whatever came after it.
+        int newline = text.indexOf('\n');
+        return (newline >= 0 ? text.substring(0, newline) : text).replace("\r", "");
     }
 
     private void move(int dir) {
@@ -899,13 +1135,31 @@ public class ConfigForm {
                 target.drawRoundRect(fx, boxTop, fw, boxH, 8, 8,
                         o.enabled ? theme.item : theme.itemDisabled);
                 boolean editing = options.get(selected) == o;
-                // Show the end of the value: typing appends, so the tail is the
-                // part being worked on. Anything longer is cut at the field's
-                // edge instead of running on across the screen.
-                String shown = UiText.fitTail(target, font, value + (editing ? "_" : ""),
-                        fw - 2 * FIELD_PAD);
-                target.drawText(shown, fx + FIELD_PAD, baseY, font,
-                        o.enabled ? theme.title : theme.itemDisabled);
+                // The tail, because a field being typed into is being worked on
+                // at its end and because anything longer has to be cut
+                // somewhere rather than run on across the screen.
+                String shown = UiText.fitTail(target, font, value, fw - 2 * FIELD_PAD);
+                int textX = fx + FIELD_PAD;
+                if (editing && o instanceof TextOption t) {
+                    // What is on screen may be a tail of the value, so the
+                    // caret's index has to be measured against the same string.
+                    int cut = value.length() - shown.length();
+                    int caretIn = Math.max(0, t.caret() - cut);
+                    if (t.hasSelection()) {
+                        int from = Math.max(0, t.selectionStart() - cut);
+                        int to = Math.max(0, t.selectionEnd() - cut);
+                        int sx = textX + target.textWidth(shown.substring(0, from), font);
+                        int sw = target.textWidth(shown.substring(from, to), font);
+                        if (sw > 0) target.fillRect(sx, boxTop + 4, sw, boxH - 8, theme.accent);
+                    }
+                    target.drawText(shown, textX, baseY, font,
+                            o.enabled ? theme.title : theme.itemDisabled);
+                    int caretX = textX + target.textWidth(shown.substring(0, caretIn), font);
+                    target.fillRect(caretX, boxTop + 4, 1, boxH - 8, theme.title);
+                } else {
+                    target.drawText(shown, textX, baseY, font,
+                            o.enabled ? theme.title : theme.itemDisabled);
+                }
                 yield fx;
             }
             case SLIDER -> {

@@ -151,6 +151,9 @@ public final class WatchGame implements Animal.Surroundings {
 
     /** When each player last took a handful off the ground. */
     private final Map<Integer, Long> foraged = new LinkedHashMap<>();
+
+    /** Walkers a save left behind, waiting for whoever comes back. See {@link #wake}. */
+    private final Map<Integer, WatchPlayer> resting = new LinkedHashMap<>();
     private final Map<Long, Animal> animals = new LinkedHashMap<>();
     private final Map<Long, Lure> lures = new LinkedHashMap<>();
     private final List<Spotlight> spotlights = new ArrayList<>();
@@ -248,6 +251,14 @@ public final class WatchGame implements Animal.Surroundings {
     public synchronized WatchPlayer join(int id, String name) {
         if (players.containsKey(id)) return null;
         if (players.size() >= Math.max(1, config.maxPlayers())) return null;
+
+        WatchPlayer resumed = wake(id, name);
+        if (resumed != null) {
+            players.put(id, resumed);
+            say(name + " picked up where they left off");
+            return resumed;
+        }
+
         double angle = rng.nextDouble() * Math.PI * 2;
         double radius = players.isEmpty() ? 0 : 4 + players.size() * 2.0;
         double x = Math.cos(angle) * radius;
@@ -260,6 +271,41 @@ public final class WatchGame implements Animal.Surroundings {
         player.satchel().add("blackberry", 3);
         players.put(id, player);
         say(name + " joined the walk");
+        return player;
+    }
+
+    /**
+     * The walker a save left behind for whoever this is, or {@code null}.
+     *
+     * <p><b>A saved player is a place kept, not a body standing there.</b> The
+     * first version of restoring a save put them straight into the party, and
+     * that was wrong twice over: they occupied a seat and counted against the
+     * cap while nobody was controlling them, and — because the server hands out
+     * ids from one and a save's first player <em>is</em> id one — the host's own
+     * connection collided with the ghost of itself and was turned away with
+     * "this walk is full". Hosting a saved world simply did not work.
+     *
+     * <p>So they wait here instead, and are woken by whoever arrives: by name
+     * if the name matches, and on a walk that only ever holds one person, by
+     * being the only one there is. Waking keeps their position and their
+     * satchel and takes the joiner's new id.
+     */
+    private WatchPlayer wake(int id, String name) {
+        WatchPlayer found = null;
+        for (WatchPlayer sleeper : resting.values()) {
+            if (sleeper.name().equals(name)) {
+                found = sleeper;
+                break;
+            }
+        }
+        if (found == null && config.maxPlayers() == 1 && resting.size() == 1) {
+            found = resting.values().iterator().next();
+        }
+        if (found == null) return null;
+        resting.remove(found.id());
+
+        WatchPlayer player = new WatchPlayer(id, name, found.x(), found.y(), found.z());
+        player.load(found.toMap());
         return player;
     }
 
@@ -929,8 +975,12 @@ public final class WatchGame implements Animal.Surroundings {
         List<Object> lureRows = new ArrayList<>();
         for (Lure lure : lures.values()) lureRows.add(lure.toMap());
         m.put("lures", lureRows);
+        // Everybody on the walk, and everybody the last save was still holding a
+        // place for — a friend who has not been back since should not lose
+        // their satchel because you played on without them.
         List<Object> playerRows = new ArrayList<>();
         for (WatchPlayer player : players.values()) playerRows.add(player.toMap());
+        for (WatchPlayer sleeper : resting.values()) playerRows.add(sleeper.toMap());
         m.put("players", playerRows);
         return m;
     }
@@ -950,14 +1000,12 @@ public final class WatchGame implements Animal.Surroundings {
         // with an empty satchel, however far you had walked and however much
         // you had picked up — the single most annoying possible bug in a game
         // about going for a walk and collecting things.
-        players.clear();
+        resting.clear();
         for (Map<String, Object> row : WatchJson.objects(m, "players")) {
             WatchPlayer player = new WatchPlayer(WatchJson.integer(row, "id", 1),
                     WatchJson.str(row, "n", "Walker"), 0, 0, 0);
             player.load(row);
-            if (players.size() < Math.max(1, config.maxPlayers())) {
-                players.put(player.id(), player);
-            }
+            resting.put(player.id(), player);
         }
         // Time passes while a save is on disk, and everything that grows should
         // know about it: this is what makes a tree planted last week a tree.
