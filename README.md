@@ -3062,7 +3062,32 @@ fit, which is what gives sharp biome borders over ground that never steps.
   ([`GrassField`](src/main/java/com/larsons/engine/watch/world/GrassField.java)) —
   every biome has its own band, from cropped tundra to waist-high prairie, and
   the blades sway on a wind field.
-- **Water** at height zero, with shallows, shores and fish in it.
+- **Water** at height zero, with shallows, shores and fish in it — and a
+  **floor you can walk on**. Hold <kbd>Shift</kbd> in the water and you sink;
+  hold <kbd>Ctrl</kbd> and you rise. Down there the world goes the colour of the
+  water and the view closes to a few metres, and your breath spends itself over
+  about forty seconds and then floats you back up. It does not kill you: this is
+  a game about looking at things, and the worst that should happen to somebody
+  who looked too long is having to surface. A submerged player also gets the
+  spawn ring sampled *in the water* and offered the biome's swimmers first,
+  which is what makes a lake bed somewhere to go rather than somewhere empty.
+- **Boats**, drawn up on shorelines
+  ([`Boats`](src/main/java/com/larsons/engine/watch/Boats.java)) — generated the
+  way the trails are, as a pure function of position and seed, so they are
+  genuinely *found*: they are on that beach before anybody has been there, and
+  every player in a party finds the same ones without exchanging a byte. Nine
+  and a half metres a second against a swimmer's two and a half. Where you leave
+  one is where everybody finds it afterwards, which is the only piece of a boat
+  that has to be state.
+- **Weather**
+  ([`Weather`](src/main/java/com/larsons/engine/watch/Weather.java)) — clear,
+  cloudy, drizzle, rain, storm, snow, fog and wind, rolled against the biome's
+  own climate so it does not snow in the tropics and it rains a great deal in a
+  rainforest. It is a **mechanic and not a filter**: each condition carries how
+  much is out, how close it lets you get and how far you can see, so a drizzle
+  brings the ground feeders out, a storm empties the sky, and **fog is the best
+  watching in the game** — the one hour a shy species will let you within twenty
+  metres. Like the clock, the host owns it, so a party shares one sky.
 
 ### Trees that grow, and cross
 
@@ -3107,6 +3132,17 @@ lives in.
 - Animals live in a ring around the party — spawned between 22 m and 95 m,
   simulated while anybody is near, forgotten past 170 m. A world with no edge
   cannot hold a population, and one chaffinch is not tellable from another.
+- **They stay in the half of the world they belong to.** A wander target is
+  chosen in the animal's own medium and a step that would leave it is refused,
+  so a fish does not swim up a hillside and a fox does not wade into a lake —
+  with an escape clause, because an animal *already* out of its medium may
+  always move back toward it, or the fix for one stuck case would create
+  another. Journeys also **time out**: the decision loop used to have no way out
+  of "wandering and not there yet", so anything that could not close the
+  distance wandered at it for the rest of the session, moving purposefully and
+  never arriving. Swimmers measure their depth down from the surface rather than
+  up from the bed, which is what stops a fish sitting inside the ground it is
+  over.
 
 **Stillness is the stat.** An animal judges you by an *apparent* distance that
 your own movement multiplies: standing still for nine seconds makes you seem
@@ -3185,6 +3221,20 @@ nearest first, at a level of detail that falls off with distance — which is
 what the pure-function generator buys: any chunk, on any thread, in any order,
 byte-identical every time.
 
+**Ground that has been built stays built.** A chunk walked away from moves into
+a least-recently-used cache sized from the heap this JVM was given
+([`ChunkMemory`](src/main/java/com/larsons/engine/graphics/ChunkMemory.java) — an
+eighth of it, at 96 KB a chunk, floored at 256 and capped at 12,288), and
+walking back into it is a map lookup rather than a regeneration. Before this,
+anything past the view radius was simply dropped: walking to the lake and back
+rebuilt the whole path there, on the very workers that should have been building
+the ground *ahead*, and pacing over one chunk boundary could regenerate the same
+ground indefinitely. On a machine with sixteen gigabytes in it, throwing that
+work away to save forty megabytes is the wrong trade by two orders of magnitude.
+The cache is only ever an optimisation — a chunk is a pure function of
+`(seed, x, y)`, so a miss is indistinguishable from a cache that was never there
+— which is why a small heap can have a small one and nothing else has to know.
+
 Drawing goes through one backend-neutral seam
 ([`MeshPass`](src/main/java/com/larsons/engine/graphics/MeshPass.java)). On the
 **OpenGL** backend a mesh becomes a VBO cached by identity and revision and the
@@ -3193,16 +3243,78 @@ backend the same triangles go through a painter's algorithm with no
 per-frame allocation. A texture pack recolours the first and fully textures the
 second from one set of files.
 
+Two things about that cache were quietly wrong, and both cost frames rather than
+correctness — which is why they lasted:
+
+- **A buffer is only re-usable at the origin it was filled at.** Vertices are
+  measured from their mesh's origin and the origin is applied by the matrix, so
+  when `GlMeshPass` deferred an upload past its per-frame cap it drew last
+  frame's vertices at this frame's origin. The dynamic mesh — animals, walkers,
+  feeders, everything built — is rebuilt each frame around the *player*, so the
+  whole lot shifted by however far you had walked and snapped back on the next
+  upload. Walls and platforms, which do not move at all, were where it showed.
+  Buffers now record their origin and a moved one is never deferred.
+- **Level of detail never reached the card.** The meshers stamped the chunk's
+  *data* revision — fixed at generation — into every mesh, and that is exactly
+  the number the backend compares to decide whether to re-upload. So a chunk
+  re-meshed at a finer LOD produced meshes the backend had already seen and
+  skipped: on the GPU path a chunk was drawn for ever at whatever detail it was
+  first built at, and walking toward a hillside never sharpened it. There is now
+  a mesh revision distinct from the data revision.
+
+The per-frame upload cap went from twelve to thirty-six at the same time. Twelve
+was chosen when a view held a few dozen chunks; at the distances a card actually
+holds, it turned "the ground arrives a frame late" into "the ground arrives four
+seconds late", with the world visibly assembling itself ahead of a walking
+player.
+
+### You, and what you are holding
+
+There is a **person** in this game and you can see them
+([`WalkerModel`](src/main/java/com/larsons/engine/watch/render/WalkerModel.java)):
+one articulated figure — legs that swing, arms that swing against them, a hat
+brim that reads at two hundred metres and a coat colour picked from your player
+id so eight people in one wood are eight people. It is drawn for everybody,
+including you in third person, sitting lower in the water and lower again on a
+thwart. In **first person** the same model supplies **hands**, built in the
+camera's own basis so they follow the view exactly, with a reach gesture when
+you pick something and whatever you are carrying in the right one.
+
+Everything you can pick up has a **model** too
+([`ItemModel`](src/main/java/com/larsons/engine/watch/render/ItemModel.java)) —
+one per kind, tinted per item — so a feeder shows what it was filled with from
+across a clearing, which matters because that is what decides what turns up at
+it.
+
+### One key for the thing in front of you
+
+Picking a bush, pulling a ripe crop, topping up a feeder and taking the oars
+used to be four keys, three of which failed silently at each other's targets —
+and you had no way of knowing which of the four you were standing at except by
+trying all of them. Now <kbd>E</kbd> does whatever is in reach, there is a
+**ring around it** saying which thing, and a line under the ring saying what
+would happen ([`WatchGame.pickTarget`](src/main/java/com/larsons/engine/watch/WatchGame.java)).
+What you picked up flashes under the crosshair rather than scrolling past in the
+chat log.
+
+The satchel screen is **two scrolling columns** — what you are carrying and what
+you could cook — with cursors, windows and bars. (It could not be scrolled at
+all before: the list drew until it ran out of panel and then stopped, so a
+satchel after an hour had a tail nobody could see.) <kbd>Enter</kbd> on an item
+puts it out on a feeder or plants it. A **compass** strip and a **breath meter**
+round it out; the breath only appears when you are spending it.
+
 ### Controls
 
-<kbd>WASD</kbd> walks, the mouse looks, <kbd>Shift</kbd> crouches,
+<kbd>WASD</kbd> walks, the mouse looks, <kbd>Shift</kbd> crouches on land and
+**dives** in water, <kbd>Ctrl</kbd> sprints on land and **rises** in water,
 <kbd>F5</kbd> goes third person. <kbd>Mouse 1</kbd> spots what you are looking
-at, <kbd>E</kbd> picks, <kbd>G</kbd> opens the book, <kbd>Tab</kbd> the
-satchel, <kbd>F</kbd> puts down a feeder, <kbd>R</kbd> plants, <kbd>C</kbd>
-cross-pollinates, <kbd>B</kbd> builds, <kbd>X</kbd> turns the piece,
-<kbd>V</kbd> casts and strikes, <kbd>L</kbd> leaves. All rebindable from
-**Controls (Key Binds)** in the walk's own lobby, which shows this game's keys
-rather than the engine's.
+at, <kbd>E</kbd> does whatever is in reach, <kbd>G</kbd> opens the book,
+<kbd>Tab</kbd> the satchel, <kbd>F</kbd> puts down a feeder, <kbd>R</kbd>
+plants, <kbd>C</kbd> cross-pollinates, <kbd>Y</kbd> boards and leaves a boat,
+<kbd>B</kbd> builds, <kbd>X</kbd> turns the piece, <kbd>V</kbd> casts and
+strikes, <kbd>L</kbd> leaves. All rebindable from **Controls (Key Binds)** in
+the walk's own lobby, which shows this game's keys rather than the engine's.
 
 ### Bringing your own art
 

@@ -1048,7 +1048,26 @@ public final class WatchGame implements Animal.Surroundings {
             double radius = SPAWN_NEAR + rng.nextDouble() * (SPAWN_FAR - SPAWN_NEAR);
             double x = host.x() + Math.cos(angle) * radius;
             double y = host.y() + Math.sin(angle) * radius;
-            AnimalDef def = pickSpecies(x, y);
+
+            // <b>A diver gets a wet ring and a wet species table.</b> Without
+            // this the sea floor is the emptiest place in the world, which is
+            // the exact opposite of what it should be: the ring around a player
+            // on a lake bed is still mostly the hillside above the waterline,
+            // so almost every point sampled is dry and almost every species
+            // offered is a land one — and both then fail the medium check
+            // below. Two nudges fix it, and neither of them puts anything
+            // anywhere it could not have been anyway.
+            boolean wantWater = host.submerged();
+            if (wantWater) {
+                for (int attempt = 0; attempt < 6; attempt++) {
+                    if (field.waterDepth(field.heightAt(x, y)) >= 1.0) break;
+                    double a = rng.nextDouble() * Math.PI * 2;
+                    double r = SPAWN_NEAR * 0.3 + rng.nextDouble() * SPAWN_NEAR;
+                    x = host.x() + Math.cos(a) * r;
+                    y = host.y() + Math.sin(a) * r;
+                }
+            }
+            AnimalDef def = wantWater ? pickAquatic(x, y) : pickSpecies(x, y);
             if (def == null) continue;
             double z = field.heightAt(x, y);
             double depth = field.waterDepth(z);
@@ -1079,19 +1098,41 @@ public final class WatchGame implements Animal.Surroundings {
      * by how rare it is and by whether it is awake at this hour.
      */
     public synchronized AnimalDef pickSpecies(double x, double y) {
-        WatchBiome biome = field.biomeAt(x, y);
-        List<AnimalDef> here = AnimalRegistry.inBiome(biome.key());
-        if (here.isEmpty()) return null;
+        return weightedPick(AnimalRegistry.inBiome(field.biomeAt(x, y).key()));
+    }
+
+    /**
+     * Which species turns up under water at a point.
+     *
+     * <p>The same weighting over a narrower table: the biome's own swimmers,
+     * and the fliers that fish, so a dive is a heron overhead as well as a
+     * shoal below. Falls back to the whole table when a biome has no swimmers
+     * at all rather than spawning nothing — an animal that fails the depth
+     * check costs one loop iteration, and a lake with nothing in it costs the
+     * feature.
+     */
+    private AnimalDef pickAquatic(double x, double y) {
+        List<AnimalDef> here = AnimalRegistry.inBiome(field.biomeAt(x, y).key());
+        List<AnimalDef> swimmers = new ArrayList<>();
+        for (AnimalDef def : here) {
+            if (def.aquatic()) swimmers.add(def);
+        }
+        return weightedPick(swimmers.isEmpty() ? here : swimmers);
+    }
+
+    /** One of a list, weighted by rarity and by whether it is awake now. */
+    private AnimalDef weightedPick(List<AnimalDef> candidates) {
+        if (candidates.isEmpty()) return null;
         WatchClock.Phase phase = clock.phase();
         double total = 0;
-        for (AnimalDef def : here) total += def.encounterWeight(phase);
+        for (AnimalDef def : candidates) total += def.encounterWeight(phase);
         if (total <= 0) return null;
         double roll = rng.nextDouble() * total;
-        for (AnimalDef def : here) {
+        for (AnimalDef def : candidates) {
             roll -= def.encounterWeight(phase);
             if (roll <= 0) return def;
         }
-        return here.get(here.size() - 1);
+        return candidates.get(candidates.size() - 1);
     }
 
     // --- Animal.Surroundings ---------------------------------------------------------

@@ -315,8 +315,10 @@ public class WatchScene extends AbstractScene {
         streamer.setViewRadius(gpu ? radius : Math.min(6, radius));
         streamer.setDetailRadius(gpu ? 4 : 1);
         streamer.setGrassRadius(gpu ? 3 : 1);
-        renderer.setFogRange(streamer.viewRadius() * WatchChunk.SIZE * 0.45,
-                streamer.viewRadius() * WatchChunk.SIZE * 1.02);
+        // The fog range is not set here: it is set every frame by
+        // `applyVisibility`, which starts from this ring and brings it in for
+        // the weather and the water. Setting it here as well would only mean a
+        // frame of the wrong number after every settings change.
     }
 
     // --- the tick --------------------------------------------------------------------
@@ -357,7 +359,11 @@ public class WatchScene extends AbstractScene {
         if (KeyBinds.pressed(input, GameAction.WATCH_SATCHEL)) {
             panel = Panel.SATCHEL;
             satchelIndex = 0;
+            satchelScroll = 0;
             recipeIndex = 0;
+            // Opens on what you are carrying, not on what you could cook: the
+            // question "what have I got" is asked ten times as often.
+            recipeColumn = false;
             return;
         }
         if (KeyBinds.pressed(input, GameAction.WATCH_BUILD)) {
@@ -388,6 +394,7 @@ public class WatchScene extends AbstractScene {
         }
         session.update(dt);
         syncClock();
+        noticePickups();
 
         streamer.update(px, py, dt);
         saveTimer += dt;
@@ -645,16 +652,64 @@ public class WatchScene extends AbstractScene {
     /**
      * What is in reach, and what E would do to it.
      *
-     * <p>Only asked of a locally-simulated game: it walks the flora, the grove
-     * and the crops, which a guest does not authoritatively have. Online the
-     * highlight comes from the same walk done on the host — see
-     * {@link WatchGame#pickTarget} — and until that arrives a guest simply gets
-     * no ring, which is honest rather than wrong.
+     * <p>Solo, the game itself answers, and its answer is the one E will act
+     * on. Online there is nobody to ask at frame rate — the host adjudicates
+     * the press when it arrives — so this walks the same candidates over what
+     * the client already has: the chunks it generated from the shared seed, and
+     * the grove, crops, feeders and boats the last world sync brought. It can
+     * be wrong about a bush somebody else has just stripped, which shows as a
+     * ring that turns out to be empty; that is a better failure than a game
+     * where the highlight only exists in single player.
      */
     private void reachPrompt() {
         WatchGame local = session.local();
-        inReach = local == null ? null : local.pickTarget(session.selfId());
+        inReach = local != null ? local.pickTarget(session.selfId()) : guessReach();
         if (inReach != null) prompt = inReach.prompt();
+    }
+
+    /** The client's own guess at what is in reach. See {@link #reachPrompt}. */
+    private WatchGame.Pickable guessReach() {
+        WatchView view = view();
+        double reachLimit = WatchGame.REACH;
+
+        WatchChunk chunk = streamer.chunkAt(px, py);
+        if (chunk != null) {
+            for (com.larsons.engine.watch.world.Flora.Bush bush : chunk.bushes()) {
+                if (!bush.ripe()) continue;
+                if (Math.hypot(bush.x() - px, bush.y() - py) > reachLimit) continue;
+                return new WatchGame.Pickable(WatchGame.Pickable.Kind.BUSH,
+                        bush.berry(), Forage.nameOf(bush.berry()), bush.x(), bush.y(),
+                        bush.z() + bush.radius() * 0.8, bush.radius());
+            }
+        }
+        for (TreeInstance tree : view.grove().near(px, py, reachLimit + 1.5)) {
+            if (!tree.fruiting() || tree.species().fruit() == null) continue;
+            return new WatchGame.Pickable(WatchGame.Pickable.Kind.TREE,
+                    tree.species().fruit(), Forage.nameOf(tree.species().fruit()),
+                    tree.x(), tree.y(), tree.z() + Math.max(1.4, tree.height() * 0.55),
+                    0.9);
+        }
+        for (Cultivation.Crop crop : view.crops().near(px, py, reachLimit)) {
+            if (!crop.ripe()) continue;
+            return new WatchGame.Pickable(WatchGame.Pickable.Kind.CROP, crop.seed(),
+                    Forage.nameOf(crop.seed()), crop.x(), crop.y(),
+                    crop.z() + crop.height(), 0.4);
+        }
+        for (Lure lure : view.lures()) {
+            if (Math.hypot(lure.x() - px, lure.y() - py) > reachLimit) continue;
+            return new WatchGame.Pickable(WatchGame.Pickable.Kind.FEEDER, lure.food(),
+                    Forage.nameOf(lure.food()) + " feeder", lure.x(), lure.y(),
+                    lure.z() + 1.2, 0.35);
+        }
+        if (boatId == 0) {
+            Boats.Boat boat = view.boats().nearest(streamer.field(), px, py,
+                    Boats.BOARD_RANGE);
+            if (boat != null) {
+                return new WatchGame.Pickable(WatchGame.Pickable.Kind.BOAT, "boat",
+                        "Rowing boat", boat.x(), boat.y(), boat.z() + 0.4, 1.6);
+            }
+        }
+        return null;
     }
 
     /** The verbs. Every one of them is a request; none of them changes anything here. */
@@ -807,8 +862,43 @@ public class WatchScene extends AbstractScene {
      */
     private void picked(String line) {
         say(line);
+        flash(line);
+    }
+
+    /** Put a line under the crosshair for {@link #FLASH_SECONDS}. */
+    private void flash(String line) {
         pickedName = line;
-        pickedFlash = 1.6;
+        pickedFlash = FLASH_SECONDS;
+    }
+
+    /** How long the pickup flash lasts, in seconds. */
+    private static final double FLASH_SECONDS = 1.6;
+
+    /** How much was in the satchel last frame. See {@link #noticePickups}. */
+    private int carried = -1;
+
+    /**
+     * Flash anything that turned up in the satchel we did not put there.
+     *
+     * <p>Online, a pick is a request and what comes back is a satchel with one
+     * more thing in it a few frames later — there is no local call to hang the
+     * flash off. Watching the total is the honest signal, and it catches cases
+     * a local hook would miss anyway: a recipe finishing, a fish landing.
+     *
+     * <p>Yields to a flash raised in the last fraction of a second, which is
+     * the solo path having already said something more specific about the same
+     * event.
+     */
+    private void noticePickups() {
+        int now = view().satchel().total();
+        if (carried >= 0 && now > carried && pickedFlash < FLASH_SECONDS - 0.2) {
+            List<String> keys = view().satchel().keys();
+            if (!keys.isEmpty()) {
+                flash("+" + (now - carried) + " "
+                        + Forage.nameOf(keys.get(keys.size() - 1)));
+            }
+        }
+        carried = now;
     }
 
     private void sendMove() {

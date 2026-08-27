@@ -100,9 +100,19 @@ public final class Boats {
     /**
      * Every boat within {@code radius} of a point.
      *
-     * <p>Walks the cells the radius touches and asks each for its boat, which
-     * is a couple of height samples per cell and nothing else — the same shape
-     * of query {@link com.larsons.engine.watch.world.Flora} answers for trees.
+     * <p>Two passes, and the second one is the interesting one. The first walks
+     * the cells the radius touches and asks each for the boat the seed put
+     * there, which is a couple of height samples per cell and nothing else —
+     * the same shape of query {@link com.larsons.engine.watch.world.Flora}
+     * answers for trees.
+     *
+     * <p>The second scans the boats somebody has <b>moved</b>, in full, because
+     * a moved boat is no longer in the cell that generated it and cell-walking
+     * cannot find it. That is the whole point of a boat: you row it across the
+     * lake and it is on the far side of the lake, five cells from where it
+     * started. The scan is over a map that holds one entry per boat anybody has
+     * ever rowed — a handful in a long session — so a linear pass is both
+     * cheaper than an index and impossible to get subtly wrong.
      */
     public List<Boat> near(TerrainField field, double x, double y, double radius) {
         List<Boat> out = new ArrayList<>();
@@ -112,12 +122,18 @@ public final class Boats {
         double r2 = radius * radius;
         for (long cy = ccy - reach; cy <= ccy + reach; cy++) {
             for (long cx = ccx - reach; cx <= ccx + reach; cx++) {
-                Boat boat = inCell(field, cx, cy);
+                Boat boat = generatedIn(field, cx, cy);
                 if (boat == null) continue;
                 double dx = boat.x() - x, dy = boat.y() - y;
                 if (dx * dx + dy * dy <= r2) out.add(boat);
             }
         }
+        moved.forEach((id, at) -> {
+            double dx = at.x() - x, dy = at.y() - y;
+            if (dx * dx + dy * dy <= r2) {
+                out.add(new Boat(id, at.x(), at.y(), at.z(), at.yaw(), true));
+            }
+        });
         return out;
     }
 
@@ -137,22 +153,27 @@ public final class Boats {
 
     /** The boat with an id, wherever it is, or {@code null} if there is none. */
     public Boat byId(TerrainField field, long id) {
-        return inCell(field, id >> 32, (int) (id & 0xFFFFFFFFL));
-    }
-
-    /**
-     * The boat in one cell, or {@code null}.
-     *
-     * <p>Deterministic and cheap: one hash decides whether the cell has a boat
-     * at all, a second places it, and only then does the terrain get sampled.
-     */
-    private Boat inCell(TerrainField field, long cx, long cy) {
-        long id = (cx << 32) ^ (cy & 0xFFFFFFFFL);
         Moved elsewhere = moved.get(id);
         if (elsewhere != null) {
             return new Boat(id, elsewhere.x(), elsewhere.y(), elsewhere.z(),
                     elsewhere.yaw(), true);
         }
+        return generatedIn(field, id >> 32, (int) (id & 0xFFFFFFFFL));
+    }
+
+    /**
+     * The boat the seed put in one cell, or {@code null}.
+     *
+     * <p>Deterministic and cheap: one hash decides whether the cell has a boat
+     * at all, a second places it, and only then does the terrain get sampled.
+     *
+     * <p>Answers {@code null} for a cell whose boat has been moved away, so a
+     * boat is never in two places at once. Where it went is {@link #near}'s
+     * second pass.
+     */
+    private Boat generatedIn(TerrainField field, long cx, long cy) {
+        long id = (cx << 32) ^ (cy & 0xFFFFFFFFL);
+        if (moved.containsKey(id)) return null;
         Random rng = new Random(seed * 0x9E3779B97F4A7C15L ^ id * 0xC2B2AE3D27D4EB4FL);
         if (rng.nextInt(ODDS_DENOMINATOR) != 0) return null;
 
