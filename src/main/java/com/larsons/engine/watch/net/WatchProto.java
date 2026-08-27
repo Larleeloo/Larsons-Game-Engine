@@ -151,10 +151,14 @@ public final class WatchProto {
      */
     public static Map<String, Object> state(long tick, double timeOfDay,
                                             List<WatchPlayer> players,
-                                            List<Animal> animals, List<Lure> lures) {
+                                            List<Animal> animals, List<Lure> lures,
+                                            Map<String, Object> sky) {
         Map<String, Object> m = msg("state");
         m.put("tick", tick);
         m.put("time", round(timeOfDay));
+        // The weather rides along with the clock, and for the same reason: one
+        // party, one sky. Four short fields per snapshot.
+        if (sky != null) m.put("sky", sky);
         List<Object> playerRows = new ArrayList<>();
         for (WatchPlayer p : players) playerRows.add(p.toSnapshot());
         m.put("players", playerRows);
@@ -244,11 +248,15 @@ public final class WatchProto {
 
     public static Map<String, Object> world(Map<String, Object> grove,
                                             Map<String, Object> crops,
-                                            Map<String, Object> built) {
+                                            Map<String, Object> built,
+                                            Map<String, Object> boats) {
         Map<String, Object> m = msg("world");
         m.put("grove", grove);
         m.put("crops", crops);
         m.put("built", built);
+        // Only the boats somebody has moved: every other boat in the world is a
+        // function of the seed, which both ends already have.
+        if (boats != null) m.put("boats", boats);
         return m;
     }
 

@@ -403,6 +403,110 @@ party spread across the map costs what it should.
 
 ---
 
+## 7a. The second round
+
+> A later pass, from playing it. Eleven items; three of them were bugs, and
+> the bugs are the ones worth reading about.
+
+### The three that were wrong
+
+**Built things jumped.** A mesh's vertices are measured from its own origin and
+the origin is applied by the model-view matrix, so a cached GPU buffer is only
+re-usable for a draw *at the origin it was filled at*. `GlMeshPass` compared the
+revision and not the origin, and deferred an upload when the frame was over its
+cap — and the dynamic mesh (animals, walkers, feeders, everything built) is
+rebuilt each frame around the *player's* position. So a deferred frame drew last
+frame's vertices at this frame's origin: the whole lot shifted by however far the
+player had moved and snapped back on the next upload. Walls and platforms, which
+do not move, were where it showed. Buffers now record their origin and a moved
+one is never deferred; the dynamic mesh's origin is also snapped to the metre so
+it changes on a step rather than on a frame.
+
+**Level of detail never reached the card.** The meshers stamped
+`chunk.revision()` — the chunk's *data* revision, fixed at generation — into
+every mesh they built. That is exactly the number a backend compares to decide
+whether to re-upload, so a chunk re-meshed at a finer LOD produced meshes the
+backend had already seen and skipped. On the GPU path a chunk was therefore drawn
+for ever at whatever detail it was first built at: walking toward a hillside never
+sharpened it, and the swaying grass never swayed. There is now a separate
+`WatchChunk.meshRevision`, bumped by `beginMesh()` before each re-mesh. The
+painter walks the arrays directly and had been right the whole time, which is
+why this survived so long on the machine it was written on.
+
+**Animals got stuck, and swam through hills.** Two causes behind one symptom.
+`Animal.decide`'s wander branch returned early whenever the target had not been
+reached, with no other exit — so anything that could not close the distance
+wandered at it for the rest of the session. And a swimmer's `altitude` was
+applied as a height *above the ground* when it meant a depth *below the
+surface*, which put a fish a quarter-metre inside whatever it was over,
+including hillsides it had wandered onto because nothing stopped it. Journeys
+now time out (`WANDER_TIMEOUT`) and stalls are noticed within a second and a
+half; targets are chosen in the medium the animal lives in; steps that would
+leave that medium are refused; anything *already* out of its medium may move
+toward it, which is what stops the fix creating a new stuck case; and altitude
+is clamped so nothing is ever inside the ground.
+
+### The eight that were missing
+
+| Asked for | Where |
+|---|---|
+| A player model, and hands in first person | `watch/render/WalkerModel` — one articulated figure with a gait, drawn for every player; `hands` builds the view model in the camera's basis |
+| Items with models, highlighted when picked up | `watch/render/ItemModel`; `WatchGame.pickTarget` → the ring and prompt in `WatchScene.drawReachHighlight` |
+| Weather events | `watch/Weather` — eight conditions, server-owned like the clock, in the snapshot's `sky` field |
+| Scroll through the entire inventory | `WatchScene.drawSatchel` — two scrolling columns with cursors, windows and bars |
+| Walk the sea floor, find underwater animals | `WatchScene.swim` (Space rises, Shift sinks); `WatchPlayer.breath`; `WatchGame.populate` samples a wet ring and a wet species table for a submerged player |
+| Findable boats | `watch/Boats` — generated on shorelines from the seed, like the trails; `watch/render/BoatModel` |
+| Terrain rendering, and permanence on a big machine | `graphics/ChunkMemory`; `ChunkStreamer`'s retained LRU cache; `GlMeshPass` upload and buffer budgets |
+| General UI quality of life | one key for whatever is in reach (`WatchGame.use`), a compass, a breath meter, a pickup flash, a weather line |
+
+### Ground that has been built stays built
+
+The streamer used to drop any chunk more than three outside the view radius, so
+walking to the lake and back rebuilt the whole path there — a few milliseconds
+of noise per chunk, on the very workers that should have been building the
+ground *ahead* of the player, and pacing over one chunk boundary could
+regenerate the same ground indefinitely. On a machine with sixteen gigabytes in
+it, throwing that work away to save forty megabytes is the wrong trade by two
+orders of magnitude.
+
+A chunk walked away from now moves into a least-recently-used cache sized from
+`Runtime.maxMemory()` (`ChunkMemory.chunkCacheBudget`, an eighth of the heap at
+96 KB a chunk, floored at 256 and capped at 12,288). Walking back is a map
+lookup. The cache is only ever an optimisation — a chunk is a pure function of
+`(seed, x, y)`, so a miss is indistinguishable from a cache that was never there
+— which is why a small heap can have a small one and nothing else has to know.
+`GlMeshPass` sizes its buffer ceiling from the same number, so the card is never
+what forces a re-mesh of ground the CPU still holds, and its per-frame upload
+cap went from twelve to thirty-six: twelve was chosen when a view held a few
+dozen chunks, and at the distances a card actually holds it turned "the ground
+arrives a frame late" into "the ground arrives four seconds late".
+
+### Weather is a mechanic, not a filter
+
+A rain overlay is easy and worth nothing. Each of the eight conditions carries
+three numbers the *simulation* reads — how much is out, how close it lets you
+get, and how far you can see — so fog is the best watching in the game and a
+storm is the worst, deliberately. The flush scale is applied once, in
+`WatchGame.disturbanceAt`, because it is a property of the air between you and
+the animal rather than of the animal; that is the same arithmetic as scaling a
+thousand species' flush distances and it happens in one place. The biome weights
+the roll, so walking north is a change in the weather as well as in the trees,
+and every number is interpolated across a 26-second transition so rain arrives
+as a thickening drizzle rather than appearing.
+
+### Fish live everywhere now
+
+`TerrainField` floods anything below the water line whatever biome it is in, so
+a canyon has pools and a desert has an oasis. The `FISH` family named seven
+biomes, which left thirteen worlds' worth of water with nothing living in it —
+invisible until there was a reason to dive to the bottom of it, and then the
+emptiest place in the game. Both swimming families now span the biomes that have
+water in them, which is all of them. This does not make fish common everywhere:
+`AnimalRegistry.biomesFor` gives each *species* a slice of its family's range, so
+what widened is which fish you find where.
+
+---
+
 ## 8. Tests
 
 `src/test/java/com/larsons/engine/watch/`
@@ -426,5 +530,21 @@ party spread across the map costs what it should.
 * `WatchClockTest` — the real-clock mapping, both directions.
 * `WatchSceneTest` — the mini game is on the launch strip, the scenes register,
   the lobby's menu offers what it should.
+* `WeatherTest` — it changes, it never changes into what is already up, a
+  desert does not snow and a tundra does, the transition is gradual, and it
+  round-trips through a snapshot.
+* `BoatsTest` — a world has boats, they are on shorelines, two players on one
+  seed find the same ones, and a boat rowed across a lake is on the far side of
+  the lake for everybody afterwards.
+* `AnimalMovementTest` — over a controlled shoreline: a walker covers ground
+  for four minutes and never wades out of its depth, a fish never leaves the
+  water or enters the bed, a stranded fish finds its way back, and nothing in a
+  spread across the registry ever ends up inside the ground.
+* `ChunkCacheTest` — ground walked away from is kept rather than rebuilt, the
+  cache honours its ceiling, a zero budget still plays, and a re-mesh bumps the
+  revision a backend keys its buffers on.
+* `DivingTest` — the server decides who is under water, the breath runs out and
+  comes back, an aquatic animal turns up for a diver, and the state reaches the
+  view both by snapshot and over the wire.
 * `WatchRenderTest` — a frame draws triangles, sorted far to near, and nothing
   behind the camera reaches the target.

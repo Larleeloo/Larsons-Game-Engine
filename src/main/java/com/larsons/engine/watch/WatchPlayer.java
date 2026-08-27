@@ -39,11 +39,26 @@ public final class WatchPlayer {
     private final int id;
     private final String name;
 
+    /** How long a lungful lasts, in seconds. */
+    public static final double BREATH_SECONDS = 42;
+
+    /** How fast a breath comes back at the surface, relative to how fast it goes. */
+    private static final double BREATH_RECOVERY = 4;
+
     private double x, y, z;
     private double yaw, pitch;
     private double stillness = 1;
     private boolean crouching;
     private double lastSpeed;
+
+    /** How much air is left, {@code 0}–{@code 1}. */
+    private double breath = 1;
+
+    /** Whether the player's head is under the water this tick. */
+    private boolean submerged;
+
+    /** The boat being rowed, or {@code 0}. */
+    private long boatId;
 
     private final Satchel satchel = new Satchel();
     private final Fishing rod;
@@ -79,6 +94,46 @@ public final class WatchPlayer {
 
     /** How settled the player is, {@code 0} (crashing about) – {@code 1} (still). */
     public double stillness() { return stillness; }
+
+    /**
+     * How much air is left, {@code 1} full to {@code 0} out.
+     *
+     * <p>The only resource in this game, and it is deliberately not a health
+     * bar: running out surfaces you, it does not kill you. The sea floor is
+     * somewhere to look at things, and a game about looking at things should
+     * not punish you for looking too long — it should just make you come up for
+     * air, which is what a person diving on a reef does anyway.
+     */
+    public double breath() { return breath; }
+
+    /** Whether their head is under water. */
+    public boolean submerged() { return submerged; }
+
+    /** Whether the breath has run out and they are being floated up. */
+    public boolean outOfBreath() { return breath <= 0; }
+
+    /** Which boat they are in, or {@code 0}. */
+    public long boatId() { return boatId; }
+
+    /** Whether they are rowing rather than walking. */
+    public boolean inBoat() { return boatId != 0; }
+
+    /** Take the oars of a boat. */
+    public void boardBoat(long id) { this.boatId = id; }
+
+    /** Step out of whatever they were in. */
+    public void leaveBoat() { this.boatId = 0; }
+
+    /** Say whether the head is under, and spend or recover the breath. */
+    public void setSubmerged(boolean under, double dt) {
+        this.submerged = under;
+        if (dt <= 0) return;
+        if (under) {
+            breath = Math.max(0, breath - dt / BREATH_SECONDS);
+        } else {
+            breath = Math.min(1, breath + dt * BREATH_RECOVERY / BREATH_SECONDS);
+        }
+    }
 
     /** What they are carrying. */
     public Satchel satchel() { return satchel; }
@@ -162,6 +217,9 @@ public final class WatchPlayer {
         m.put("p", pitch);
         m.put("st", stillness);
         if (crouching) m.put("c", true);
+        if (submerged) m.put("uw", true);
+        if (breath < 1) m.put("air", breath);
+        if (boatId != 0) m.put("boat", boatId);
         return m;
     }
 
@@ -180,6 +238,9 @@ public final class WatchPlayer {
         yaw = WatchJson.num(m, "yaw", yaw);
         pitch = WatchJson.num(m, "p", pitch);
         crouching = WatchJson.bool(m, "c", false);
+        submerged = WatchJson.bool(m, "uw", false);
+        breath = WatchJson.num(m, "air", 1);
+        boatId = WatchJson.big(m, "boat", 0);
         satchel.load(WatchJson.map(m, "bag"));
     }
 

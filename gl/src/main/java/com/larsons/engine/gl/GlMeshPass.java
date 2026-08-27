@@ -54,18 +54,33 @@ import static org.lwjgl.opengl.GL33C.*;
  */
 final class GlMeshPass implements MeshPass {
 
-    /** Meshes re-uploaded in one frame; the rest arrive over the next few. */
-    private static final int MAX_UPLOADS_PER_FRAME = 12;
+    /**
+     * Meshes re-uploaded in one frame; the rest arrive over the next few.
+     *
+     * <p>Raised from twelve. Twelve was chosen when a chunk's mesh was the only
+     * thing being uploaded and a view held a few dozen of them; at the render
+     * distances a card actually holds, walking into fresh terrain dirties far
+     * more than twelve at once, and a cap that low turned "the ground arrives a
+     * frame late" into "the ground arrives four seconds late" — the world
+     * visibly assembling itself ahead of a walking player. An upload is a
+     * {@code glBufferData} of a few tens of kilobytes; three dozen of them is
+     * well inside a frame on any card that has a mesh pass at all.
+     */
+    private static final int MAX_UPLOADS_PER_FRAME = 36;
 
     /**
      * Buffers kept before the least recently drawn is dropped.
      *
-     * <p>A long view is a few hundred chunks and a few dozen animals; this is
-     * several times that. It exists because video memory has no garbage
-     * collector, and a party that walks ten kilometres would otherwise leave a
-     * buffer on the card for every piece of ground they have looked at.
+     * <p>Video memory has no garbage collector, and a party that walks ten
+     * kilometres would otherwise leave a buffer on the card for every piece of
+     * ground they have looked at. But the ceiling should follow the machine:
+     * {@link ChunkMemory} turns the heap the JVM was given into how much world
+     * this process is willing to hold, and a buffer ceiling well above that
+     * count means the card is never the thing that forces a re-mesh of ground
+     * the CPU still has.
      */
-    private static final int MAX_BUFFERS = 4096;
+    private static final int MAX_BUFFERS = Math.max(4096,
+            com.larsons.engine.graphics.ChunkMemory.gpuBufferBudget());
 
     /** Bytes per vertex: three position floats, two texture floats, RGBA. */
     private static final int STRIDE = 5 * 4 + 4;
@@ -102,6 +117,27 @@ final class GlMeshPass implements MeshPass {
         int revision = Integer.MIN_VALUE;
         int vertexCount;
         int lastSeen;
+        /**
+         * The origin the vertices in this buffer are measured from.
+         *
+         * <p>Load-bearing, and the cause of a bug that took a while to name.
+         * Vertices are relative to their mesh's origin and the origin is applied
+         * by the model-view matrix each frame, so a buffer is only re-usable for
+         * a draw whose origin is the one it was filled at. The dynamic mesh —
+         * animals, walkers, feeders, everything built — is rebuilt each frame
+         * around the <em>player's</em> position, so its origin moves every frame
+         * a player walks. Reusing a stale buffer for it therefore did not draw
+         * one frame of slightly old positions; it drew the whole lot displaced
+         * by however far the player had moved since. Walls and platforms, which
+         * are otherwise perfectly still, visibly jumped a metre and back.
+         */
+        double originX = Double.NaN, originY = Double.NaN, originZ = Double.NaN;
+
+        /** Whether this buffer's contents can be drawn at a draw's origin. */
+        boolean matches(Draw draw) {
+            return originX == draw.originX() && originY == draw.originY()
+                    && originZ == draw.originZ();
+        }
     }
 
     @Override
@@ -244,19 +280,33 @@ final class GlMeshPass implements MeshPass {
     private void issue(Draw draw, Mat4 projection, EyeCamera eye) {
         Buffer buffer = buffers.computeIfAbsent(draw.key(), k -> new Buffer());
         buffer.lastSeen = frameStamp;
-        if (buffer.revision != draw.revision()) {
-            if (uploadsThisFrame >= MAX_UPLOADS_PER_FRAME) {
-                // Not this frame. A mesh whose buffer is stale but non-empty is
-                // drawn as it was — one frame of slightly old ground at the edge
-                // of the view, which nobody sees — and a mesh with no buffer at
-                // all simply waits, exactly as a chunk that has not finished
-                // meshing does.
-                if (buffer.vertexCount == 0) return;
-            } else {
+        boolean stale = buffer.revision != draw.revision();
+        boolean moved = !buffer.matches(draw);
+        if (stale || moved) {
+            if (uploadsThisFrame < MAX_UPLOADS_PER_FRAME) {
                 upload(buffer, draw);
                 uploadsThisFrame++;
+            } else if (moved || buffer.vertexCount == 0) {
+                // Over budget, and what is on the card cannot stand in for what
+                // was asked for. A mesh with no buffer yet simply waits, as a
+                // chunk that has not finished meshing does — and a mesh whose
+                // origin has moved waits too, because its cached vertices mean
+                // something else at the new origin. Drawing them there is worse
+                // than not drawing at all: that is what made walls jump.
+                //
+                // The one thing that may be deferred is a stale mesh at an
+                // unchanged origin — a chunk being re-meshed at a finer level
+                // of detail, where last frame's triangles are in exactly the
+                // right place and merely coarser, and one frame of them at the
+                // edge of the view is invisible.
+                return;
             }
         }
+        drawBuffer(buffer, draw, projection, eye);
+    }
+
+    /** Set the matrices for one buffer at a draw's origin and issue it. */
+    private void drawBuffer(Buffer buffer, Draw draw, Mat4 projection, EyeCamera eye) {
         if (buffer.vao < 0 || buffer.vertexCount == 0) return;
 
         // Vertices reach the card measured from the mesh's own origin, and the
@@ -315,6 +365,9 @@ final class GlMeshPass implements MeshPass {
                     STRIDE, 20);
             buffer.revision = draw.revision();
             buffer.vertexCount = count;
+            buffer.originX = draw.originX();
+            buffer.originY = draw.originY();
+            buffer.originZ = draw.originZ();
         } finally {
             glBindVertexArray(callersVao);
             MemoryUtil.memFree(data);

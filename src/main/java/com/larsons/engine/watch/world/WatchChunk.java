@@ -71,6 +71,25 @@ public final class WatchChunk implements Flora.Ground {
     private Mesh flora = Mesh.empty(0, 0, 0);
     private Mesh grass = Mesh.empty(0, 0, 0);
 
+    /**
+     * Which build of this chunk's <em>meshes</em> is current — bumped by
+     * {@link #beginMesh()} before every re-mesh, and stamped into every mesh
+     * built from it.
+     *
+     * <p>Distinct from {@link #revision()}, which identifies the chunk's
+     * <em>data</em> and never changes. Conflating the two was a quiet and
+     * expensive bug: the meshers stamped the chunk's data revision into every
+     * mesh, so a chunk re-meshed at a finer level of detail produced meshes
+     * whose revision the backend had already seen. {@code GlMeshPass} compares
+     * exactly that number to decide whether to re-upload, so on the GPU path a
+     * chunk was drawn for ever at whatever detail it was first built at:
+     * walking toward a hillside never sharpened it, and the swaying grass never
+     * swayed. The painter, which walks the mesh arrays directly and has no
+     * cache to invalidate, was right the whole time — which is why it went
+     * unnoticed on the machine it was developed on.
+     */
+    private int meshRevision;
+
     private WatchChunk(int cx, int cy, long revision, float[] heights, byte[] surfaces,
                        byte[] biomes, float[] water, WatchBiome dominant,
                        List<TreeInstance> trees, List<Flora.Bush> bushes,
@@ -355,6 +374,22 @@ public final class WatchChunk implements Flora.Ground {
 
     /** Whether this chunk has been meshed at all yet. */
     public boolean meshed() { return !ground.isEmpty() || !flora.isEmpty(); }
+
+    /**
+     * Which build of this chunk's meshes is current. Every mesh built from it
+     * carries this, and a backend re-uploads when it changes.
+     */
+    public int meshRevision() { return meshRevision; }
+
+    /**
+     * Claim the next mesh revision, before building a set of meshes.
+     *
+     * <p>Called by the streamer on the worker that is about to re-mesh, so the
+     * four meshes it then builds all carry the same, new number. Only ever
+     * compared against the previous value under the same key, so it has to be
+     * monotonic and nothing more.
+     */
+    public int beginMesh() { return ++meshRevision; }
 
     /** Hand over a freshly built set of meshes. Called on the building worker. */
     public void setMeshes(int lod, Mesh ground, Mesh water, Mesh flora, Mesh grass) {

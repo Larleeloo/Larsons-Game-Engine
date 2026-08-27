@@ -44,10 +44,13 @@ public enum AnimalFamily {
             lineages("Owlet", "Scops", "Barn Owl", "Eagle Owl", "Hawk Owl", "Pygmy Owl",
                     "Fish Owl")),
 
+    /** Ducks and their kin — on any water big enough to sit on. See {@link #FISH}. */
     WATERFOWL("waterfowl", "Waterfowl", Build.LARGE_BIRD, Motion.SWIM, Activity.DIURNAL,
             Diet.FOLIAGE, 0.48, 0.55, 0x4A5A6E, 0.22,
             biomes("wetland_marsh", "mangrove_coast", "tropics", "tundra_barrens",
-                    "boreal_taiga", "redwood_cathedral"),
+                    "boreal_taiga", "redwood_cathedral", "deciduous_forest",
+                    "pine_forest", "autumn_birchwood", "alpine_meadow", "savanna",
+                    "sunflower_prairie", "bamboo_thicket", "canyon_badlands"),
             lineages("Duck", "Goose", "Swan", "Teal", "Merganser", "Eider", "Pochard")),
 
     WADER("wader", "Waders", Build.WADING_BIRD, Motion.WALK, Activity.CREPUSCULAR,
@@ -194,10 +197,33 @@ public enum AnimalFamily {
             lineages("Swallowtail", "Fritillary", "Admiral", "Skipper", "Hairstreak",
                     "Morpho", "Birdwing")),
 
+    /**
+     * Fish, and they live <b>everywhere</b>.
+     *
+     * <p>This family used to name seven biomes, which read as a reasonable
+     * range for freshwater fish and was wrong about this particular world. The
+     * water table here is <em>global</em>: {@code TerrainField} floods anything
+     * below the water line whatever biome it is in, so a canyon has pools in it
+     * and a desert has an oasis and a prairie has a river through it. A family
+     * listed in seven biomes therefore left thirteen worlds' worth of water
+     * with nothing whatever living in it — and once there was a reason to dive
+     * to the bottom of it, that stopped being a detail nobody could see and
+     * became the emptiest place in the game.
+     *
+     * <p>Twenty entries rather than seven does not make fish common everywhere:
+     * {@link AnimalRegistry#biomesFor} gives each <em>species</em> a slice of
+     * its family's range, so what this widens is which fish you find where,
+     * not how many there are. A pike in a canyon pool and a grayling in a
+     * mountain tarn are different pages in the book.
+     */
     FISH("fish", "Freshwater Fish", Build.FISH_LIKE, Motion.SWIM, Activity.CATHEMERAL,
             Diet.INSECTS, 0.32, 0.66, 0x6A7A8A, 0.12,
             biomes("wetland_marsh", "mangrove_coast", "tropics", "boreal_taiga",
-                    "redwood_cathedral", "alpine_meadow", "mountains"),
+                    "redwood_cathedral", "alpine_meadow", "mountains", "pine_forest",
+                    "deciduous_forest", "rainforest", "amethyst_grove",
+                    "autumn_birchwood", "savanna", "canyon_badlands", "tundra_barrens",
+                    "bamboo_thicket", "mushroom_hollow", "sunflower_prairie",
+                    "crystal_highlands", "desert"),
             lineages("Trout", "Char", "Pike", "Perch", "Carp", "Minnow", "Grayling")),
 
     SPRITE("sprite", "Sprites", Build.ETHEREAL, Motion.HOVER, Activity.NOCTURNAL,

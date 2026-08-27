@@ -180,6 +180,7 @@ public final class WatchClient implements AutoCloseable {
                 view.loadWalkers(WatchJson.objects(message, "players"));
                 view.loadCreatures(WatchJson.objects(message, "animals"));
                 view.loadLures(WatchJson.objects(message, "lures"));
+                view.weather().load(WatchJson.map(message, "sky"));
             }
             case "party" -> {
                 // The party list is a superset of the snapshot's while somebody
@@ -201,6 +202,7 @@ public final class WatchClient implements AutoCloseable {
                 view.grove().load(WatchJson.map(message, "grove"));
                 view.crops().load(WatchJson.map(message, "crops"));
                 view.structure().load(WatchJson.map(message, "built"));
+                view.boats().load(WatchJson.map(message, "boats"));
             }
             case "info" -> view.say(WatchJson.str(message, "msg", ""));
             case "error" -> {

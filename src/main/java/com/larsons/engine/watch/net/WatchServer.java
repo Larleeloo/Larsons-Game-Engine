@@ -250,13 +250,13 @@ public final class WatchServer implements WatchGame.Sink {
 
     private void broadcastState() {
         toAll(WatchProto.state(tick, game.clock().timeOfDay(), game.players(),
-                game.animals(), game.lures()));
+                game.animals(), game.lures(), game.weather().toMap()));
         if (tick % WatchProto.WORLD_SYNC_TICKS == 0) sendWorld();
     }
 
     private void sendWorld() {
         toAll(WatchProto.world(game.grove().toMap(), game.crops().toMap(),
-                game.structure().toMap()));
+                game.structure().toMap(), game.boats().toMap()));
     }
 
     // --- requests -------------------------------------------------------------------
@@ -300,6 +300,24 @@ public final class WatchServer implements WatchGame.Sink {
             case "pick" -> {
                 String got = game.pick(id);
                 if (got != null) bagChanged(id, "Picked " + nameOf(got));
+            }
+
+            case "use" -> {
+                // Ask what is in reach before acting, so we know afterwards
+                // whether the world changed or only the satchel. A world sync
+                // is the whole grove, every crop, every built piece and every
+                // moved boat to every client — worth sending when a crop has
+                // been pulled or a boat taken, and absurd to send because
+                // somebody picked a berry, which is most presses of this key.
+                WatchGame.Pickable target = game.pickTarget(id);
+                String line = game.use(id);
+                if (line != null) {
+                    bagChanged(id, line);
+                    if (target != null && (target.kind() == WatchGame.Pickable.Kind.CROP
+                            || target.kind() == WatchGame.Pickable.Kind.BOAT)) {
+                        sendWorld();
+                    }
+                }
             }
 
             case "log" -> {
@@ -364,6 +382,17 @@ public final class WatchServer implements WatchGame.Sink {
                 Recipes.Station station = stationOf(WatchJson.str(message, "st", "HANDS"));
                 if (game.craft(id, recipe, station)) {
                     bagChanged(id, "Made " + recipe.name());
+                }
+            }
+
+            case "boat" -> {
+                String line = game.useBoat(id);
+                if (line != null) {
+                    conn.send(Protocol.encode(WatchProto.info(line)));
+                    // Where a boat is left is world state, not a snapshot
+                    // field: it is set once when somebody steps out and read
+                    // for ever after by everyone who walks that shore.
+                    sendWorld();
                 }
             }
 

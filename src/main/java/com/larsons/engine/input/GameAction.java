@@ -243,6 +243,8 @@ public enum GameAction {
             InputBinding.key(KeyEvent.VK_V)),
     WATCH_TURN_PIECE("watch_turn_piece", "Turn Build Piece", Category.WATCH,
             InputBinding.key(KeyEvent.VK_X)),
+    WATCH_BOAT("watch_boat", "Board / Leave Boat", Category.WATCH,
+            InputBinding.key(KeyEvent.VK_Y)),
     WATCH_LEAVE("watch_leave", "Leave Walk (while paused)", Category.WATCH,
             InputBinding.key(KeyEvent.VK_L));
 

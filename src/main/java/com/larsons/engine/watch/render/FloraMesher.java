@@ -52,7 +52,7 @@ public final class FloraMesher {
      */
     public static Mesh flora(WatchChunk chunk, int lod) {
         double ox = chunk.originX(), oy = chunk.originY();
-        Mesh.Builder mesh = Mesh.builder(ox, oy, 0, false, (int) chunk.revision());
+        Mesh.Builder mesh = Mesh.builder(ox, oy, 0, false, chunk.meshRevision());
         // Past the second level of detail a tree is a few pixels tall; it keeps
         // its trunk and its crown and loses the detail nobody can resolve.
         boolean detailed = lod <= 1;
@@ -329,7 +329,7 @@ public final class FloraMesher {
      */
     public static Mesh grass(WatchChunk chunk, GrassField field, double seconds) {
         double ox = chunk.originX(), oy = chunk.originY();
-        Mesh.Builder mesh = Mesh.builder(ox, oy, 0, false, (int) chunk.revision());
+        Mesh.Builder mesh = Mesh.builder(ox, oy, 0, false, chunk.meshRevision());
         float[] uv = new float[4];
         double[] wind = new double[2];
         double[] position = new double[2];

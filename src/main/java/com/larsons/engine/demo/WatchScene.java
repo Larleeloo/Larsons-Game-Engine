@@ -9,6 +9,7 @@ import com.larsons.engine.input.InputManager;
 import com.larsons.engine.input.KeyBinds;
 import com.larsons.engine.input.Pointer;
 import com.larsons.engine.scene.AbstractScene;
+import com.larsons.engine.watch.Boats;
 import com.larsons.engine.watch.Cultivation;
 import com.larsons.engine.watch.Fishing;
 import com.larsons.engine.watch.Forage;
@@ -21,15 +22,17 @@ import com.larsons.engine.watch.WatchGame;
 import com.larsons.engine.watch.WatchPlayer;
 import com.larsons.engine.watch.WatchStore;
 import com.larsons.engine.watch.WatchView;
+import com.larsons.engine.watch.Weather;
 import com.larsons.engine.watch.build.BuildPiece;
 import com.larsons.engine.watch.build.Structure;
-import com.larsons.engine.watch.life.AnimState;
-import com.larsons.engine.watch.life.AnimalModel;
 import com.larsons.engine.watch.life.AnimalModels;
 import com.larsons.engine.watch.net.WatchSession;
+import com.larsons.engine.watch.render.BoatModel;
 import com.larsons.engine.watch.render.FloraMesher;
+import com.larsons.engine.watch.render.ItemModel;
 import com.larsons.engine.watch.render.Mesh;
 import com.larsons.engine.watch.render.Shapes;
+import com.larsons.engine.watch.render.WalkerModel;
 import com.larsons.engine.watch.render.WatchRenderer;
 import com.larsons.engine.watch.world.ChunkStreamer;
 import com.larsons.engine.watch.world.TerrainField;
@@ -43,6 +46,7 @@ import java.awt.Color;
 import java.awt.Font;
 import java.util.ArrayList;
 import java.util.List;
+import java.util.Map;
 
 /**
  * The walk itself.
@@ -92,6 +96,31 @@ public class WatchScene extends AbstractScene {
     /** How far behind the player the third-person camera sits, in metres. */
     private static final double THIRD_PERSON_BACK = 4.2;
 
+    /** How fast a swimmer rises or sinks, in metres per second. */
+    private static final double DIVE_SPEED = 2.2;
+
+    /** How fast a swimmer moves horizontally, in metres per second. */
+    private static final double SWIM_SPEED = 2.4;
+
+    /**
+     * How far under the surface a floating swimmer's feet sit, in metres.
+     *
+     * <p>Chest-deep: {@link WalkerModel#HEIGHT} is 1.78 and the eye is at 1.68,
+     * so a swimmer whose feet are 1.2 below the waterline has their head above
+     * it, which is what "swimming" has to look like before diving means
+     * anything.
+     */
+    private static final double FLOAT_DEPTH = 1.2;
+
+    /** How far a player's eyes have to be under water to count as submerged. */
+    private static final double SUBMERGED_MARGIN = 0.05;
+
+    /** How much slower everything is under water. */
+    private static final double UNDERWATER_DRAG = 0.55;
+
+    /** How far the fog closes in under water, as a share of the surface range. */
+    private static final double UNDERWATER_VISIBILITY = 0.16;
+
     /** How often the client tells the host where it is, in seconds. */
     private static final double MOVE_INTERVAL = 1 / 20.0;
 
@@ -109,6 +138,22 @@ public class WatchScene extends AbstractScene {
     private static final Font HUD_BOLD = new Font("SansSerif", Font.BOLD, 15);
     private static final Font HUD_SMALL = new Font("SansSerif", Font.PLAIN, 12);
     private static final Font TITLE_FONT = new Font("SansSerif", Font.BOLD, 22);
+
+    /**
+     * The buffer keys for the two meshes that are not a chunk.
+     *
+     * <p><b>Out at the bottom of the range, and not {@code 1} and {@code 2}.</b>
+     * A chunk's four meshes are keyed {@code chunkKey * 4 + n}, and
+     * {@code WatchChunk.key(0, 0)} is zero — so the chunk the world origin
+     * falls in owns keys 0 through 3, and the small numbers these two started
+     * with collided with its flora and its grass. Two meshes sharing one buffer
+     * re-upload over the top of each other every frame, which is the exact cost
+     * the buffer cache exists to avoid, on the one chunk every player starts
+     * standing in.
+     */
+    private static final long DYNAMIC_KEY = Long.MIN_VALUE;
+
+    private static final long VIEW_MODEL_KEY = Long.MIN_VALUE + 1;
 
     /** Which overlay is up, if any. */
     private enum Panel { NONE, SATCHEL, BUILD, PAUSED }
@@ -132,18 +177,57 @@ public class WatchScene extends AbstractScene {
     private boolean crouching;
     private boolean thirdPerson;
 
+    /**
+     * How far the player's feet are below the waterline, in metres.
+     *
+     * <p>Zero on land and at the surface; up to the depth of the water when
+     * diving. This is the whole of the swimming state, and keeping it as a
+     * depth rather than as an absolute height is what makes it survive walking
+     * out of a lake onto a slope.
+     */
+    private double dive;
+
+    /** Whether the eyes are under the surface this frame. */
+    private boolean submerged;
+
+    /** How much air is left locally, so the meter is smooth between snapshots. */
+    private double breath = 1;
+
+    /** The boat being rowed, or {@code 0}. */
+    private long boatId;
+
+    /** The gait clock, in turns — what drives the walk cycle and the head bob. */
+    private double gait;
+
+    /** How fast the local player moved on the last frame, in metres per second. */
+    private double lastSpeed;
+
+    /** How far through a reach-out gesture the hands are, {@code 0}–{@code 1}. */
+    private double reach;
+
     private Panel panel = Panel.NONE;
     private int satchelIndex;
+    private int satchelScroll;
     private int recipeIndex;
     private int pieceIndex;
     private int pieceTurn;
     private boolean pieceInTree;
+
+    /** Which of a panel's two columns the keys are driving. */
+    private boolean recipeColumn;
 
     private double moveTimer;
     private double saveTimer;
     private int frame;
     private String prompt = "";
     private long lookingAtId;
+
+    /** What is in reach, worked out every frame so it can be highlighted. */
+    private WatchGame.Pickable inReach;
+
+    /** How long ago something was picked up, for the flash on the HUD. */
+    private double pickedFlash;
+    private String pickedName = "";
 
     public WatchScene(GameContext ctx) {
         this.ctx = ctx;
@@ -243,8 +327,10 @@ public class WatchScene extends AbstractScene {
         streamer.setViewRadius(gpu ? radius : Math.min(6, radius));
         streamer.setDetailRadius(gpu ? 4 : 1);
         streamer.setGrassRadius(gpu ? 3 : 1);
-        renderer.setFogRange(streamer.viewRadius() * WatchChunk.SIZE * 0.45,
-                streamer.viewRadius() * WatchChunk.SIZE * 1.02);
+        // The fog range is not set here: it is set every frame by
+        // `applyVisibility`, which starts from this ring and brings it in for
+        // the weather and the water. Setting it here as well would only mean a
+        // frame of the wrong number after every settings change.
     }
 
     // --- the tick --------------------------------------------------------------------
@@ -285,7 +371,11 @@ public class WatchScene extends AbstractScene {
         if (KeyBinds.pressed(input, GameAction.WATCH_SATCHEL)) {
             panel = Panel.SATCHEL;
             satchelIndex = 0;
+            satchelScroll = 0;
             recipeIndex = 0;
+            // Opens on what you are carrying, not on what you could cook: the
+            // question "what have I got" is asked ten times as often.
+            recipeColumn = false;
             return;
         }
         if (KeyBinds.pressed(input, GameAction.WATCH_BUILD)) {
@@ -296,6 +386,11 @@ public class WatchScene extends AbstractScene {
 
         steerLook(input);
         walk(dt, input);
+        // The reach gesture and the pickup flash decay on their own clock,
+        // which is the frame's rather than the simulation's: they are things
+        // the screen does, not things the world does.
+        reach = Math.max(0, reach - dt * 3.2);
+        pickedFlash = Math.max(0, pickedFlash - dt);
         aim();
         act(input);
         // `act` can end the walk: L leaves, and leaving closes the session and
@@ -311,6 +406,7 @@ public class WatchScene extends AbstractScene {
         }
         session.update(dt);
         syncClock();
+        noticePickups();
 
         streamer.update(px, py, dt);
         saveTimer += dt;
@@ -349,16 +445,39 @@ public class WatchScene extends AbstractScene {
     }
 
     /**
-     * Walk.
+     * Walk, swim, dive, or row.
      *
      * <p>No jumping and no fall damage: this is a game about looking at things,
      * and the movement it needs is the movement a person out for a walk has.
      * What it does have is <b>crouching</b>, because crouching is how you get
-     * near a wary animal — see {@link WatchPlayer#stillness()} — and swimming,
-     * because the lakes are where the fish are.
+     * near a wary animal — see {@link WatchPlayer#stillness()} — and three
+     * things that were promised and were not there:
+     *
+     * <ul>
+     *   <li><b>Diving.</b> The old version pinned a swimmer to sixty
+     *       centimetres under the surface and gave them no way down, so the sea
+     *       floor and everything on it were places you could see and never
+     *       reach. Now the crouch key sinks and the sprint key rises, and the
+     *       floor of a lake is somewhere you walk about on.</li>
+     *   <li><b>Rowing.</b> A boat is nine and a half metres a second across
+     *       water that is otherwise two and a half.</li>
+     *   <li><b>Breath.</b> Which runs out, and floats you up rather than
+     *       killing you. See {@link WatchPlayer#breath()}.</li>
+     * </ul>
      */
     private void walk(double dt, InputManager input) {
-        if (KeyBinds.pressed(input, GameAction.JUMP)) crouching = !crouching;
+        double ground = streamer.groundAt(px, py);
+        double surface = TerrainField.WATER_LEVEL;
+        double depth = Math.max(0, surface - ground);
+        boolean overWater = depth > 0.6;
+        boolean rowing = boatId != 0 && overWater;
+
+        // Crouch on land is a stance; in the water it is "go down". The key
+        // does the thing the situation calls for rather than being two keys.
+        if (KeyBinds.pressed(input, GameAction.JUMP) && !overWater && !rowing) {
+            crouching = !crouching;
+        }
+        if (overWater) crouching = false;
 
         double forward = 0, strafe = 0;
         if (KeyBinds.down(input, GameAction.MOVE_UP)) forward += 1;
@@ -366,30 +485,133 @@ public class WatchScene extends AbstractScene {
         if (KeyBinds.down(input, GameAction.MOVE_RIGHT)) strafe += 1;
         if (KeyBinds.down(input, GameAction.MOVE_LEFT)) strafe -= 1;
 
-        boolean running = KeyBinds.down(input, GameAction.SPRINT) && !crouching;
-        double speed = crouching ? WatchPlayer.CROUCH_SPEED
-                : running ? WatchPlayer.RUN_SPEED : WatchPlayer.WALK_SPEED;
+        boolean sprinting = KeyBinds.down(input, GameAction.SPRINT);
+        // In the water, up is up and crouch is down — the convention every
+        // game with swimming in it uses, and the opposite of what "jump" and
+        // "sprint" mean on land. Sprint is free while swimming (there is no
+        // sprinting in water) and crouch is the key a player's hand is already
+        // reaching for when they want to go lower.
+        boolean rising = KeyBinds.down(input, GameAction.JUMP);
+        boolean sinking = KeyBinds.down(input, GameAction.SPRINT);
 
+        double speed;
+        if (rowing) {
+            speed = Boats.ROW_SPEED;
+        } else if (overWater) {
+            speed = SWIM_SPEED * (submerged ? UNDERWATER_DRAG + 0.45 : 1);
+        } else {
+            speed = crouching ? WatchPlayer.CROUCH_SPEED
+                    : sprinting && !crouching ? WatchPlayer.RUN_SPEED
+                    : WatchPlayer.WALK_SPEED;
+        }
+
+        double startX = px, startY = py;
         double length = Math.hypot(forward, strafe);
         if (length > 0) {
             forward /= length;
             strafe /= length;
             // Forward is where the eye is looking, flattened onto the ground —
-            // walking is not affected by looking up at a bird.
-            double fx = Math.sin(yaw), fy = -Math.cos(yaw);
+            // walking is not affected by looking up at a bird. Under water it
+            // is not flattened: swimming where you are looking is the whole
+            // point of being able to look down.
+            double fx, fy;
+            if (submerged) {
+                double cp = Math.cos(pitch);
+                fx = Math.sin(yaw) * cp;
+                fy = -Math.cos(yaw) * cp;
+                double flat = Math.hypot(fx, fy);
+                if (flat > 1e-6) {
+                    fx /= flat;
+                    fy /= flat;
+                }
+                // Looking down and swimming forward should take you down.
+                dive += Math.sin(-pitch) * forward * speed * dt;
+            } else {
+                fx = Math.sin(yaw);
+                fy = -Math.cos(yaw);
+            }
             double rx = Math.cos(yaw), ry = Math.sin(yaw);
             px += (fx * forward + rx * strafe) * speed * dt;
             py += (fy * forward + ry * strafe) * speed * dt;
         }
 
-        double ground = streamer.groundAt(px, py);
-        boolean wading = ground < TerrainField.WATER_LEVEL;
-        double target = wading ? TerrainField.WATER_LEVEL - 0.6 : ground;
+        // A boat cannot be rowed onto the grass. Refusing the step rather than
+        // teleporting the player back is what keeps a boat nosed into a bank
+        // rather than beached in a field.
+        if (rowing && streamer.groundAt(px, py) > surface - 0.35) {
+            px = startX;
+            py = startY;
+        }
+
+        lastSpeed = Math.hypot(px - startX, py - startY) / Math.max(1e-6, dt);
+        gait += lastSpeed * dt * 0.55;
+        gait -= Math.floor(gait);
+
+        if (rowing) {
+            // Sitting in the boat: the body rides on the waterline whatever the
+            // bed is doing under it.
+            dive = 0;
+            smoothedGround = surface - Boats.DECK;
+            pz = smoothedGround;
+            submerged = false;
+            breath = Math.min(1, breath + dt * 4 / WatchPlayer.BREATH_SECONDS);
+            return;
+        }
+
+        if (overWater) {
+            swim(dt, depth, sinking, rising, ground, surface);
+            return;
+        }
+
+        // Back on dry land: shed whatever depth was left, and follow the ground.
+        dive = 0;
+        submerged = false;
+        breath = Math.min(1, breath + dt * 4 / WatchPlayer.BREATH_SECONDS);
         // Eased rather than snapped: on a two-metre grid the ground under a
         // walker changes by tens of centimetres a step, and a camera that
         // tracked it exactly would jolt with every one of them.
-        smoothedGround += (target - smoothedGround) * Math.min(1, dt * STEP_SMOOTHING);
+        smoothedGround += (ground - smoothedGround) * Math.min(1, dt * STEP_SMOOTHING);
         pz = smoothedGround;
+    }
+
+    /**
+     * In the water: float, sink, rise, and run out of air.
+     *
+     * <p>{@link #dive} is how far below the waterline the feet are, so the
+     * whole of swimming is a number between {@code FLOAT_DEPTH} — head out,
+     * treading water — and the depth of the water, which is standing on the
+     * bed. Every other part of the state falls out of that one number, which is
+     * why walking out of a lake onto a slope needs no special case: the depth
+     * simply stops applying.
+     */
+    private void swim(double dt, double depth, boolean sinking, boolean rising,
+                      double ground, double surface) {
+        double floor = Math.max(0, depth);
+        if (sinking) dive += DIVE_SPEED * dt;
+        if (rising) dive -= DIVE_SPEED * dt;
+        // Out of air: come up, whatever the keys say. Not a death, and not a
+        // fade to black — the game is about looking at things, and the worst
+        // that should happen to somebody who looked too long is that they have
+        // to surface and go back down.
+        if (breath <= 0) dive -= DIVE_SPEED * 1.3 * dt;
+        // Nobody sinks by standing still, and nobody floats up out of a dive
+        // they meant: the drift toward the surface is gentle and only applies
+        // when the player is not asking for anything.
+        if (!sinking && !rising && breath > 0) {
+            dive += (Math.min(FLOAT_DEPTH, floor) - dive) * Math.min(1, dt * 0.55);
+        }
+        dive = Math.max(0, Math.min(floor, dive));
+
+        smoothedGround = surface - dive;
+        // Standing on the bed rather than hovering above it: when the dive has
+        // reached the floor, this is exactly `ground`.
+        pz = Math.max(ground, smoothedGround);
+
+        double eyeZ = pz + (crouching ? 1.10 : 1.68);
+        submerged = eyeZ < surface - SUBMERGED_MARGIN;
+        breath = submerged
+                ? Math.max(0, breath - dt / WatchPlayer.BREATH_SECONDS)
+                : Math.min(1, breath + dt * 4 / WatchPlayer.BREATH_SECONDS);
     }
 
     /**
@@ -409,6 +631,10 @@ public class WatchScene extends AbstractScene {
     private void aim() {
         lookingAtId = 0;
         prompt = "";
+        // Cleared here and not only in reachPrompt: an animal under the
+        // crosshair returns early, and without this the ring stayed pulsing
+        // round a bush the player had walked away from ten seconds ago.
+        inReach = null;
         double cp = Math.cos(pitch);
         double dirX = Math.sin(yaw) * cp, dirY = -Math.cos(yaw) * cp, dirZ = Math.sin(pitch);
         double eyeZ = pz + (crouching ? 1.10 : 1.68);
@@ -431,7 +657,13 @@ public class WatchScene extends AbstractScene {
                 found = creature;
             }
         }
-        if (found == null) return;
+        if (found == null) {
+            // Nothing under the crosshair, but there may well be something at
+            // your feet. The reach prompt is the quieter of the two and loses
+            // to an animal, which is the right order for a game about animals.
+            reachPrompt();
+            return;
+        }
         lookingAtId = found.id();
         boolean known = view().guide().seen(found.def().key());
         prompt = known
@@ -439,15 +671,83 @@ public class WatchScene extends AbstractScene {
                 : "Something new  —  click to record it";
     }
 
+    /**
+     * What is in reach, and what E would do to it.
+     *
+     * <p>Solo, the game itself answers, and its answer is the one E will act
+     * on. Online there is nobody to ask at frame rate — the host adjudicates
+     * the press when it arrives — so this walks the same candidates over what
+     * the client already has: the chunks it generated from the shared seed, and
+     * the grove, crops, feeders and boats the last world sync brought. It can
+     * be wrong about a bush somebody else has just stripped, which shows as a
+     * ring that turns out to be empty; that is a better failure than a game
+     * where the highlight only exists in single player.
+     */
+    private void reachPrompt() {
+        WatchGame local = session.local();
+        inReach = local != null ? local.pickTarget(session.selfId()) : guessReach();
+        if (inReach != null) prompt = inReach.prompt();
+    }
+
+    /** The client's own guess at what is in reach. See {@link #reachPrompt}. */
+    private WatchGame.Pickable guessReach() {
+        WatchView view = view();
+        double reachLimit = WatchGame.REACH;
+
+        WatchChunk chunk = streamer.chunkAt(px, py);
+        if (chunk != null) {
+            for (com.larsons.engine.watch.world.Flora.Bush bush : chunk.bushes()) {
+                if (!bush.ripe()) continue;
+                if (Math.hypot(bush.x() - px, bush.y() - py) > reachLimit) continue;
+                return new WatchGame.Pickable(WatchGame.Pickable.Kind.BUSH,
+                        bush.berry(), Forage.nameOf(bush.berry()), bush.x(), bush.y(),
+                        bush.z() + bush.radius() * 0.8, bush.radius());
+            }
+        }
+        for (TreeInstance tree : view.grove().near(px, py, reachLimit + 1.5)) {
+            if (!tree.fruiting() || tree.species().fruit() == null) continue;
+            return new WatchGame.Pickable(WatchGame.Pickable.Kind.TREE,
+                    tree.species().fruit(), Forage.nameOf(tree.species().fruit()),
+                    tree.x(), tree.y(), tree.z() + Math.max(1.4, tree.height() * 0.55),
+                    0.9);
+        }
+        for (Cultivation.Crop crop : view.crops().near(px, py, reachLimit)) {
+            if (!crop.ripe()) continue;
+            return new WatchGame.Pickable(WatchGame.Pickable.Kind.CROP, crop.seed(),
+                    Forage.nameOf(crop.seed()), crop.x(), crop.y(),
+                    crop.z() + crop.height(), 0.4);
+        }
+        for (Lure lure : view.lures()) {
+            if (Math.hypot(lure.x() - px, lure.y() - py) > reachLimit) continue;
+            return new WatchGame.Pickable(WatchGame.Pickable.Kind.FEEDER, lure.food(),
+                    Forage.nameOf(lure.food()) + " feeder", lure.x(), lure.y(),
+                    lure.z() + 1.2, 0.35);
+        }
+        if (boatId == 0) {
+            Boats.Boat boat = view.boats().nearest(streamer.field(), px, py,
+                    Boats.BOARD_RANGE);
+            if (boat != null) {
+                return new WatchGame.Pickable(WatchGame.Pickable.Kind.BOAT, "boat",
+                        "Rowing boat", boat.x(), boat.y(), boat.z() + 0.4, 1.6);
+            }
+        }
+        return null;
+    }
+
     /** The verbs. Every one of them is a request; none of them changes anything here. */
     private void act(InputManager input) {
         if (KeyBinds.pressed(input, GameAction.WATCH_SPOT)) request("spot");
-        if (KeyBinds.pressed(input, GameAction.WATCH_PICK)) request("pick");
-        if (KeyBinds.pressed(input, GameAction.INTERACT)) request("harvest");
+        // WATCH_PICK only, and deliberately not INTERACT as well. Both ship
+        // bound to E, and while they sent different verbs — "pick" and
+        // "harvest" — one press doing both was merely odd. Now that one verb
+        // covers everything in reach, one press doing it twice is two berries
+        // off one bush and two frames of it on the wire.
+        if (KeyBinds.pressed(input, GameAction.WATCH_PICK)) request("use");
         if (KeyBinds.pressed(input, GameAction.WATCH_PLANT)) request("plant");
         if (KeyBinds.pressed(input, GameAction.WATCH_CROSS)) request("cross");
         if (KeyBinds.pressed(input, GameAction.WATCH_FEEDER)) request("lure");
         if (KeyBinds.pressed(input, GameAction.WATCH_ROD)) request("rod");
+        if (KeyBinds.pressed(input, GameAction.WATCH_BOAT)) request("boat");
     }
 
     /**
@@ -466,20 +766,27 @@ public class WatchScene extends AbstractScene {
                 if (local != null) local.spot(me, 0);
                 else session.client().sendSpot(lookingAtId);
             }
-            case "pick" -> {
+            case "use" -> {
+                // The reach gesture plays whether or not anything came of it:
+                // reaching out and finding nothing is information too.
+                reach = 1;
                 if (local != null) {
-                    String got = local.pick(me);
-                    if (got != null) say("Picked " + Forage.nameOf(got));
+                    String line = local.use(me);
+                    if (line != null) picked(line);
                 } else {
-                    session.client().sendAction("pick");
+                    session.client().sendAction("use");
                 }
             }
-            case "harvest" -> {
+            case "boat" -> {
                 if (local != null) {
-                    String got = local.harvest(me);
-                    if (got != null) say("Harvested " + got);
+                    String line = local.useBoat(me);
+                    if (line != null) {
+                        say(line);
+                        WatchPlayer player = local.player(me);
+                        boatId = player == null ? 0 : player.boatId();
+                    }
                 } else {
-                    session.client().sendAction("harvest");
+                    session.client().sendAction("boat");
                 }
             }
             case "plant" -> {
@@ -570,12 +877,95 @@ public class WatchScene extends AbstractScene {
         view().say(line);
     }
 
+    /**
+     * Something went in the satchel: say so, and flash it on screen.
+     *
+     * <p>The chat log at the bottom right is where every event in this game has
+     * always gone, and it is the wrong place for the one event that happens
+     * fifty times an hour and that the player is looking at the middle of the
+     * screen for. A short flash under the crosshair costs one string and is
+     * where the eye already is.
+     */
+    private void picked(String line) {
+        say(line);
+        flash(line);
+    }
+
+    /** Put a line under the crosshair for {@link #FLASH_SECONDS}. */
+    private void flash(String line) {
+        pickedName = line;
+        pickedFlash = FLASH_SECONDS;
+    }
+
+    /** How long the pickup flash lasts, in seconds. */
+    private static final double FLASH_SECONDS = 1.6;
+
+    /** What was in the satchel last frame. See {@link #noticePickups}. */
+    private Map<String, Integer> carried;
+
+    /**
+     * Flash anything that turned up in the satchel we did not put there.
+     *
+     * <p>Online, a pick is a request and what comes back is a satchel with one
+     * more thing in it a few frames later — there is no local call to hang the
+     * flash off. Watching the contents is the honest signal, and it catches
+     * cases a local hook would miss anyway: a recipe finishing, a fish landing.
+     *
+     * <p><b>The whole map, not the total and the last key.</b> The satchel keeps
+     * insertion order and a second handful of blackberries does not reorder
+     * anything, so "the last key" is the last <em>new</em> kind, which after
+     * five minutes is almost never what was just picked. Diffing the counts
+     * names the right thing every time and costs a walk over a map with a few
+     * dozen entries in it, once a frame.
+     *
+     * <p>Yields to a flash raised in the last fraction of a second, which is
+     * the solo path having already said something more specific about the same
+     * event.
+     */
+    private void noticePickups() {
+        Map<String, Integer> now = view().satchel().contents();
+        if (carried != null && pickedFlash < FLASH_SECONDS - 0.2) {
+            String gained = null;
+            int most = 0;
+            for (Map.Entry<String, Integer> entry : now.entrySet()) {
+                int grew = entry.getValue() - carried.getOrDefault(entry.getKey(), 0);
+                if (grew > most) {
+                    most = grew;
+                    gained = entry.getKey();
+                }
+            }
+            if (gained != null) {
+                flash("+" + most + " " + Forage.nameOf(gained));
+                flashedKey = gained;
+            }
+        }
+        carried = now;
+    }
+
+    /**
+     * The item the hand should be holding, or {@code null}.
+     *
+     * <p>Whatever the last flash named, resolved back to a key — so the thing
+     * in your hand is the thing the screen just said you picked up, and the two
+     * cannot disagree.
+     */
+    private String flashedKey;
+
     private void sendMove() {
         if (session.online()) {
             session.client().sendMove(px, py, pz, yaw, pitch, crouching);
+            // The host decides whether that position is under water and what
+            // that does to the breath; adopt its answer rather than our own.
+            WatchView.Walker me = view().self();
+            if (me != null) {
+                breath = me.breath();
+                boatId = me.boatId();
+            }
         } else if (session.local() != null) {
             session.local().move(session.selfId(), px, py, pz, yaw, pitch, crouching,
                     MOVE_INTERVAL);
+            WatchPlayer me = session.local().player(session.selfId());
+            if (me != null) boatId = me.boatId();
         }
     }
 
@@ -595,22 +985,94 @@ public class WatchScene extends AbstractScene {
         }
     }
 
+    /**
+     * The satchel screen: two columns, both of which scroll.
+     *
+     * <p><b>The carrying list could not be scrolled at all.</b> It drew from the
+     * top of the panel until it ran out of room and then stopped, so a satchel
+     * with more than about twenty kinds in it — which is a satchel after an
+     * hour — simply had a tail nobody could see or reach. Everything
+     * <em>was</em> in there; the game just would not show it to you.
+     *
+     * <p>Now the left column is a proper list with a cursor, a scroll window
+     * and a bar, and ←/→ move between the two columns so the same up-and-down
+     * keys drive whichever one you are in. Enter on an item puts it out on a
+     * feeder or plants it, which is the other half of the fix: a list you can
+     * see to the bottom of but cannot act on is only half a list.
+     */
     private void updateSatchel(InputManager input) {
+        List<String> items = view().satchel().keys();
         List<Recipes.Recipe> recipes = Recipes.all();
-        if (KeyBinds.pressed(input, GameAction.MENU_DOWN)) recipeIndex++;
-        if (KeyBinds.pressed(input, GameAction.MENU_UP)) recipeIndex--;
-        recipeIndex = Math.floorMod(recipeIndex, Math.max(1, recipes.size()));
-        if (KeyBinds.pressed(input, GameAction.MENU_SELECT) && !recipes.isEmpty()) {
-            Recipes.Recipe recipe = recipes.get(recipeIndex);
-            if (session.local() != null) {
-                say(session.local().craft(session.selfId(), recipe, recipe.station())
-                        ? "Made " + recipe.name()
-                        : "Not enough for that — " + recipe.costLine());
-            } else {
-                session.client().sendCraft(recipe.output(), recipe.station().name());
+
+        if (KeyBinds.pressed(input, GameAction.MENU_LEFT)) recipeColumn = false;
+        if (KeyBinds.pressed(input, GameAction.MENU_RIGHT)) recipeColumn = true;
+
+        int step = 0;
+        if (KeyBinds.pressed(input, GameAction.MENU_DOWN)) step = 1;
+        if (KeyBinds.pressed(input, GameAction.MENU_UP)) step = -1;
+
+        if (recipeColumn) {
+            recipeIndex += step;
+            recipeIndex = Math.floorMod(recipeIndex, Math.max(1, recipes.size()));
+        } else {
+            satchelIndex += step;
+            satchelIndex = items.isEmpty() ? 0
+                    : Math.floorMod(satchelIndex, items.size());
+        }
+
+        if (KeyBinds.pressed(input, GameAction.MENU_SELECT)) {
+            if (recipeColumn && !recipes.isEmpty()) {
+                craft(recipes.get(recipeIndex));
+            } else if (!items.isEmpty()) {
+                useFromSatchel(items.get(Math.min(satchelIndex, items.size() - 1)));
             }
         }
         if (KeyBinds.pressed(input, GameAction.WATCH_SATCHEL)) panel = Panel.NONE;
+    }
+
+    private void craft(Recipes.Recipe recipe) {
+        if (session.local() != null) {
+            say(session.local().craft(session.selfId(), recipe, recipe.station())
+                    ? "Made " + recipe.name()
+                    : "Not enough for that — " + recipe.costLine());
+        } else {
+            session.client().sendCraft(recipe.output(), recipe.station().name());
+        }
+    }
+
+    /**
+     * Do the obvious thing with the item under the cursor.
+     *
+     * <p>Food goes on a feeder, a seed goes in the ground, and everything else
+     * says what it is for. Nothing here is a new verb — they are the ones F and
+     * R already send — it is only that they can now be aimed at a particular
+     * item instead of at whatever the satchel happened to list first.
+     */
+    private void useFromSatchel(String key) {
+        Forage.Item item = Forage.byKey(key);
+        if (item == null) return;
+        WatchGame local = session.local();
+        int me = session.selfId();
+        if (item.kind() == Forage.Kind.SEED) {
+            if (local != null) {
+                String line = local.plant(me, key);
+                say(line != null ? line : "You need a trowel and dry ground");
+            } else {
+                session.client().sendPlant(key);
+            }
+            return;
+        }
+        if (item.edible()) {
+            if (local != null) {
+                say(local.placeLure(me, key) != null
+                        ? "Put out " + item.name()
+                        : "You need a feeder, and dry ground to stand it on");
+            } else {
+                session.client().sendPlaceLure(key);
+            }
+            return;
+        }
+        say(item.name() + " — " + item.note());
     }
 
     private void updateBuild(InputManager input) {
@@ -690,9 +1152,37 @@ public class WatchScene extends AbstractScene {
         placeCamera();
 
         WatchBiome biome = streamer.biomeAt(px, py);
-        renderer.begin(target, eye, viewportWidth, viewportHeight, clock,
-                biome.skyRgb(), biome.fogRgb());
+        Weather weather = view().weather();
+        // The sky the world is drawn under, which is three things multiplied:
+        // the biome's own colour, the hour, and the weather.
+        int sky = weatherTint(biome.skyRgb(), weather);
+        int fog = weatherTint(biome.fogRgb(), weather);
+        if (submerged) {
+            // Under water everything is the water's colour and nothing is far
+            // away. That is not decoration: a sea floor drawn under a clear sky
+            // at a two-hundred-metre draw distance does not read as being under
+            // anything at all.
+            sky = underwaterTint(biome);
+            fog = sky;
+        }
+        renderer.begin(target, eye, viewportWidth, viewportHeight, clock, sky, fog);
+        applyVisibility(weather);
         if (frame == 2) applyDistanceSettings();
+
+        // <b>The moving meshes go first, and the order is not cosmetic.</b>
+        // Opaque geometry is order-independent under a depth buffer, so this
+        // costs nothing visually — but a backend bounds how many buffers it
+        // will re-specify in one frame, and these two are re-specified every
+        // frame by construction. Submitted after four hundred chunks, they are
+        // the ones that lose the race into fresh terrain, and a frame with no
+        // animals or no hands in it is far more noticeable than a frame with
+        // one hillside at the wrong level of detail.
+        renderer.submit(buildDynamicMesh(), DYNAMIC_KEY);
+        // The view model is its own mesh with its own key, because it is the
+        // one thing on screen that is measured from the camera rather than from
+        // the world and so has to be rebuilt whenever the camera turns — which
+        // is every frame, whether or not anything else moved.
+        if (!thirdPerson) renderer.submit(buildViewMesh(), VIEW_MODEL_KEY);
 
         for (WatchChunk chunk : streamer.chunks()) {
             long key = chunk.key();
@@ -701,10 +1191,10 @@ public class WatchScene extends AbstractScene {
             renderer.submit(chunk.grassMesh(), key * 4 + 2);
             renderer.submit(chunk.waterMesh(), key * 4 + 3);
         }
-        renderer.submit(buildDynamicMesh(), 1);
         renderer.flush(target);
 
-        drawHud(target, biome);
+        drawWeatherOverlay(target, weather);
+        drawHud(target, biome, weather);
         switch (panel) {
             case SATCHEL -> drawSatchel(target);
             case BUILD -> drawBuild(target);
@@ -713,9 +1203,64 @@ public class WatchScene extends AbstractScene {
         }
     }
 
+    /**
+     * How far the fog lets you see this frame.
+     *
+     * <p>The streamer's ring decides the ceiling; the weather and the water
+     * bring it in. Applied every frame rather than only when the setting
+     * changes, because the weather is always halfway through changing.
+     */
+    private void applyVisibility(Weather weather) {
+        double reach = streamer.viewRadius() * WatchChunk.SIZE;
+        double scale = weather.visibility();
+        if (submerged) scale = Math.min(scale, UNDERWATER_VISIBILITY);
+        renderer.setFogRange(reach * 0.45 * scale, reach * 1.02 * scale);
+    }
+
+    /** A biome colour, pushed toward the weather's own grey. */
+    private static int weatherTint(int rgb, Weather weather) {
+        double dim = 1 - (1 - weather.visibility()) * 0.45;
+        int r = (int) (((rgb >> 16) & 0xFF) * dim);
+        int g = (int) (((rgb >> 8) & 0xFF) * dim);
+        int b = (int) ((rgb & 0xFF) * dim);
+        // Weather greys the sky as well as darkening it: a storm is not a
+        // night, it is a flat white-grey lid.
+        int grey = (r + g + b) / 3;
+        double flat = (1 - weather.visibility()) * 0.5;
+        r = (int) (r + (grey - r) * flat);
+        g = (int) (g + (grey - g) * flat);
+        b = (int) (b + (grey - b) * flat);
+        return (r << 16) | (g << 8) | b;
+    }
+
+    /**
+     * The colour of being under water, blended toward this biome's own haze so
+     * a tropical lagoon and a peat tarn are not the same green.
+     */
+    private static int underwaterTint(WatchBiome biome) {
+        int water = WatchMaterials.shade(WatchMaterial.WATER);
+        int haze = biome.fogRgb();
+        int r = (int) ((((water >> 16) & 0xFF) * 0.72 + ((haze >> 16) & 0xFF) * 0.14));
+        int g = (int) ((((water >> 8) & 0xFF) * 0.78 + ((haze >> 8) & 0xFF) * 0.14));
+        int b = (int) (((water & 0xFF) * 0.88 + (haze & 0xFF) * 0.14));
+        return (Math.min(255, r) << 16) | (Math.min(255, g) << 8) | Math.min(255, b);
+    }
+
+    /** How high the local player's eyes are above their feet, in metres. */
+    private double eyeHeight() {
+        return crouching ? 1.10 : 1.68;
+    }
+
     private void placeCamera() {
         eye.setViewport(viewportWidth, viewportHeight);
-        double eyeHeight = crouching ? 1.10 : 1.68;
+        double eyeHeight = eyeHeight();
+        // A head bob, at a fifth of the amplitude a shooter would use. Enough
+        // that walking feels like walking; little enough that nobody watching a
+        // bird through it notices.
+        if (!thirdPerson) {
+            eyeHeight += Math.sin(gait * Math.PI * 4) * 0.028
+                    * Math.min(1, lastSpeed / WatchPlayer.WALK_SPEED);
+        }
         if (thirdPerson) {
             // Behind and a little above, and pulled up out of the ground if the
             // slope behind is steeper than the camera arm.
@@ -741,35 +1286,84 @@ public class WatchScene extends AbstractScene {
      */
     private Mesh buildDynamicMesh() {
         WatchView view = view();
-        Mesh.Builder mesh = Mesh.builder(px, py, 0, false, frame);
+        // Snapped to the metre rather than taken from the player's exact
+        // position. The origin still moves — it has to, or the floats lose
+        // precision a long way out — but it moves in metre steps, so a backend
+        // caching by origin re-uploads on a step rather than on a frame. See
+        // the note on GlMeshPass.Buffer.originX for what happens when a cached
+        // buffer and a moved origin are allowed to disagree.
+        double ox = Math.floor(px), oy = Math.floor(py);
+        Mesh.Builder mesh = Mesh.builder(ox, oy, 0, false, frame);
         float[] uv = new float[4];
 
         for (WatchView.Creature creature : view.creatures()) {
             AnimalModels.Loaded model = AnimalModels.of(creature.def());
-            model.geometry().mesh(mesh, creature.def(), creature.x() - px,
-                    creature.y() - py, creature.z(), creature.yaw(),
+            model.geometry().mesh(mesh, creature.def(), creature.x() - ox,
+                    creature.y() - oy, creature.z(), creature.yaw(),
                     creature.state(), creature.phase(), 1, model.poses());
         }
 
-        // The other walkers: a simple figure, because what matters about them
-        // is where they are and which way they are looking.
-        for (WatchView.Walker walker : view.others()) {
-            drawWalker(mesh, walker, uv);
+        // Every walker, including this one: in third person you are looking at
+        // yourself, and in first person your own body is still what casts the
+        // shadow, sits in the boat, and shows above the water.
+        for (WatchView.Walker walker : view.walkers()) {
+            if (walker.id() == view.selfId() && !thirdPerson) continue;
+            drawWalker(mesh, walker, ox, oy);
+        }
+        if (thirdPerson && view.self() == null) {
+            // Before the first snapshot there is no walker record for us, and
+            // the third-person camera would be looking at nothing.
+            drawSelf(mesh, ox, oy);
+        }
+
+        // The boats: every one within the view, wherever the seed put it or
+        // whoever left it there.
+        //
+        // A boat somebody is <em>in</em> is drawn at that person rather than at
+        // its mooring, because that is where it is. The store only learns where
+        // a boat has got to when somebody steps out of it — which is the right
+        // thing to persist and exactly the wrong thing to draw from, since a
+        // rower would otherwise glide across the lake while their boat sat on
+        // the beach they left.
+        double boatReach = streamer.viewRadius() * WatchChunk.SIZE;
+        for (Boats.Boat boat
+                : view.boats().near(streamer.field(), px, py, boatReach)) {
+            WatchView.Walker rower = rowerOf(view, boat.id());
+            double bx = boat.x(), by = boat.y(), byaw = boat.yaw();
+            if (rower != null) {
+                bx = rower.x();
+                by = rower.y();
+                byaw = rower.yaw();
+            }
+            BoatModel.boat(mesh, bx - ox, by - oy, boat.z(), byaw,
+                    (frame * 0.006 + boat.id() * 0.13) % 1);
+        }
+        // …and our own, which is in the party list but may not have reached the
+        // view yet, and whose position we know better than the last snapshot.
+        if (boatId != 0 && rowerOf(view, boatId) == null) {
+            Boats.Boat mine = view.boats().byId(streamer.field(), boatId);
+            if (mine != null) {
+                BoatModel.boat(mesh, px - ox, py - oy, mine.z(), yaw,
+                        (frame * 0.006 + boatId * 0.13) % 1);
+            }
         }
 
         for (Lure lure : view.lures()) {
             WatchMaterials.uv(WatchMaterial.PLANK, uv);
             int post = WatchMaterials.shade(WatchMaterial.BARK);
-            Shapes.prism(mesh, lure.x() - px, lure.y() - py, lure.z(), lure.z() + 1.1,
+            Shapes.prism(mesh, lure.x() - ox, lure.y() - oy, lure.z(), lure.z() + 1.1,
                     0.05, 0.05, 4, 0, uv, post, false);
             int tray = WatchMaterials.shade(lure.active()
                     ? WatchMaterial.PLANK : WatchMaterial.DARK_BARK);
-            Shapes.box(mesh, lure.x() - px, lure.y() - py, lure.z() + 1.15,
+            Shapes.box(mesh, lure.x() - ox, lure.y() - oy, lure.z() + 1.15,
                     0.26, 0.26, 0.05, 0, uv, tray);
             if (lure.active()) {
-                WatchMaterials.uv(WatchMaterial.BERRY, uv);
-                Shapes.blob(mesh, lure.x() - px, lure.y() - py, lure.z() + 1.24,
-                        0.14, 0.14, 0.06, uv, WatchMaterials.shade(WatchMaterial.BERRY));
+                // What is actually in it, rather than the same red blob however
+                // it was filled. A feeder is the one thing in this game whose
+                // contents somebody else needs to be able to read from twenty
+                // metres away, because it decides what turns up at it.
+                ItemModel.item(mesh, lure.food(), lure.x() - ox, lure.y() - oy,
+                        lure.z() + 1.20, 1.1, frame * 0.004);
             }
         }
 
@@ -779,19 +1373,25 @@ public class WatchScene extends AbstractScene {
                     ? WatchMaterial.DRY_GRASS : WatchMaterial.LUSH_GRASS);
             for (int i = 0; i < 4; i++) {
                 double a = i * Math.PI / 2 + 0.4;
-                Shapes.blade(mesh, crop.x() - px + Math.cos(a) * 0.12,
-                        crop.y() - py + Math.sin(a) * 0.12, crop.z(),
+                Shapes.blade(mesh, crop.x() - ox + Math.cos(a) * 0.12,
+                        crop.y() - oy + Math.sin(a) * 0.12, crop.z(),
                         crop.height(), 0.07, a, 0, 0, uv, green);
+            }
+            // A ripe crop wears its own seed head, so "ready" is something you
+            // can see across a clearing rather than something you walk up to.
+            if (crop.ripe()) {
+                ItemModel.item(mesh, crop.seed(), crop.x() - ox, crop.y() - oy,
+                        crop.z() + crop.height(), 1.0, 0);
             }
         }
 
         for (TreeInstance tree : view.grove().all()) {
-            FloraMesher.tree(mesh, tree, px, py, true);
+            FloraMesher.tree(mesh, tree, ox, oy, true);
         }
 
         for (Structure.Placement piece : view.structure().all()) {
             WatchMaterials.uv(piece.piece().material(), uv);
-            Shapes.box(mesh, piece.x() - px, piece.y() - py, piece.z(),
+            Shapes.box(mesh, piece.x() - ox, piece.y() - oy, piece.z(),
                     piece.piece().sizeX() / 2, piece.piece().sizeY() / 2,
                     piece.piece().sizeZ() / 2, piece.yaw(), uv,
                     WatchMaterials.shade(piece.piece().material()));
@@ -800,31 +1400,117 @@ public class WatchScene extends AbstractScene {
         return mesh.build();
     }
 
-    /** Another player: a body, a head, and a hat brim so they read at a distance. */
-    private void drawWalker(Mesh.Builder mesh, WatchView.Walker walker, float[] uv) {
-        double x = walker.x() - px, y = walker.y() - py;
-        double height = walker.crouching() ? 1.15 : 1.75;
-        WatchMaterials.uv(WatchMaterial.PLANK, uv);
-        int coat = WatchMaterials.shade(WatchMaterial.MOSS);
-        int skin = WatchMaterials.shade(WatchMaterial.CLAY);
-        int hat = WatchMaterials.shade(WatchMaterial.DRY_GRASS);
-        Shapes.box(mesh, x, y, walker.z() + height * 0.42, 0.16, 0.24, height * 0.34,
-                walker.yaw(), uv, coat);
-        Shapes.box(mesh, x, y, walker.z() + height * 0.86, 0.13, 0.13, 0.13,
-                walker.yaw(), uv, skin);
-        Shapes.box(mesh, x, y, walker.z() + height * 0.99, 0.30, 0.30, 0.02,
-                walker.yaw(), uv, hat);
-        for (int side = -1; side <= 1; side += 2) {
-            Shapes.box(mesh, x - Math.sin(walker.yaw()) * 0.02 + Math.cos(walker.yaw())
-                            * side * 0.09,
-                    y + Math.sin(walker.yaw()) * side * 0.09, walker.z() + height * 0.14,
-                    0.06, 0.06, height * 0.16, walker.yaw(), uv, coat);
+    /**
+     * One player, as a walking figure.
+     *
+     * <p>Was three boxes and a hat brim; is now {@link WalkerModel}, which has
+     * legs that swing and arms that swing against them. The gait phase is
+     * derived from the position rather than sent: a walker's own hash gives
+     * each person a different footfall, and the clock runs at the frame rate so
+     * nobody's legs step at twenty hertz because that is the snapshot rate.
+     */
+    private void drawWalker(Mesh.Builder mesh, WatchView.Walker walker,
+                            double ox, double oy) {
+        double x = walker.x() - ox, y = walker.y() - oy;
+        boolean me = walker.id() == view().selfId();
+        double speed = me ? lastSpeed : 1 - walker.stillness();
+        double phase = me ? gait : (frame * 0.02 + walker.id() * 0.37) % 1;
+        // <b>Nothing is subtracted for swimming.</b> A walker's z is where their
+        // feet are, and a diver's feet are already below the waterline — the
+        // dive is in that number, not on top of it. Passing the dive depth here
+        // as well drew a diver a second dive-depth down, through the lake bed,
+        // and buried a remote one a metre and a half into it. The one genuine
+        // offset is the boat, which lifts a rower onto the thwart.
+        double sunk = walker.inBoat() ? -Boats.DECK * 0.4 : 0;
+        WalkerModel.walker(mesh, x, y, walker.z(), walker.yaw(), walker.crouching(),
+                phase, speed * WatchPlayer.WALK_SPEED,
+                WalkerModel.coatFor(walker.id()), sunk);
+    }
+
+    /** Whoever is rowing a boat, or {@code null} if it is moored. */
+    private WatchView.Walker rowerOf(WatchView view, long boat) {
+        for (WatchView.Walker walker : view.walkers()) {
+            if (walker.boatId() == boat) {
+                // Our own position is a frame old in the view and current here;
+                // prefer the live one, which is what stops the boat we are
+                // rowing lagging a snapshot behind us.
+                if (walker.id() == view.selfId()) {
+                    return new WatchView.Walker(walker.id(), walker.name(), px, py, pz,
+                            yaw, pitch, walker.stillness(), walker.crouching(),
+                            walker.submerged(), walker.breath(), walker.boatId());
+                }
+                return walker;
+            }
         }
+        return null;
+    }
+
+    /** This player, before the first snapshot has told us where we are. */
+    private void drawSelf(Mesh.Builder mesh, double ox, double oy) {
+        WalkerModel.walker(mesh, px - ox, py - oy, pz, yaw, crouching, gait,
+                lastSpeed, WalkerModel.coatFor(session.selfId()),
+                boatId != 0 ? -Boats.DECK * 0.4 : 0);
+    }
+
+    /**
+     * The hands, and whatever is in them — <b>the only thing on screen built in
+     * the camera's frame rather than the world's.</b>
+     *
+     * <p>Its own mesh with its own key, because its origin is the eye: it moves
+     * and turns every frame whether or not the player does, and mixing it into
+     * the dynamic mesh would mean rebuilding a clearing's worth of animals
+     * every time somebody twitched the mouse.
+     */
+    private Mesh buildViewMesh() {
+        Mesh.Builder mesh = Mesh.builder(eye.x(), eye.y(), eye.z(), false, frame);
+        double sway = Math.min(1, lastSpeed / WatchPlayer.WALK_SPEED);
+        // Underwater the hands sweep rather than swing, which is a slower clock
+        // and a wider one; on land they follow the gait.
+        double bob = submerged ? (gait * 0.6) % 1 : gait;
+        WalkerModel.hands(mesh, 0, 0, 0, eye.dirX(), eye.dirY(), eye.dirZ(),
+                eye.rightX(), eye.rightY(), bob, submerged ? 0.6 : sway,
+                reach, WalkerModel.coatFor(session.selfId()));
+
+        // What is being carried, in the right hand, when there is something
+        // worth showing: a rod that is out, or the last thing picked up.
+        String held = heldItem();
+        if (held != null) {
+            double forward = WalkerModel.HAND_FORWARD + reach * 0.42 + 0.10;
+            double out = WalkerModel.HAND_SIDE;
+            double down = WalkerModel.HAND_DROP - reach * 0.16;
+            double[] up = new double[3];
+            WalkerModel.cameraUp(eye.dirX(), eye.dirY(), eye.dirZ(),
+                    eye.rightX(), eye.rightY(), up);
+            double upX = up[0], upY = up[1], upZ = up[2];
+            ItemModel.item(mesh, held,
+                    eye.dirX() * forward + eye.rightX() * out + upX * -down,
+                    eye.dirY() * forward + eye.rightY() * out + upY * -down,
+                    eye.dirZ() * forward + upZ * -down,
+                    1.0, Math.atan2(eye.dirX(), -eye.dirY()));
+        }
+        return mesh.build();
+    }
+
+    /**
+     * What the right hand is holding, or {@code null} for an empty one.
+     *
+     * <p>A rod that is out beats everything, because a cast line is the one
+     * piece of state in this game that a player has to be able to see they are
+     * in. Otherwise it is whatever was picked up last, for as long as the
+     * pickup flash lasts — which is the moment somebody actually wants to see
+     * what they got.
+     */
+    private String heldItem() {
+        WatchPlayer me = session.local() == null ? null
+                : session.local().player(session.selfId());
+        if (me != null && me.rod().active()) return "rod";
+        if (pickedFlash <= 0 || flashedKey == null) return null;
+        return view().satchel().has(flashedKey) ? flashedKey : null;
     }
 
     // --- the HUD ----------------------------------------------------------------------
 
-    private void drawHud(DrawTarget target, WatchBiome biome) {
+    private void drawHud(DrawTarget target, WatchBiome biome, Weather weather) {
         WatchView view = view();
         int pad = 16;
 
@@ -844,10 +1530,17 @@ public class WatchScene extends AbstractScene {
         // and it spends its life over a sky that is a different colour every
         // hour of the day.
         label(target, time, pad, pad + 38, HUD_FONT, HUD_INK);
+        // The weather, on the same terms as the clock and for the same reason:
+        // it decides what is out and how close it will let you get, so it has
+        // to be readable at a glance rather than inferred from the sky.
+        String sky = weather.describe();
+        label(target, sky + weatherNote(weather), pad, pad + 56, HUD_SMALL,
+                weather.visibility() < 0.6 ? HUD_WARN : HUD_INK);
         int points = view.guide().points();
         label(target, view.guide().discovered() + " / " + view.guide().total()
                         + " species · " + points + (points == 1 ? " pt" : " pts"),
-                pad, pad + 56, HUD_SMALL, HUD_ACCENT);
+                pad, pad + 74, HUD_SMALL, HUD_ACCENT);
+        drawCompass(target, pad, pad + 96);
 
         // Top right: the party.
         int right = viewportWidth - pad;
@@ -872,11 +1565,17 @@ public class WatchScene extends AbstractScene {
         target.fillRect(barX, barY, barW, barH, new Color(0, 0, 0, 140));
         target.fillRect(barX, barY, (int) (barW * stillness), barH,
                 stillness > 0.7 ? HUD_ACCENT : HUD_WARN);
-        String hint = crouching ? "Crouched — stay still and they will come back"
+        String hint = boatId != 0 ? "Rowing — Y to step out"
+                : crouching ? "Crouched — stay still and they will come back"
                 : "Stillness";
         label(target, hint, viewportHeight > 0
                 ? viewportWidth / 2 - target.textWidth(hint, HUD_SMALL) / 2 : 0,
                 barY - 6, HUD_SMALL, HUD_DIM);
+
+        // The breath, above the stillness and only when it matters. A bar that
+        // is full and always on screen is a bar nobody reads; one that appears
+        // the moment you put your head under is one nobody can miss.
+        if (breath < 0.999) drawBreath(target, barX, barY - 24, barW, barH);
 
         // Bottom left: the satchel, briefly.
         drawSatchelStrip(target, view.satchel(), pad, viewportHeight - pad);
@@ -892,7 +1591,9 @@ public class WatchScene extends AbstractScene {
         }
 
         drawSpotlights(target, view);
+        drawReachHighlight(target);
         drawRod(target, me);
+        drawPickedFlash(target);
 
         if (!prompt.isEmpty()) {
             label(target, prompt,
@@ -900,10 +1601,159 @@ public class WatchScene extends AbstractScene {
                     viewportHeight / 2 + 42, HUD_FONT, HUD_INK);
         }
         if (panel == Panel.NONE) {
-            String keys = "E pick · F feeder · R plant · C cross · V rod · B build "
-                    + "· Tab satchel · G guide";
+            String keys = "E use · F feeder · R plant · C cross · V rod · Y boat "
+                    + "· B build · Tab satchel · G guide";
             label(target, keys, pad, viewportHeight - pad - 22, HUD_SMALL,
                     new Color(150, 168, 152));
+        }
+    }
+
+    /** What the weather is doing to the watching, in a few words. */
+    private static String weatherNote(Weather weather) {
+        if (weather.flushScale() < 0.75) return "  ·  they will let you close";
+        if (weather.flushScale() > 1.1) return "  ·  everything is jumpy";
+        if (weather.activity() > 1.05) return "  ·  plenty about";
+        if (weather.activity() < 0.7) return "  ·  little about";
+        return "";
+    }
+
+    /**
+     * A compass strip, because a world with no edge has no landmarks either.
+     *
+     * <p>Eight points across a fixed width, sliding under a fixed marker. This
+     * is the cheapest possible orientation aid and the game badly wanted one:
+     * "the lake is north of the camp" is the only way anybody can describe
+     * where anything is, and before this there was no way to know which way
+     * north was.
+     */
+    private void drawCompass(DrawTarget target, int x, int y) {
+        int width = 190, height = 16;
+        target.fillRect(x, y - height + 4, width, height, new Color(0, 0, 0, 90));
+        String[] points = {"N", "NE", "E", "SE", "S", "SW", "W", "NW"};
+        for (int i = 0; i < points.length; i++) {
+            // Where this point sits relative to the way we are looking, in
+            // radians, wrapped into (−π, π].
+            double bearing = i * Math.PI / 4;
+            double delta = bearing - yaw;
+            delta = Math.atan2(Math.sin(delta), Math.cos(delta));
+            // Only the half-turn in front of us is on the strip.
+            if (Math.abs(delta) > Math.PI / 2) continue;
+            int at = (int) (x + width / 2.0 + delta / (Math.PI / 2) * (width / 2.0));
+            boolean cardinal = i % 2 == 0;
+            String text = points[i];
+            label(target, text, at - target.textWidth(text, HUD_SMALL) / 2, y,
+                    HUD_SMALL, cardinal ? HUD_INK : HUD_DIM);
+        }
+        target.fillRect(x + width / 2, y - height + 4, 1, height, HUD_ACCENT);
+    }
+
+    /** The breath meter — blue while there is air, amber while there is not. */
+    private void drawBreath(DrawTarget target, int x, int y, int width, int height) {
+        target.fillRect(x, y, width, height, new Color(0, 0, 0, 140));
+        Color ink = breath > 0.3 ? new Color(120, 190, 235) : HUD_WARN;
+        target.fillRect(x, y, (int) (width * breath), height, ink);
+        String text = breath <= 0 ? "Out of air — surfacing" : "Breath";
+        label(target, text, x + width / 2 - target.textWidth(text, HUD_SMALL) / 2,
+                y - 5, HUD_SMALL, breath <= 0 ? HUD_WARN : HUD_DIM);
+    }
+
+    /**
+     * A ring round whatever E would take.
+     *
+     * <p>The other half of {@link WatchGame#pickTarget}: the ring says
+     * <em>which</em> thing, the prompt says what would happen to it. Drawn in
+     * the same shape as a spotlight so the two read as one language, and dimmer
+     * so an animal somebody has pointed at always wins the eye.
+     */
+    private void drawReachHighlight(DrawTarget target) {
+        if (inReach == null || panel != Panel.NONE) return;
+        double[] point = new double[3];
+        if (!eye.project(inReach.x(), inReach.y(), inReach.z(), point)) return;
+        int radius = (int) Math.max(10,
+                eye.scaleAt(point[2]) * Math.max(0.25, inReach.radius()));
+        // A slow pulse, so it reads as live rather than as part of the scenery.
+        int alpha = (int) (110 + 60 * Math.sin(frame * 0.09));
+        target.drawOval((int) point[0] - radius, (int) point[1] - radius,
+                radius * 2, radius * 2, new Color(230, 240, 210, alpha), 2f);
+        // Four corner ticks, which is what makes a circle read as a selection
+        // rather than as a hoop somebody left in a tree.
+        int tick = Math.max(4, radius / 3);
+        Color ink = new Color(230, 240, 210, Math.min(255, alpha + 60));
+        target.fillRect((int) point[0] - radius, (int) point[1] - 1, tick, 2, ink);
+        target.fillRect((int) point[0] + radius - tick, (int) point[1] - 1, tick, 2, ink);
+        target.fillRect((int) point[0] - 1, (int) point[1] - radius, 2, tick, ink);
+        target.fillRect((int) point[0] - 1, (int) point[1] + radius - tick, 2, tick, ink);
+    }
+
+    /** What just went in the satchel, under the crosshair, fading. */
+    private void drawPickedFlash(DrawTarget target) {
+        if (pickedFlash <= 0 || pickedName.isEmpty()) return;
+        int alpha = (int) Math.min(255, 255 * Math.min(1, pickedFlash / 0.6));
+        Color ink = new Color(HUD_ACCENT.getRed(), HUD_ACCENT.getGreen(),
+                HUD_ACCENT.getBlue(), alpha);
+        int rise = (int) ((1.6 - pickedFlash) * 14);
+        label(target, pickedName,
+                viewportWidth / 2 - target.textWidth(pickedName, HUD_BOLD) / 2,
+                viewportHeight / 2 - 70 - rise, HUD_BOLD, ink);
+    }
+
+    /**
+     * Rain, snow and fog, over the finished world.
+     *
+     * <p>Drawn as a 2D overlay rather than as geometry, and deliberately. A
+     * hundred thousand raindrops as world triangles is a hundred thousand
+     * triangles through the painter's sort on a machine that has no card, which
+     * is the machine this build must work on. Streaks in screen space cost one
+     * line each, look the same on both backends, and — because the seed is the
+     * frame — never repeat a pattern.
+     */
+    private void drawWeatherOverlay(DrawTarget target, Weather weather) {
+        if (submerged) {
+            // Under water there is no weather, there is water: a wash of the
+            // depth's own colour, heavier the deeper you are.
+            int alpha = (int) Math.min(150, 40 + dive * 22);
+            target.fillRect(0, 0, viewportWidth, viewportHeight,
+                    new Color(18, 58, 78, alpha));
+            return;
+        }
+        double intensity = weather.intensity();
+        if (intensity <= 0.01) return;
+        Weather.Condition condition = weather.condition();
+
+        if (condition == Weather.Condition.FOG || weather.previous()
+                == Weather.Condition.FOG) {
+            double fogAmount = condition == Weather.Condition.FOG
+                    ? weather.blend() : 1 - weather.blend();
+            target.fillRect(0, 0, viewportWidth, viewportHeight,
+                    new Color(206, 212, 216, (int) (110 * fogAmount)));
+        }
+        if (!condition.precipitates()) return;
+
+        int count = weather.particleCount(viewportWidth, viewportHeight);
+        if (count <= 0) return;
+        boolean snow = condition.frozen();
+        Color ink = snow ? new Color(238, 244, 250, 200)
+                : new Color(178, 206, 226, 130);
+        // A cheap deterministic scatter: one multiply per drop, seeded on the
+        // frame so the field moves without anybody having to keep an array of
+        // particles alive between frames.
+        long hash = frame * 0x9E3779B97F4A7C15L;
+        int fall = snow ? 3 : 26;
+        int drift = (int) (Math.sin(frame * 0.03) * (snow ? 9 : 3));
+        for (int i = 0; i < count; i++) {
+            hash = hash * 6364136223846793005L + 1442695040888963407L;
+            int dx = (int) Math.floorMod(hash >>> 17, Math.max(1, viewportWidth));
+            int dy = (int) Math.floorMod(hash >>> 33, Math.max(1, viewportHeight));
+            if (snow) {
+                target.fillRect(dx, dy, 2, 2, ink);
+            } else {
+                target.drawLine(dx, dy, dx + drift, dy + fall, ink, 1f);
+            }
+        }
+        if (condition == Weather.Condition.STORM && (frame / 3) % 47 == 0) {
+            // Lightning: two frames of a pale wash, rare enough to startle.
+            target.fillRect(0, 0, viewportWidth, viewportHeight,
+                    new Color(255, 255, 245, 70));
         }
     }
 
@@ -991,56 +1841,126 @@ public class WatchScene extends AbstractScene {
 
     // --- overlays ----------------------------------------------------------------------
 
+    /** Pixels between rows in a scrolling list. */
+    private static final int ROW_HEIGHT = 19;
+
     private void drawSatchel(DrawTarget target) {
-        int w = Math.min(760, viewportWidth - 80);
-        int h = Math.min(460, viewportHeight - 80);
+        int w = Math.min(820, viewportWidth - 80);
+        int h = Math.min(500, viewportHeight - 80);
         int x = (viewportWidth - w) / 2, y = (viewportHeight - h) / 2;
         target.fillRect(x, y, w, h, HUD_PANEL);
         target.drawRect(x, y, w, h, HUD_ACCENT);
         target.drawText("Satchel & Cooking", x + 20, y + 32, TITLE_FONT, HUD_INK);
 
         Satchel satchel = view().satchel();
-        int col = x + 20, row = y + 62;
-        target.drawText("Carrying", col, row, HUD_BOLD, HUD_ACCENT);
-        row += 22;
-        for (String key : satchel.keys()) {
-            if (row > y + h - 30) break;
-            Forage.Item item = Forage.byKey(key);
-            String line = satchel.count(key) + "×  " + Forage.nameOf(key);
-            target.drawText(line, col, row, HUD_FONT, HUD_INK);
-            if (item != null) {
-                target.drawText(item.kind().label(), col + 210, row, HUD_SMALL, HUD_DIM);
-            }
-            row += 18;
-        }
+        List<String> items = satchel.keys();
+        int listTop = y + 84;
+        int listBottom = y + h - 46;
+        int rows = Math.max(1, (listBottom - listTop) / ROW_HEIGHT);
+        int colWidth = w / 2 - 34;
 
-        int rx = x + w / 2 + 10;
-        row = y + 62;
-        target.drawText("Recipes", rx, row, HUD_BOLD, HUD_ACCENT);
-        row += 22;
+        // --- carrying ------------------------------------------------------
+        int col = x + 20;
+        target.drawText("Carrying  (" + satchel.kinds() + " kinds, "
+                        + satchel.total() + " things)", col, y + 68, HUD_BOLD,
+                recipeColumn ? HUD_DIM : HUD_ACCENT);
+        // Keep the cursor on screen: the window follows it rather than the
+        // other way round, which is what makes a long list navigable with two
+        // keys and no page-up.
+        satchelScroll = clampScroll(satchelScroll, satchelIndex, items.size(), rows);
+        for (int i = 0; i < rows; i++) {
+            int index = satchelScroll + i;
+            if (index >= items.size()) break;
+            String key = items.get(index);
+            Forage.Item item = Forage.byKey(key);
+            int row = listTop + i * ROW_HEIGHT;
+            if (index == satchelIndex && !recipeColumn) {
+                target.fillRect(col - 6, row - 13, colWidth, ROW_HEIGHT - 1,
+                        new Color(60, 110, 70, 160));
+            }
+            target.drawText(satchel.count(key) + "×", col, row, HUD_FONT, HUD_ACCENT);
+            target.drawText(Forage.nameOf(key), col + 36, row, HUD_FONT, HUD_INK);
+            if (item != null) {
+                target.drawText(item.kind().label(), col + colWidth - 96, row,
+                        HUD_SMALL, HUD_DIM);
+            }
+        }
+        if (items.isEmpty()) {
+            target.drawText("Nothing yet — press E out there", col, listTop,
+                    HUD_SMALL, HUD_DIM);
+        }
+        scrollbar(target, col + colWidth - 4, listTop - 13, listBottom - listTop,
+                satchelScroll, rows, items.size());
+
+        // --- recipes -------------------------------------------------------
+        int rx = x + w / 2 + 14;
         List<Recipes.Recipe> recipes = Recipes.all();
-        int first = Math.max(0, Math.min(recipeIndex - 6, recipes.size() - 14));
-        for (int i = first; i < recipes.size() && row < y + h - 30; i++) {
-            Recipes.Recipe recipe = recipes.get(i);
+        target.drawText("Recipes", rx, y + 68, HUD_BOLD,
+                recipeColumn ? HUD_ACCENT : HUD_DIM);
+        int recipeScroll = clampScroll(0, recipeIndex, recipes.size(), rows);
+        for (int i = 0; i < rows; i++) {
+            int index = recipeScroll + i;
+            if (index >= recipes.size()) break;
+            Recipes.Recipe recipe = recipes.get(index);
             boolean can = recipe.affordable(satchel);
-            boolean here = i == recipeIndex;
-            if (here) {
-                target.fillRect(rx - 6, row - 13, w / 2 - 24, 18,
+            int row = listTop + i * ROW_HEIGHT;
+            if (index == recipeIndex && recipeColumn) {
+                target.fillRect(rx - 6, row - 13, colWidth, ROW_HEIGHT - 1,
                         new Color(60, 110, 70, 160));
             }
             target.drawText(recipe.name(), rx, row, HUD_FONT,
                     can ? HUD_INK : new Color(130, 140, 132));
-            target.drawText(recipe.costLine(), rx + 160, row, HUD_SMALL,
+            target.drawText(recipe.costLine(), rx + 168, row, HUD_SMALL,
                     can ? HUD_DIM : new Color(120, 110, 100));
-            row += 18;
         }
-        if (!recipes.isEmpty()) {
+        scrollbar(target, rx + colWidth - 4, listTop - 13, listBottom - listTop,
+                recipeScroll, rows, recipes.size());
+
+        // --- the footer, which explains whichever column has the cursor -----
+        String note;
+        if (recipeColumn && !recipes.isEmpty()) {
             Recipes.Recipe recipe = recipes.get(recipeIndex);
-            target.drawText(recipe.station().label() + " · " + recipe.note(),
-                    x + 20, y + h - 16, HUD_SMALL, HUD_DIM);
+            note = recipe.station().label() + " · " + recipe.note();
+        } else if (!items.isEmpty()) {
+            Forage.Item item = Forage.byKey(items.get(
+                    Math.min(satchelIndex, items.size() - 1)));
+            note = item == null ? "" : item.note();
+        } else {
+            note = "";
         }
-        target.drawText("↑↓ choose · Enter make · Tab or Esc close",
-                x + w - 300, y + 32, HUD_SMALL, HUD_DIM);
+        target.drawText(note, x + 20, y + h - 18, HUD_SMALL, HUD_DIM);
+        String keys = recipeColumn
+                ? "↑↓ choose · Enter make · ← carrying · Tab close"
+                : "↑↓ choose · Enter put out or plant · → recipes · Tab close";
+        target.drawText(keys, x + w - target.textWidth(keys, HUD_SMALL) - 20, y + 32,
+                HUD_SMALL, HUD_DIM);
+    }
+
+    /**
+     * Where a scrolling window should start so the cursor is inside it.
+     *
+     * <p>Two lines of margin at each end, so the list moves before the cursor
+     * reaches the edge and the player can always see what is coming.
+     */
+    private static int clampScroll(int scroll, int cursor, int total, int rows) {
+        if (total <= rows) return 0;
+        int margin = Math.min(2, rows / 3);
+        int at = Math.max(0, Math.min(scroll, total - rows));
+        if (cursor - margin < at) at = Math.max(0, cursor - margin);
+        if (cursor + margin >= at + rows) {
+            at = Math.min(total - rows, cursor + margin - rows + 1);
+        }
+        return Math.max(0, Math.min(at, total - rows));
+    }
+
+    /** A thumb on the right of a list, drawn only when there is more than fits. */
+    private void scrollbar(DrawTarget target, int x, int y, int height, int scroll,
+                           int rows, int total) {
+        if (total <= rows || height <= 0) return;
+        target.fillRect(x, y, 3, height, new Color(255, 255, 255, 32));
+        int thumb = Math.max(14, (int) (height * (rows / (double) total)));
+        int at = (int) (y + (height - thumb) * (scroll / (double) (total - rows)));
+        target.fillRect(x, at, 3, thumb, new Color(140, 208, 150, 160));
     }
 
     private void drawBuild(DrawTarget target) {

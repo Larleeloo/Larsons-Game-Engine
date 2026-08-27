@@ -162,6 +162,8 @@ public final class WatchGame implements Animal.Surroundings {
     private final Grove grove = new Grove();
     private final Cultivation crops = new Cultivation();
     private final Structure structure = new Structure();
+    private final Weather weather;
+    private final Boats boats;
 
     private Sink sink;
     private long nextAnimalId = 1;
@@ -181,6 +183,8 @@ public final class WatchGame implements Animal.Surroundings {
         this.ground = Flora.ground(field);
         this.clock = WatchClock.fromSystem();
         this.rng = new Random(config.seed() ^ 0x5EED);
+        this.weather = new Weather(config.seed());
+        this.boats = new Boats(config.seed());
     }
 
     /** Where messages go; may be replaced when a solo game becomes a hosted one. */
@@ -208,6 +212,12 @@ public final class WatchGame implements Animal.Surroundings {
 
     /** Everything anybody built. */
     public Structure structure() { return structure; }
+
+    /** What the sky is doing, for everybody. */
+    public Weather weather() { return weather; }
+
+    /** The boats — where they were found, and where they have been left. */
+    public Boats boats() { return boats; }
 
     /** The party. */
     public synchronized List<WatchPlayer> players() { return List.copyOf(players.values()); }
@@ -315,12 +325,21 @@ public final class WatchGame implements Animal.Surroundings {
         if (gone != null) say(gone.name() + " headed home");
     }
 
-    /** A movement update from a client. */
+    /**
+     * A movement update from a client.
+     *
+     * <p><b>Whether you are under water is derived here, not sent.</b> The
+     * client says where it is; the server says what that means, from the same
+     * heightfield everybody has. It is the same rule the speed derivation
+     * follows and for the same reason — the breath meter is the only thing in
+     * this game that runs out, so it should not be a number a client hands over.
+     */
     public synchronized void move(int id, double x, double y, double z, double yaw, double pitch,
                      boolean crouching, double dt) {
         WatchPlayer player = players.get(id);
         if (player == null) return;
         player.moveTo(x, y, z, yaw, pitch, crouching, dt);
+        player.setSubmerged(player.eyeZ() < TerrainField.WATER_LEVEL - 0.05, dt);
     }
 
     // --- spotting --------------------------------------------------------------------
@@ -406,6 +425,106 @@ public final class WatchGame implements Animal.Surroundings {
     }
 
     // --- foraging --------------------------------------------------------------------
+
+    /**
+     * What the player is about to pick, if they press the key now.
+     *
+     * <p><b>Exists so that picking can be aimed at something.</b> {@link #pick}
+     * has always known perfectly well what it was going to take — a ripe bush
+     * first, then a fruiting tree, then a crop, then the ground — but it only
+     * said so afterwards, in the past tense, in a line of chat. So the verb
+     * with the most reach in the game was the one with the least feedback: you
+     * pressed E somewhere near a bush and either something happened or it did
+     * not, and there was no way to tell which it would be except by pressing.
+     *
+     * <p>This is the same walk over the same candidates, returning where the
+     * thing is rather than taking it, so the screen can put a highlight round
+     * it and a name under it. The two must agree, which is why the ordering
+     * here is the ordering there and the reaches are the same constants.
+     *
+     * @return what is in reach, or {@code null} if there is nothing but ground
+     */
+    public synchronized Pickable pickTarget(int playerId) {
+        WatchPlayer player = players.get(playerId);
+        if (player == null) return null;
+        double cp = Math.cos(player.pitch());
+        double dirX = Math.sin(player.yaw()) * cp;
+        double dirY = -Math.cos(player.yaw()) * cp;
+
+        Flora.Bush bush = flora.nearestBush(ground, player.x(), player.y(), REACH);
+        if (bush != null && bush.ripe() && !bare(bushKey(bush))
+                && inFront(player, bush.x(), bush.y(), dirX, dirY)) {
+            return new Pickable(Pickable.Kind.BUSH, bush.berry(),
+                    Forage.nameOf(bush.berry()), bush.x(), bush.y(),
+                    bush.z() + bush.radius() * 0.8, bush.radius());
+        }
+
+        TreeInstance tree = nearestFruitingTree(player.x(), player.y(), REACH + 1.5);
+        if (tree != null && tree.species().fruit() != null && !bare(tree.id())
+                && inFront(player, tree.x(), tree.y(), dirX, dirY)) {
+            return new Pickable(Pickable.Kind.TREE, tree.species().fruit(),
+                    Forage.nameOf(tree.species().fruit()), tree.x(), tree.y(),
+                    tree.z() + Math.max(1.4, tree.height() * 0.55), 0.9);
+        }
+
+        for (Cultivation.Crop crop : crops.near(player.x(), player.y(), REACH)) {
+            if (!crop.ripe()) continue;
+            return new Pickable(Pickable.Kind.CROP, crop.seed(),
+                    Forage.nameOf(crop.seed()), crop.x(), crop.y(),
+                    crop.z() + crop.height(), 0.4);
+        }
+
+        for (Lure lure : lures.values()) {
+            double dx = lure.x() - player.x(), dy = lure.y() - player.y();
+            if (dx * dx + dy * dy > REACH * REACH) continue;
+            return new Pickable(Pickable.Kind.FEEDER, lure.food(),
+                    Forage.nameOf(lure.food()) + " feeder", lure.x(), lure.y(),
+                    lure.z() + 1.2, 0.35);
+        }
+
+        Boats.Boat boat = boats.nearest(field, player.x(), player.y(), Boats.BOARD_RANGE);
+        if (boat != null && player.boatId() == 0) {
+            return new Pickable(Pickable.Kind.BOAT, "boat", "Rowing boat",
+                    boat.x(), boat.y(), boat.z() + 0.4, 1.6);
+        }
+        return null;
+    }
+
+    /**
+     * Something in reach, and where it is on screen.
+     *
+     * @param kind   what it is, which decides which key takes it
+     * @param key    the item it yields, or {@code "boat"}
+     * @param name   what a player sees under the highlight
+     * @param radius roughly how big it is, for sizing the ring
+     */
+    public record Pickable(Kind kind, String key, String name, double x, double y,
+                           double z, double radius) {
+
+        /** What sort of thing is in reach. */
+        public enum Kind {
+            /** A ripe berry bush. */
+            BUSH("Pick"),
+            /** A fruiting tree. */
+            TREE("Pick"),
+            /** A ripe crop. */
+            CROP("Harvest"),
+            /** A feeder somebody put out. */
+            FEEDER("Top up"),
+            /** A boat, drawn up on the shore. */
+            BOAT("Take the oars");
+
+            private final String verb;
+
+            Kind(String verb) { this.verb = verb; }
+
+            /** What the prompt says you would be doing. */
+            public String verb() { return verb; }
+        }
+
+        /** The line the HUD puts under the highlight. */
+        public String prompt() { return kind.verb() + " " + name; }
+    }
 
     /**
      * Pick whatever is within reach.
@@ -534,6 +653,66 @@ public final class WatchGame implements Animal.Surroundings {
         options.add("clover");
         options.add("feather");
         return options.get(rng.nextInt(options.size()));
+    }
+
+    /**
+     * Do whatever the thing in reach wants doing.
+     *
+     * <p><b>One key, and the highlight says what it will do.</b> Picking a
+     * bush, pulling a ripe crop, topping up a feeder and taking the oars were
+     * four separate keys, three of which failed silently when you were not
+     * standing at the right thing — and the player has no way of knowing which
+     * of the four they are standing at except by trying all of them. Since
+     * {@link #pickTarget} already works out exactly what is in reach so the
+     * screen can draw a ring round it, the honest thing is to let that same
+     * answer choose the verb.
+     *
+     * <p>The individual verbs stay: the wire has them, tests use them, and
+     * nothing about routing through one key should make "harvest" stop being a
+     * thing the server can be asked to do.
+     *
+     * @return a line for the HUD, or {@code null} if nothing happened
+     */
+    public synchronized String use(int playerId) {
+        Pickable target = pickTarget(playerId);
+        if (target == null) {
+            String got = pick(playerId);
+            return got == null ? null : "Picked " + Forage.nameOf(got);
+        }
+        return switch (target.kind()) {
+            case BUSH, TREE -> {
+                String got = pick(playerId);
+                yield got == null ? null : "Picked " + Forage.nameOf(got);
+            }
+            case CROP -> {
+                String got = harvest(playerId);
+                yield got == null ? null : "Harvested " + got;
+            }
+            case FEEDER -> {
+                Lure nearest = nearestLureTo(playerId);
+                if (nearest == null) yield null;
+                yield refillLure(playerId, nearest.id())
+                        ? "Topped up the feeder"
+                        : "Nothing left to put in it";
+            }
+            case BOAT -> useBoat(playerId);
+        };
+    }
+
+    private Lure nearestLureTo(int playerId) {
+        WatchPlayer player = players.get(playerId);
+        if (player == null) return null;
+        Lure best = null;
+        double bestDistance = REACH * REACH;
+        for (Lure lure : lures.values()) {
+            double dx = lure.x() - player.x(), dy = lure.y() - player.y();
+            double d = dx * dx + dy * dy;
+            if (d < bestDistance) {
+                bestDistance = d;
+                best = lure;
+            }
+        }
+        return best;
     }
 
     /** Turn over a log: beetles and mealworms, which nothing insectivorous refuses. */
@@ -777,6 +956,40 @@ public final class WatchGame implements Animal.Surroundings {
         return fish;
     }
 
+    // --- boats -----------------------------------------------------------------------
+
+    /**
+     * Get into the boat a player is standing at, or out of the one they are in.
+     *
+     * <p>One verb, because there is never a moment when both would apply and a
+     * second key for "get out" is a second key to remember. Getting out records
+     * where the boat now is, which is what makes a boat rowed across a lake a
+     * boat that is on the far side of the lake for everybody, for ever.
+     *
+     * @return a line for the HUD, or {@code null} when there was no boat
+     */
+    public synchronized String useBoat(int playerId) {
+        WatchPlayer player = players.get(playerId);
+        if (player == null) return null;
+
+        if (player.boatId() != 0) {
+            boats.moveTo(player.boatId(), player.x(), player.y(),
+                    TerrainField.WATER_LEVEL, player.yaw());
+            player.leaveBoat();
+            return "Stepped out of the boat";
+        }
+
+        Boats.Boat boat = boats.nearest(field, player.x(), player.y(), Boats.BOARD_RANGE);
+        if (boat == null) return null;
+        player.boardBoat(boat.id());
+        return "Took the oars";
+    }
+
+    /** Every boat near a point — what a client asks so it can draw them. */
+    public List<Boats.Boat> boatsNear(double x, double y, double radius) {
+        return boats.near(field, x, y, radius);
+    }
+
     // --- the tick --------------------------------------------------------------------
 
     /**
@@ -790,6 +1003,13 @@ public final class WatchGame implements Animal.Surroundings {
      */
     public synchronized void tick(double dt) {
         clock.tick(dt);
+        // The weather is rolled for the biome somebody is standing in, so a
+        // party that walks north gets a northern sky. Whose biome, with eight
+        // players spread over a valley, is deliberately arbitrary: there is one
+        // sky and somebody has to be under it first.
+        WatchPlayer anyone = players.isEmpty() ? null : players.values().iterator().next();
+        weather.tick(dt, anyone == null ? null : field.biomeAt(anyone.x(), anyone.y()),
+                clock.phase());
 
         long now = System.currentTimeMillis();
         double realHours = WatchClock.realHoursBetween(lastRealMillis, now);
@@ -862,7 +1082,10 @@ public final class WatchGame implements Animal.Surroundings {
             return true;
         });
 
-        int want = Math.min(TOTAL_CAP, players.size() * PER_PLAYER);
+        // Fewer things are out in a storm and more in a drizzle, which is what
+        // makes a change in the weather worth walking out into.
+        int want = Math.min(TOTAL_CAP,
+                (int) Math.round(players.size() * PER_PLAYER * weather.activity()));
         int tries = 0;
         while (animals.size() < want && tries++ < 24) {
             WatchPlayer host = pickPlayer();
@@ -871,14 +1094,42 @@ public final class WatchGame implements Animal.Surroundings {
             double radius = SPAWN_NEAR + rng.nextDouble() * (SPAWN_FAR - SPAWN_NEAR);
             double x = host.x() + Math.cos(angle) * radius;
             double y = host.y() + Math.sin(angle) * radius;
-            AnimalDef def = pickSpecies(x, y);
+
+            // <b>A diver gets a wet ring and a wet species table.</b> Without
+            // this the sea floor is the emptiest place in the world, which is
+            // the exact opposite of what it should be: the ring around a player
+            // on a lake bed is still mostly the hillside above the waterline,
+            // so almost every point sampled is dry and almost every species
+            // offered is a land one — and both then fail the medium check
+            // below. Two nudges fix it, and neither of them puts anything
+            // anywhere it could not have been anyway.
+            boolean wantWater = host.submerged();
+            if (wantWater) {
+                for (int attempt = 0; attempt < 6; attempt++) {
+                    if (field.waterDepth(field.heightAt(x, y)) >= 1.0) break;
+                    double a = rng.nextDouble() * Math.PI * 2;
+                    double r = SPAWN_NEAR * 0.3 + rng.nextDouble() * SPAWN_NEAR;
+                    x = host.x() + Math.cos(a) * r;
+                    y = host.y() + Math.sin(a) * r;
+                }
+            }
+            AnimalDef def = wantWater ? pickAquatic(x, y) : pickSpecies(x, y);
             if (def == null) continue;
             double z = field.heightAt(x, y);
-            boolean wet = field.waterDepth(z) > 0.4;
-            // A fish out of water, or a fox in a lake, is not a spawn.
-            if (def.aquatic() != wet && !def.airborne()) continue;
+            double depth = field.waterDepth(z);
+            // A fish out of water, or a fox in a lake, is not a spawn — and the
+            // thresholds are the ones the animal itself will enforce once it is
+            // alive, so nothing is ever spawned somewhere it will immediately
+            // have to escape from. See Animal.accept.
+            if (!def.airborne()) {
+                if (def.aquatic() ? depth < 1.0 : depth > 0.8) continue;
+            }
             long id = nextAnimalId++;
-            animals.put(id, new Animal(id, def, x, y, z, config.seed() ^ id));
+            // Fish start at their swimming depth rather than on the bed, which
+            // is where a spawn used to put them.
+            double spawnZ = def.aquatic()
+                    ? z + Math.max(0, depth - Math.min(depth * 0.5, 0.6)) : z;
+            animals.put(id, new Animal(id, def, x, y, spawnZ, config.seed() ^ id));
         }
     }
 
@@ -893,19 +1144,41 @@ public final class WatchGame implements Animal.Surroundings {
      * by how rare it is and by whether it is awake at this hour.
      */
     public synchronized AnimalDef pickSpecies(double x, double y) {
-        WatchBiome biome = field.biomeAt(x, y);
-        List<AnimalDef> here = AnimalRegistry.inBiome(biome.key());
-        if (here.isEmpty()) return null;
+        return weightedPick(AnimalRegistry.inBiome(field.biomeAt(x, y).key()));
+    }
+
+    /**
+     * Which species turns up under water at a point.
+     *
+     * <p>The same weighting over a narrower table: the biome's own swimmers,
+     * and the fliers that fish, so a dive is a heron overhead as well as a
+     * shoal below. Falls back to the whole table when a biome has no swimmers
+     * at all rather than spawning nothing — an animal that fails the depth
+     * check costs one loop iteration, and a lake with nothing in it costs the
+     * feature.
+     */
+    private AnimalDef pickAquatic(double x, double y) {
+        List<AnimalDef> here = AnimalRegistry.inBiome(field.biomeAt(x, y).key());
+        List<AnimalDef> swimmers = new ArrayList<>();
+        for (AnimalDef def : here) {
+            if (def.aquatic()) swimmers.add(def);
+        }
+        return weightedPick(swimmers.isEmpty() ? here : swimmers);
+    }
+
+    /** One of a list, weighted by rarity and by whether it is awake now. */
+    private AnimalDef weightedPick(List<AnimalDef> candidates) {
+        if (candidates.isEmpty()) return null;
         WatchClock.Phase phase = clock.phase();
         double total = 0;
-        for (AnimalDef def : here) total += def.encounterWeight(phase);
+        for (AnimalDef def : candidates) total += def.encounterWeight(phase);
         if (total <= 0) return null;
         double roll = rng.nextDouble() * total;
-        for (AnimalDef def : here) {
+        for (AnimalDef def : candidates) {
             roll -= def.encounterWeight(phase);
             if (roll <= 0) return def;
         }
-        return here.get(here.size() - 1);
+        return candidates.get(candidates.size() - 1);
     }
 
     // --- Animal.Surroundings ---------------------------------------------------------
@@ -913,12 +1186,57 @@ public final class WatchGame implements Animal.Surroundings {
     @Override public double groundAt(double x, double y) { return field.heightAt(x, y); }
 
     @Override
+    public double waterDepthAt(double x, double y) {
+        return field.waterDepth(field.heightAt(x, y));
+    }
+
+    /**
+     * The nearest point with water over it, searched outward in rings.
+     *
+     * <p>Spiral rather than dense: a swimmer asking this is asking "which way
+     * is the lake", and a dozen samples on each of a few rings answers that as
+     * well as a grid would for a fraction of the noise. Nearest ring first, so
+     * the first hit is the nearest shoreline rather than an arbitrary one.
+     */
+    @Override
+    public boolean waterNear(double x, double y, double radius, double minDepth,
+                             double[] out) {
+        for (double r = 4; r <= radius; r += 4) {
+            int samples = (int) Math.max(8, Math.round(r * 1.5));
+            double spin = rng.nextDouble() * Math.PI * 2;
+            for (int i = 0; i < samples; i++) {
+                double a = spin + i * Math.PI * 2 / samples;
+                double px = x + Math.cos(a) * r, py = y + Math.sin(a) * r;
+                if (waterDepthAt(px, py) >= minDepth) {
+                    out[0] = px;
+                    out[1] = py;
+                    return true;
+                }
+            }
+        }
+        return false;
+    }
+
+    /**
+     * How loud the nearest player is, at a point — <b>with the weather in it.</b>
+     *
+     * <p>The weather's effect on how close an animal will let you get is
+     * applied here rather than to the animal's own flush distance, because it
+     * is a property of the air between the two of you rather than of the
+     * animal: fog and rain hide and deafen a walker, wind makes everything
+     * jumpy. Dividing the apparent distance by the scale is the same
+     * arithmetic as multiplying every species' flush distance by it, and it
+     * happens in one place instead of a thousand.
+     */
+    @Override
     public synchronized double disturbanceAt(double x, double y) {
         double nearest = Double.MAX_VALUE;
         for (WatchPlayer player : players.values()) {
             nearest = Math.min(nearest, player.apparentDistanceTo(x, y));
         }
-        return nearest;
+        if (nearest == Double.MAX_VALUE) return nearest;
+        double scale = Math.max(0.2, weather.flushScale());
+        return nearest / scale;
     }
 
     @Override
@@ -972,6 +1290,8 @@ public final class WatchGame implements Animal.Surroundings {
         m.put("grove", grove.toMap());
         m.put("crops", crops.toMap());
         m.put("built", structure.toMap());
+        m.put("sky", weather.toMap());
+        m.put("boats", boats.toMap());
         List<Object> lureRows = new ArrayList<>();
         for (Lure lure : lures.values()) lureRows.add(lure.toMap());
         m.put("lures", lureRows);
@@ -991,6 +1311,8 @@ public final class WatchGame implements Animal.Surroundings {
         grove.load(WatchJson.map(m, "grove"));
         crops.load(WatchJson.map(m, "crops"));
         structure.load(WatchJson.map(m, "built"));
+        weather.load(WatchJson.map(m, "sky"));
+        boats.load(WatchJson.map(m, "boats"));
         lures.clear();
         for (Map<String, Object> row : WatchJson.objects(m, "lures")) {
             addLure(Lure.fromMap(row));
