@@ -174,17 +174,9 @@ public final class WalkerModel {
         WatchMaterials.uv(WatchMaterial.PLANK, uv);
         int skin = WatchMaterials.shade(WatchMaterial.CLAY);
 
-        // Up, from the two axes we were given. The camera's right is horizontal
-        // by construction, so up is right × direction.
-        double upX = rightY * dirZ;
-        double upY = -rightX * dirZ;
-        double upZ = rightX * dirY - rightY * dirX;
-        double length = Math.sqrt(upX * upX + upY * upY + upZ * upZ);
-        if (length > 1e-9) {
-            upX /= length;
-            upY /= length;
-            upZ /= length;
-        }
+        double[] up = new double[3];
+        cameraUp(dirX, dirY, dirZ, rightX, rightY, up);
+        double upX = up[0], upY = up[1], upZ = up[2];
 
         double yaw = Math.atan2(dirX, -dirY);
         double bobUp = Math.sin(bob * Math.PI * 2) * 0.035 * sway;
@@ -202,14 +194,66 @@ public final class WalkerModel {
             double cz = eyeZ + dirZ * forward + upZ * -down;
 
             // A forearm along the view direction, and a fist on the end of it.
-            Shapes.box(mesh, cx - dirX * 0.16, cy - dirY * 0.16, cz - dirZ * 0.16,
-                    0.055, 0.16, 0.055, yaw, uv, sleeve);
+            // Its centre is half its own length behind the fist, so the elbow
+            // lands at exactly HAND_FORWARD − FOREARM. See HAND_FORWARD.
+            double half = FOREARM / 2;
+            Shapes.box(mesh, cx - dirX * half, cy - dirY * half, cz - dirZ * half,
+                    0.055, half, 0.055, yaw, uv, sleeve);
             Shapes.box(mesh, cx, cy, cz, 0.062, 0.062, 0.062, yaw, uv, skin);
         }
     }
 
-    /** How far in front of the eye the fists sit, in metres. See {@link #hands}. */
-    public static final double HAND_FORWARD = 1.05;
+    /**
+     * The camera's up axis, from its forward and right axes.
+     *
+     * <p><b>{@code direction × right}, and the order is the whole of it.</b>
+     * The other order looks equally plausible and points straight down: with
+     * this engine's basis ({@code right = (cosYaw, sinYaw, 0)},
+     * {@code dir = (sinYaw·cosPitch, −cosYaw·cosPitch, sinPitch)}),
+     * {@code right × dir} has a z of {@code −cosPitch} — negative for every
+     * pitch a player can hold. Getting it backwards put the first-person hands
+     * forty centimetres <em>above</em> the eye line, which reads as somebody
+     * else's arms coming over your head rather than as your own.
+     *
+     * <p>Public and shared because the held item is placed in the same frame
+     * and has to agree with the hand it is in.
+     */
+    public static void cameraUp(double dirX, double dirY, double dirZ,
+                                double rightX, double rightY, double[] out) {
+        // right has no z component, which cancels three of the six terms.
+        double x = -dirZ * rightY;
+        double y = dirZ * rightX;
+        double z = dirX * rightY - dirY * rightX;
+        double length = Math.sqrt(x * x + y * y + z * z);
+        if (length < 1e-9) {
+            out[0] = 0;
+            out[1] = 0;
+            out[2] = 1;
+            return;
+        }
+        out[0] = x / length;
+        out[1] = y / length;
+        out[2] = z / length;
+    }
+
+    /** How far back from the fist the forearm reaches, in metres. */
+    private static final double FOREARM = 0.32;
+
+    /**
+     * How far in front of the eye the fists sit, in metres.
+     *
+     * <p><b>Derived from the near plane, not chosen.</b> The camera clips at
+     * {@link com.larsons.engine.graphics.EyeCamera#NEAR} and the painter path
+     * throws away anything nearer, so a view model has to clear it — and the
+     * part that has to clear it is the <em>elbow</em>, which is
+     * {@link #FOREARM} behind the fist, not the fist itself. Picking the fist's
+     * distance by eye and forgetting the forearm put the near end of both arms
+     * seven centimetres inside the plane, so the arms were drawn with their
+     * back halves sliced off. Writing it as the near plane plus the arm plus a
+     * margin means it cannot drift out of agreement again if either changes.
+     */
+    public static final double HAND_FORWARD =
+            com.larsons.engine.graphics.EyeCamera.NEAR + FOREARM + 0.13;
 
     /** How far to either side. */
     public static final double HAND_SIDE = 0.42;

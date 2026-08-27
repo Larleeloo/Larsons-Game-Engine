@@ -3064,7 +3064,7 @@ fit, which is what gives sharp biome borders over ground that never steps.
   the blades sway on a wind field.
 - **Water** at height zero, with shallows, shores and fish in it — and a
   **floor you can walk on**. Hold <kbd>Shift</kbd> in the water and you sink;
-  hold <kbd>Ctrl</kbd> and you rise. Down there the world goes the colour of the
+  hold <kbd>Space</kbd> and you rise. Down there the world goes the colour of the
   water and the view closes to a few metres, and your breath spends itself over
   about forty seconds and then floats you back up. It does not kill you: this is
   a game about looking at things, and the worst that should happen to somebody
@@ -3306,8 +3306,10 @@ round it out; the breath only appears when you are spending it.
 
 ### Controls
 
-<kbd>WASD</kbd> walks, the mouse looks, <kbd>Shift</kbd> crouches on land and
-**dives** in water, <kbd>Ctrl</kbd> sprints on land and **rises** in water,
+<kbd>WASD</kbd> walks and the mouse looks. <kbd>Space</kbd> toggles the crouch on
+land and **rises** in water; <kbd>Shift</kbd> sprints on land and **sinks** in
+water — up is up and crouch is down, as in every game with swimming in it, and
+neither key means anything else while you are in the water.
 <kbd>F5</kbd> goes third person. <kbd>Mouse 1</kbd> spots what you are looking
 at, <kbd>E</kbd> does whatever is in reach, <kbd>G</kbd> opens the book,
 <kbd>Tab</kbd> the satchel, <kbd>F</kbd> puts down a feeder, <kbd>R</kbd>

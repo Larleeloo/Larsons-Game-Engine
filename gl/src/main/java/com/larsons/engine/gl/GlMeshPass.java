@@ -280,18 +280,26 @@ final class GlMeshPass implements MeshPass {
     private void issue(Draw draw, Mat4 projection, EyeCamera eye) {
         Buffer buffer = buffers.computeIfAbsent(draw.key(), k -> new Buffer());
         buffer.lastSeen = frameStamp;
-        if (buffer.revision != draw.revision() || !buffer.matches(draw)) {
-            // A mesh that has moved its origin is not deferrable: the cached
-            // vertices mean something else at the new origin, so drawing them
-            // there is worse than not drawing at all. Deferring is only ever
-            // right for a mesh whose origin is unchanged — a chunk being
-            // re-meshed at a new level of detail, say, where last frame's
-            // triangles are in exactly the right place and merely coarser, so
-            // one frame of the old ones at the edge of the view is invisible.
-            boolean deferrable = buffer.matches(draw) && buffer.vertexCount > 0;
-            if (!deferrable || uploadsThisFrame < MAX_UPLOADS_PER_FRAME) {
+        boolean stale = buffer.revision != draw.revision();
+        boolean moved = !buffer.matches(draw);
+        if (stale || moved) {
+            if (uploadsThisFrame < MAX_UPLOADS_PER_FRAME) {
                 upload(buffer, draw);
                 uploadsThisFrame++;
+            } else if (moved || buffer.vertexCount == 0) {
+                // Over budget, and what is on the card cannot stand in for what
+                // was asked for. A mesh with no buffer yet simply waits, as a
+                // chunk that has not finished meshing does — and a mesh whose
+                // origin has moved waits too, because its cached vertices mean
+                // something else at the new origin. Drawing them there is worse
+                // than not drawing at all: that is what made walls jump.
+                //
+                // The one thing that may be deferred is a stale mesh at an
+                // unchanged origin — a chunk being re-meshed at a finer level
+                // of detail, where last frame's triangles are in exactly the
+                // right place and merely coarser, and one frame of them at the
+                // edge of the view is invisible.
+                return;
             }
         }
         drawBuffer(buffer, draw, projection, eye);

@@ -90,11 +90,30 @@ public final class Boats {
         this.seed = seed;
     }
 
-    /** The cell a world position falls in. */
+    /**
+     * A boat's identity, from the cell that generated it.
+     *
+     * <p>Salted, and the salt is load-bearing: {@code 0} is what
+     * {@link com.larsons.engine.watch.WatchPlayer#boatId()} means by "not in a
+     * boat", and the unsalted packing gives cell (0, 0) an id of exactly zero.
+     * Players spawn at the world origin, so that was not a corner case — it was
+     * the first boat most people would ever walk up to, and it could be boarded
+     * and then never rowed or stepped out of, because every check for "am I in
+     * a boat" said no. Salting moves the collision to a cell nobody is standing
+     * in, and {@link #generatedIn} refuses that one cell outright so no boat
+     * ever carries the sentinel.
+     */
+    private static final long ID_SALT = 0x5B0A7C0DEL;
+
+    /** The identity of the boat cell (x, y) falls in. */
     public static long cellOf(double x, double y) {
         long cx = (long) Math.floor(x / CELL);
         long cy = (long) Math.floor(y / CELL);
-        return (cx << 32) ^ (cy & 0xFFFFFFFFL);
+        return idOf(cx, cy);
+    }
+
+    private static long idOf(long cx, long cy) {
+        return ((cx << 32) ^ (cy & 0xFFFFFFFFL)) ^ ID_SALT;
     }
 
     /**
@@ -158,7 +177,8 @@ public final class Boats {
             return new Boat(id, elsewhere.x(), elsewhere.y(), elsewhere.z(),
                     elsewhere.yaw(), true);
         }
-        return generatedIn(field, id >> 32, (int) (id & 0xFFFFFFFFL));
+        long cell = id ^ ID_SALT;
+        return generatedIn(field, cell >> 32, (int) (cell & 0xFFFFFFFFL));
     }
 
     /**
@@ -172,7 +192,11 @@ public final class Boats {
      * second pass.
      */
     private Boat generatedIn(TerrainField field, long cx, long cy) {
-        long id = (cx << 32) ^ (cy & 0xFFFFFFFFL);
+        long id = idOf(cx, cy);
+        // The one cell whose id would be the "not in a boat" sentinel. See
+        // ID_SALT: it is somewhere nobody will ever be, and one cell in a plane
+        // with no edge having no boat is not a thing anybody can observe.
+        if (id == 0) return null;
         if (moved.containsKey(id)) return null;
         Random rng = new Random(seed * 0x9E3779B97F4A7C15L ^ id * 0xC2B2AE3D27D4EB4FL);
         if (rng.nextInt(ODDS_DENOMINATOR) != 0) return null;

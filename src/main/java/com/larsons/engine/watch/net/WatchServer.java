@@ -303,13 +303,20 @@ public final class WatchServer implements WatchGame.Sink {
             }
 
             case "use" -> {
+                // Ask what is in reach before acting, so we know afterwards
+                // whether the world changed or only the satchel. A world sync
+                // is the whole grove, every crop, every built piece and every
+                // moved boat to every client — worth sending when a crop has
+                // been pulled or a boat taken, and absurd to send because
+                // somebody picked a berry, which is most presses of this key.
+                WatchGame.Pickable target = game.pickTarget(id);
                 String line = game.use(id);
                 if (line != null) {
                     bagChanged(id, line);
-                    // A boat taken or a crop pulled is world state as well as
-                    // satchel state; the sync is cheap and the alternative is
-                    // a boat that only the person who moved it can see.
-                    sendWorld();
+                    if (target != null && (target.kind() == WatchGame.Pickable.Kind.CROP
+                            || target.kind() == WatchGame.Pickable.Kind.BOAT)) {
+                        sendWorld();
+                    }
                 }
             }
 

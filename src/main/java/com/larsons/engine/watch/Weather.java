@@ -298,8 +298,14 @@ public final class Weather {
     /** Adopt a host's sky. */
     public void load(Map<String, Object> m) {
         if (m == null || m.isEmpty()) return;
+        // Read the fallback for `previous` before `condition` is overwritten.
+        // Defaulting it to the *new* condition — which is what reading the
+        // field after the assignment does — collapses the transition on any
+        // payload that happens not to carry "p", so a client would step
+        // straight into full rain rather than watching it arrive.
+        String was = previous.name();
         condition = Condition.of(WatchJson.str(m, "c", condition.name()));
-        previous = Condition.of(WatchJson.str(m, "p", condition.name()));
+        previous = Condition.of(WatchJson.str(m, "p", was));
         sinceChange = WatchJson.num(m, "t", sinceChange);
         biomeKey = WatchJson.str(m, "b", biomeKey);
     }

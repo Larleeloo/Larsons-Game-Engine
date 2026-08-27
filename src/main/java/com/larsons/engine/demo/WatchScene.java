@@ -46,6 +46,7 @@ import java.awt.Color;
 import java.awt.Font;
 import java.util.ArrayList;
 import java.util.List;
+import java.util.Map;
 
 /**
  * The walk itself.
@@ -137,6 +138,22 @@ public class WatchScene extends AbstractScene {
     private static final Font HUD_BOLD = new Font("SansSerif", Font.BOLD, 15);
     private static final Font HUD_SMALL = new Font("SansSerif", Font.PLAIN, 12);
     private static final Font TITLE_FONT = new Font("SansSerif", Font.BOLD, 22);
+
+    /**
+     * The buffer keys for the two meshes that are not a chunk.
+     *
+     * <p><b>Out at the bottom of the range, and not {@code 1} and {@code 2}.</b>
+     * A chunk's four meshes are keyed {@code chunkKey * 4 + n}, and
+     * {@code WatchChunk.key(0, 0)} is zero — so the chunk the world origin
+     * falls in owns keys 0 through 3, and the small numbers these two started
+     * with collided with its flora and its grass. Two meshes sharing one buffer
+     * re-upload over the top of each other every frame, which is the exact cost
+     * the buffer cache exists to avoid, on the one chunk every player starts
+     * standing in.
+     */
+    private static final long DYNAMIC_KEY = Long.MIN_VALUE;
+
+    private static final long VIEW_MODEL_KEY = Long.MIN_VALUE + 1;
 
     /** Which overlay is up, if any. */
     private enum Panel { NONE, SATCHEL, BUILD, PAUSED }
@@ -474,7 +491,13 @@ public class WatchScene extends AbstractScene {
         if (KeyBinds.down(input, GameAction.MOVE_LEFT)) strafe -= 1;
 
         boolean sprinting = KeyBinds.down(input, GameAction.SPRINT);
-        boolean sinking = KeyBinds.down(input, GameAction.JUMP);
+        // In the water, up is up and crouch is down — the convention every
+        // game with swimming in it uses, and the opposite of what "jump" and
+        // "sprint" mean on land. Sprint is free while swimming (there is no
+        // sprinting in water) and crouch is the key a player's hand is already
+        // reaching for when they want to go lower.
+        boolean rising = KeyBinds.down(input, GameAction.JUMP);
+        boolean sinking = KeyBinds.down(input, GameAction.SPRINT);
 
         double speed;
         if (rowing) {
@@ -541,7 +564,7 @@ public class WatchScene extends AbstractScene {
         }
 
         if (overWater) {
-            swim(dt, depth, sinking, sprinting, ground, surface);
+            swim(dt, depth, sinking, rising, ground, surface);
             return;
         }
 
@@ -613,6 +636,10 @@ public class WatchScene extends AbstractScene {
     private void aim() {
         lookingAtId = 0;
         prompt = "";
+        // Cleared here and not only in reachPrompt: an animal under the
+        // crosshair returns early, and without this the ring stayed pulsing
+        // round a bush the player had walked away from ten seconds ago.
+        inReach = null;
         double cp = Math.cos(pitch);
         double dirX = Math.sin(yaw) * cp, dirY = -Math.cos(yaw) * cp, dirZ = Math.sin(pitch);
         double eyeZ = pz + (crouching ? 1.10 : 1.68);
@@ -715,8 +742,12 @@ public class WatchScene extends AbstractScene {
     /** The verbs. Every one of them is a request; none of them changes anything here. */
     private void act(InputManager input) {
         if (KeyBinds.pressed(input, GameAction.WATCH_SPOT)) request("spot");
+        // WATCH_PICK only, and deliberately not INTERACT as well. Both ship
+        // bound to E, and while they sent different verbs — "pick" and
+        // "harvest" — one press doing both was merely odd. Now that one verb
+        // covers everything in reach, one press doing it twice is two berries
+        // off one bush and two frames of it on the wire.
         if (KeyBinds.pressed(input, GameAction.WATCH_PICK)) request("use");
-        if (KeyBinds.pressed(input, GameAction.INTERACT)) request("use");
         if (KeyBinds.pressed(input, GameAction.WATCH_PLANT)) request("plant");
         if (KeyBinds.pressed(input, GameAction.WATCH_CROSS)) request("cross");
         if (KeyBinds.pressed(input, GameAction.WATCH_FEEDER)) request("lure");
@@ -874,32 +905,56 @@ public class WatchScene extends AbstractScene {
     /** How long the pickup flash lasts, in seconds. */
     private static final double FLASH_SECONDS = 1.6;
 
-    /** How much was in the satchel last frame. See {@link #noticePickups}. */
-    private int carried = -1;
+    /** What was in the satchel last frame. See {@link #noticePickups}. */
+    private Map<String, Integer> carried;
 
     /**
      * Flash anything that turned up in the satchel we did not put there.
      *
      * <p>Online, a pick is a request and what comes back is a satchel with one
      * more thing in it a few frames later — there is no local call to hang the
-     * flash off. Watching the total is the honest signal, and it catches cases
-     * a local hook would miss anyway: a recipe finishing, a fish landing.
+     * flash off. Watching the contents is the honest signal, and it catches
+     * cases a local hook would miss anyway: a recipe finishing, a fish landing.
+     *
+     * <p><b>The whole map, not the total and the last key.</b> The satchel keeps
+     * insertion order and a second handful of blackberries does not reorder
+     * anything, so "the last key" is the last <em>new</em> kind, which after
+     * five minutes is almost never what was just picked. Diffing the counts
+     * names the right thing every time and costs a walk over a map with a few
+     * dozen entries in it, once a frame.
      *
      * <p>Yields to a flash raised in the last fraction of a second, which is
      * the solo path having already said something more specific about the same
      * event.
      */
     private void noticePickups() {
-        int now = view().satchel().total();
-        if (carried >= 0 && now > carried && pickedFlash < FLASH_SECONDS - 0.2) {
-            List<String> keys = view().satchel().keys();
-            if (!keys.isEmpty()) {
-                flash("+" + (now - carried) + " "
-                        + Forage.nameOf(keys.get(keys.size() - 1)));
+        Map<String, Integer> now = view().satchel().contents();
+        if (carried != null && pickedFlash < FLASH_SECONDS - 0.2) {
+            String gained = null;
+            int most = 0;
+            for (Map.Entry<String, Integer> entry : now.entrySet()) {
+                int grew = entry.getValue() - carried.getOrDefault(entry.getKey(), 0);
+                if (grew > most) {
+                    most = grew;
+                    gained = entry.getKey();
+                }
+            }
+            if (gained != null) {
+                flash("+" + most + " " + Forage.nameOf(gained));
+                flashedKey = gained;
             }
         }
         carried = now;
     }
+
+    /**
+     * The item the hand should be holding, or {@code null}.
+     *
+     * <p>Whatever the last flash named, resolved back to a key — so the thing
+     * in your hand is the thing the screen just said you picked up, and the two
+     * cannot disagree.
+     */
+    private String flashedKey;
 
     private void sendMove() {
         if (session.online()) {
@@ -1119,6 +1174,21 @@ public class WatchScene extends AbstractScene {
         applyVisibility(weather);
         if (frame == 2) applyDistanceSettings();
 
+        // <b>The moving meshes go first, and the order is not cosmetic.</b>
+        // Opaque geometry is order-independent under a depth buffer, so this
+        // costs nothing visually — but a backend bounds how many buffers it
+        // will re-specify in one frame, and these two are re-specified every
+        // frame by construction. Submitted after four hundred chunks, they are
+        // the ones that lose the race into fresh terrain, and a frame with no
+        // animals or no hands in it is far more noticeable than a frame with
+        // one hillside at the wrong level of detail.
+        renderer.submit(buildDynamicMesh(), DYNAMIC_KEY);
+        // The view model is its own mesh with its own key, because it is the
+        // one thing on screen that is measured from the camera rather than from
+        // the world and so has to be rebuilt whenever the camera turns — which
+        // is every frame, whether or not anything else moved.
+        if (!thirdPerson) renderer.submit(buildViewMesh(), VIEW_MODEL_KEY);
+
         for (WatchChunk chunk : streamer.chunks()) {
             long key = chunk.key();
             renderer.submit(chunk.groundMesh(), key * 4);
@@ -1126,12 +1196,6 @@ public class WatchScene extends AbstractScene {
             renderer.submit(chunk.grassMesh(), key * 4 + 2);
             renderer.submit(chunk.waterMesh(), key * 4 + 3);
         }
-        renderer.submit(buildDynamicMesh(), 1);
-        // The view model is its own mesh with its own key, because it is the
-        // one thing on screen that is measured from the camera rather than from
-        // the world and so has to be rebuilt whenever the camera turns — which
-        // is every frame, whether or not anything else moved.
-        if (!thirdPerson) renderer.submit(buildViewMesh(), 2);
         renderer.flush(target);
 
         drawWeatherOverlay(target, weather);
@@ -1259,11 +1323,34 @@ public class WatchScene extends AbstractScene {
 
         // The boats: every one within the view, wherever the seed put it or
         // whoever left it there.
+        //
+        // A boat somebody is <em>in</em> is drawn at that person rather than at
+        // its mooring, because that is where it is. The store only learns where
+        // a boat has got to when somebody steps out of it — which is the right
+        // thing to persist and exactly the wrong thing to draw from, since a
+        // rower would otherwise glide across the lake while their boat sat on
+        // the beach they left.
         double boatReach = streamer.viewRadius() * WatchChunk.SIZE;
         for (Boats.Boat boat
                 : view.boats().near(streamer.field(), px, py, boatReach)) {
-            BoatModel.boat(mesh, boat.x() - ox, boat.y() - oy, boat.z(), boat.yaw(),
+            WatchView.Walker rower = rowerOf(view, boat.id());
+            double bx = boat.x(), by = boat.y(), byaw = boat.yaw();
+            if (rower != null) {
+                bx = rower.x();
+                by = rower.y();
+                byaw = rower.yaw();
+            }
+            BoatModel.boat(mesh, bx - ox, by - oy, boat.z(), byaw,
                     (frame * 0.006 + boat.id() * 0.13) % 1);
+        }
+        // …and our own, which is in the party list but may not have reached the
+        // view yet, and whose position we know better than the last snapshot.
+        if (boatId != 0 && rowerOf(view, boatId) == null) {
+            Boats.Boat mine = view.boats().byId(streamer.field(), boatId);
+            if (mine != null) {
+                BoatModel.boat(mesh, px - ox, py - oy, mine.z(), yaw,
+                        (frame * 0.006 + boatId * 0.13) % 1);
+            }
         }
 
         for (Lure lure : view.lures()) {
@@ -1333,19 +1420,41 @@ public class WatchScene extends AbstractScene {
         boolean me = walker.id() == view().selfId();
         double speed = me ? lastSpeed : 1 - walker.stillness();
         double phase = me ? gait : (frame * 0.02 + walker.id() * 0.37) % 1;
-        // In the water the body sits lower; in a boat it sits on the thwart.
-        double sunk = me ? dive
-                : walker.submerged() ? 1.5 : 0;
-        if (walker.inBoat()) sunk = -Boats.DECK * 0.4;
+        // <b>Nothing is subtracted for swimming.</b> A walker's z is where their
+        // feet are, and a diver's feet are already below the waterline — the
+        // dive is in that number, not on top of it. Passing the dive depth here
+        // as well drew a diver a second dive-depth down, through the lake bed,
+        // and buried a remote one a metre and a half into it. The one genuine
+        // offset is the boat, which lifts a rower onto the thwart.
+        double sunk = walker.inBoat() ? -Boats.DECK * 0.4 : 0;
         WalkerModel.walker(mesh, x, y, walker.z(), walker.yaw(), walker.crouching(),
                 phase, speed * WatchPlayer.WALK_SPEED,
                 WalkerModel.coatFor(walker.id()), sunk);
     }
 
+    /** Whoever is rowing a boat, or {@code null} if it is moored. */
+    private WatchView.Walker rowerOf(WatchView view, long boat) {
+        for (WatchView.Walker walker : view.walkers()) {
+            if (walker.boatId() == boat) {
+                // Our own position is a frame old in the view and current here;
+                // prefer the live one, which is what stops the boat we are
+                // rowing lagging a snapshot behind us.
+                if (walker.id() == view.selfId()) {
+                    return new WatchView.Walker(walker.id(), walker.name(), px, py, pz,
+                            yaw, pitch, walker.stillness(), walker.crouching(),
+                            walker.submerged(), walker.breath(), walker.boatId());
+                }
+                return walker;
+            }
+        }
+        return null;
+    }
+
     /** This player, before the first snapshot has told us where we are. */
     private void drawSelf(Mesh.Builder mesh, double ox, double oy) {
         WalkerModel.walker(mesh, px - ox, py - oy, pz, yaw, crouching, gait,
-                lastSpeed, WalkerModel.coatFor(session.selfId()), dive);
+                lastSpeed, WalkerModel.coatFor(session.selfId()),
+                boatId != 0 ? -Boats.DECK * 0.4 : 0);
     }
 
     /**
@@ -1374,9 +1483,10 @@ public class WatchScene extends AbstractScene {
             double forward = WalkerModel.HAND_FORWARD + reach * 0.42 + 0.10;
             double out = WalkerModel.HAND_SIDE;
             double down = WalkerModel.HAND_DROP - reach * 0.16;
-            double upX = eye.rightY() * eye.dirZ();
-            double upY = -eye.rightX() * eye.dirZ();
-            double upZ = eye.rightX() * eye.dirY() - eye.rightY() * eye.dirX();
+            double[] up = new double[3];
+            WalkerModel.cameraUp(eye.dirX(), eye.dirY(), eye.dirZ(),
+                    eye.rightX(), eye.rightY(), up);
+            double upX = up[0], upY = up[1], upZ = up[2];
             ItemModel.item(mesh, held,
                     eye.dirX() * forward + eye.rightX() * out + upX * -down,
                     eye.dirY() * forward + eye.rightY() * out + upY * -down,
@@ -1399,10 +1509,8 @@ public class WatchScene extends AbstractScene {
         WatchPlayer me = session.local() == null ? null
                 : session.local().player(session.selfId());
         if (me != null && me.rod().active()) return "rod";
-        if (pickedFlash <= 0) return null;
-        Satchel satchel = view().satchel();
-        List<String> keys = satchel.keys();
-        return keys.isEmpty() ? null : keys.get(keys.size() - 1);
+        if (pickedFlash <= 0 || flashedKey == null) return null;
+        return view().satchel().has(flashedKey) ? flashedKey : null;
     }
 
     // --- the HUD ----------------------------------------------------------------------

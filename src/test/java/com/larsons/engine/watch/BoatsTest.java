@@ -9,6 +9,7 @@ import java.util.List;
 import java.util.Set;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertNotEquals;
 import static org.junit.jupiter.api.Assertions.assertNotNull;
 import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertTrue;
@@ -149,6 +150,58 @@ class BoatsTest {
                 boat.x() + 60, boat.y() + 40, 4);
         assertNotNull(moored, "the boat did not come with us");
         assertEquals(boat.id(), moored.id());
+    }
+
+    /**
+     * No boat ever carries the id that means "not in a boat".
+     *
+     * <p>Zero is {@link WatchPlayer#boatId()}'s sentinel and the unsalted cell
+     * packing gave cell (0, 0) exactly that. Since everybody spawns at the
+     * world origin, the first boat most people would ever walk up to could be
+     * boarded and then never rowed or stepped out of, because every test for
+     * "am I in a boat" said no.
+     */
+    @Test
+    void noBoatCarriesTheNotInABoatSentinel() {
+        TerrainField field = new TerrainField(SEED);
+        Boats boats = new Boats(SEED);
+        int checked = 0;
+        for (Boats.Boat boat : sweep(boats, field)) {
+            assertNotEquals(0, boat.id(), boat + " has the sentinel id");
+            checked++;
+        }
+        // …and specifically the cell the world origin falls in, over several
+        // worlds, since only some seeds put a boat there at all.
+        for (long seed = 0; seed < 40; seed++) {
+            Boats world = new Boats(seed);
+            TerrainField terrain = new TerrainField(seed);
+            for (Boats.Boat boat : world.near(terrain, 0, 0, Boats.CELL)) {
+                assertNotEquals(0, boat.id(),
+                        "seed " + seed + ": " + boat + " at the origin has the sentinel id");
+                checked++;
+            }
+        }
+        assertTrue(checked > 0, "no boats were checked at all");
+    }
+
+    /** An id round-trips back to the boat it names. */
+    @Test
+    void anIdFindsItsOwnBoat() {
+        TerrainField field = new TerrainField(SEED);
+        Boats boats = new Boats(SEED);
+        for (Boats.Boat boat : sweep(boats, field)) {
+            Boats.Boat again = boats.byId(field, boat.id());
+            assertNotNull(again, "id " + boat.id() + " found nothing");
+            assertEquals(boat.x(), again.x(), 1e-9);
+            assertEquals(boat.y(), again.y(), 1e-9);
+        }
+        // …including after it has been moved.
+        Boats.Boat first = sweep(boats, field).get(0);
+        boats.moveTo(first.id(), 900, -700, 0, 0.75);
+        Boats.Boat moved = boats.byId(field, first.id());
+        assertNotNull(moved);
+        assertEquals(900, moved.x(), 1e-9);
+        assertTrue(moved.moved());
     }
 
     /** Nothing to board is not an error, it is nothing. */

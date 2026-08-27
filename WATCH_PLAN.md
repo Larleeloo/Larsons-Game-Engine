@@ -454,7 +454,7 @@ is clamped so nothing is ever inside the ground.
 | Items with models, highlighted when picked up | `watch/render/ItemModel`; `WatchGame.pickTarget` → the ring and prompt in `WatchScene.drawReachHighlight` |
 | Weather events | `watch/Weather` — eight conditions, server-owned like the clock, in the snapshot's `sky` field |
 | Scroll through the entire inventory | `WatchScene.drawSatchel` — two scrolling columns with cursors, windows and bars |
-| Walk the sea floor, find underwater animals | `WatchScene.swim`; `WatchPlayer.breath`; `WatchGame.populate` samples a wet ring and a wet species table for a submerged player |
+| Walk the sea floor, find underwater animals | `WatchScene.swim` (Space rises, Shift sinks); `WatchPlayer.breath`; `WatchGame.populate` samples a wet ring and a wet species table for a submerged player |
 | Findable boats | `watch/Boats` — generated on shorelines from the seed, like the trails; `watch/render/BoatModel` |
 | Terrain rendering, and permanence on a big machine | `graphics/ChunkMemory`; `ChunkStreamer`'s retained LRU cache; `GlMeshPass` upload and buffer budgets |
 | General UI quality of life | one key for whatever is in reach (`WatchGame.use`), a compass, a breath meter, a pickup flash, a weather line |
