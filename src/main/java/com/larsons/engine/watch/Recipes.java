@@ -172,6 +172,29 @@ public final class Recipes {
                 "For putting seeds where you want them.",
                 "fallen_branch", 1, "stone", 1);
 
+        // --- the spyglass, in two steps --------------------------------------------
+        //
+        // Deliberately the longest chain in the game, because it is the only
+        // thing you can make that changes what the world *is* rather than what
+        // comes to you: a walk with a glass in the satchel has a far shore in
+        // it. Two steps, two kinds of ground and a bench —
+        //
+        //   quartz (bare rock or crystal) + sand (a dune or a beach)
+        //       → a lens, ground at a bench
+        //   two lenses + a plank + rope + sap
+        //       → the tube
+        //
+        // — so nobody has one in their first ten minutes, and anybody who wants
+        // one has a reason to walk somewhere they have not been. Every input is
+        // something the ground already gives up: see Forage.underfoot for which
+        // ground gives up which, and Forage itself for what they are.
+        add(out, "lens", 1, Station.BENCH,
+                "Quartz against wet sand, for an afternoon. Two of these make a glass.",
+                "quartz", 1, "sand", 2);
+        add(out, Spyglass.ITEM, 1, Station.BENCH,
+                "Objective, eyepiece, and a tube to hold them the right distance apart.",
+                "lens", 2, "plank", 1, "rope", 1, "sap", 1);
+
         // --- building materials -----------------------------------------------------
         add(out, "plank", 4, Station.BENCH,
                 "Split from a branch. The floor of everything.",

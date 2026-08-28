@@ -241,6 +241,12 @@ public enum GameAction {
             InputBinding.key(KeyEvent.VK_B)),
     WATCH_ROD("watch_rod", "Cast / Strike", Category.WATCH,
             InputBinding.key(KeyEvent.VK_V)),
+    // Held, not toggled, and on the right button: raising a glass to your eye
+    // is a thing you do for as long as you are looking through it, and the
+    // right button is where every game that has ever had a sight puts it. Z is
+    // the alternate, for anybody playing without a mouse worth the name.
+    WATCH_SPYGLASS("watch_spyglass", "Raise Spyglass", Category.WATCH,
+            InputBinding.mouse(MouseEvent.BUTTON3), InputBinding.key(KeyEvent.VK_Z)),
     WATCH_TURN_PIECE("watch_turn_piece", "Turn Build Piece", Category.WATCH,
             InputBinding.key(KeyEvent.VK_X)),
     WATCH_BOAT("watch_boat", "Board / Leave Boat", Category.WATCH,

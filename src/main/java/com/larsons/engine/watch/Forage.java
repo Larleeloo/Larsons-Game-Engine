@@ -1,6 +1,8 @@
 package com.larsons.engine.watch;
 
 import com.larsons.engine.watch.life.Diet;
+import com.larsons.engine.watch.world.WatchBiome;
+import com.larsons.engine.watch.world.WatchMaterial;
 
 import java.util.ArrayList;
 import java.util.LinkedHashMap;
@@ -131,6 +133,71 @@ public final class Forage {
         out[1] = appetite > 0 ? item.reach() : 0;
     }
 
+    /**
+     * What a piece of ground gives up to somebody turning it over.
+     *
+     * <p>The <b>region</b> decides most of it — a wood has fallen branches in
+     * it, a marsh has reeds — and the <b>surface actually underfoot</b> decides
+     * the rest, which is what makes sand a beach and quartz a crag rather than
+     * making both of them properties of a whole biome. Those two are here
+     * because they are what a spyglass is made of, and a glass ought to be a
+     * reason to walk somewhere.
+     *
+     * <p><b>Multiplicity is the weighting.</b> A key listed twice is twice as
+     * likely to come up, because the caller picks one entry uniformly. That is
+     * cruder than a table of probabilities and much easier to read: you can see
+     * at a glance that a dune is mostly sand and occasionally quartz.
+     *
+     * <p>Lives here rather than in {@code WatchGame} so that "what can this
+     * world actually give me" is a question with an answer that does not need a
+     * running game — which is how a test can prove that everything the recipes
+     * ask for is obtainable somewhere.
+     *
+     * @param surface what the generator says the ground is made of at the point
+     * @return the candidates, never empty
+     */
+    public static List<String> underfoot(WatchBiome biome, WatchMaterial surface) {
+        List<String> options = new ArrayList<>();
+        if (biome != null) {
+            if (!biome.trees().isEmpty()) {
+                options.add("fallen_branch");
+                options.add("bark_strip");
+                options.add("sap");
+            }
+            if (biome.humidity() > 70) options.add("reed_bundle");
+            if (biome.humidity() > 55) options.add("vine");
+            if (biome.rockDensity() > 0.004) options.add("stone");
+            if (biome.humidity() > 45) options.add("clay_lump");
+        }
+
+        if (surface != null) {
+            switch (surface) {
+                case SAND, RED_SAND, TRAIL_SAND -> {
+                    // A beach or a dune: mostly sand, and the odd quartz pebble
+                    // washed out of whatever the sand used to be.
+                    options.add("sand");
+                    options.add("sand");
+                    options.add("quartz");
+                }
+                case ROCK, DARK_ROCK, GRAVEL, TRAIL_STONE -> {
+                    options.add("stone");
+                    options.add("quartz");
+                }
+                case CRYSTAL -> {
+                    // The one place a lens is easy, and it is a fantasy biome
+                    // half a world away from wherever anybody starts.
+                    options.add("quartz");
+                    options.add("quartz");
+                }
+                default -> { }
+            }
+        }
+
+        options.add("clover");
+        options.add("feather");
+        return options;
+    }
+
     private static Map<String, Item> build() {
         Map<String, Item> map = new LinkedHashMap<>();
 
@@ -208,6 +275,13 @@ public final class Forage {
         material(map, "plank", "Plank", "Split from a branch. Floors and walls.");
         material(map, "thatch", "Thatch", "Bound reeds. A roof for a season.");
         material(map, "rope", "Rope", "Twisted bark. Every lashing in a treehouse.");
+        // The three the spyglass is made of. Sand and quartz are picked off the
+        // ground like everything else here — but only where the ground has them,
+        // which is what makes the glass a thing you travel for rather than a
+        // thing you make in the first clearing. See `underfoot` above.
+        material(map, "sand", "Sand", "Off a dune or a beach. Grinding paste, with water.");
+        material(map, "quartz", "Clear Quartz", "Water-clear, out of rock. A lens is in there.");
+        material(map, "lens", "Ground Lens", "Quartz, ground and polished until it gathers light.");
 
         // --- prepared ------------------------------------------------------------
         prepared(map, "suet_cake", "Suet Cake", 1.9, 42,
@@ -240,6 +314,8 @@ public final class Forage {
                 "Put food in it, stand well back, and wait.");
         item(map, "journal", "Field Journal", Kind.TOOL, 0, 0,
                 "Where the sightings go. You start with it.");
+        item(map, Spyglass.ITEM, "Spyglass", Kind.TOOL, 0, 0,
+                "Two lenses in a tube. Hold it up and the far shore comes to you.");
 
         return Map.copyOf(map);
     }

@@ -3176,8 +3176,61 @@ You do not chase things. You give them a reason to come.
 | **Forage** | Berries, seeds, nuts, mushrooms, sap, branches, stones — picked off the bushes and trees the world scattered. |
 | **Fish** | Cast into a lake, wait, and strike inside the bite window. Different waters hold different fish. |
 | **Cultivate** | Plant seed and it grows into a crop, or into a tree if it was a tree's seed. |
-| **Cook** | Seventeen recipes across bare hands (9), a fire (5) and a bench (3) — suet cake, grain loaf, berry mash, nectar and smoked fish for the animals, and the rod, the trowel, the feeder itself, planks, thatch and rope for you. Cooking outdraws foraging for most appetites, though a kingfisher would still rather have a live trout. |
+| **Cook** | Nineteen recipes across bare hands (9), a fire (5) and a bench (5) — suet cake, grain loaf, berry mash, nectar and smoked fish for the animals, and the rod, the trowel, the feeder itself, planks, thatch, rope, a ground lens and the spyglass for you. Cooking outdraws foraging for most appetites, though a kingfisher would still rather have a live trout. |
 | **Feed** | Put a filled feeder down and the species whose diet matches come to it. A feeder holds several servings and the food spoils if you leave it out. |
+
+### The spyglass
+
+A draw tube with three stops — **×4, ×8, ×15** — held up on <kbd>Mouse 2</kbd>,
+its stop changed with the wheel
+([`Spyglass`](src/main/java/com/larsons/engine/watch/Spyglass.java)).
+
+**It physically zooms.** The easy version of this scales the middle of a
+finished frame up, which is a magnifying glass held over a photograph: a
+chaffinch four hundred metres away stays the three grey pixels it was, only
+larger. Instead the camera's own field of view narrows —
+`fov = 2·atan(tan(fov₀/2) / power)`, the ratio a real objective and eyepiece
+obey — so the far hillside is re-projected at the size it now subtends and
+drawn with the triangles it deserves at that size. `EyeCamera`'s floor moved
+from 20° to 2° to allow it; 20° is ×3.5, which would have silently clamped the
+top two stops and made "×15" a label rather than a claim.
+
+**And the distance is actually built.** A raised glass points the chunk
+streamer down a cone, and chunks inside it are wanted far outside the ordinary
+view radius, at a level of detail taken from their distance **divided by the
+magnification** — at ×8, a chunk twenty out is meshed as though it were two and
+a half away, with real trunks and bushes on it rather than a green smear. It
+pays for itself: a ×8 glass is a ten-degree frustum, so almost everything in
+the ordinary ring is culled before it is ever submitted, and the cone is a
+wedge of a circle whose whole area would be thousands of chunks. On a machine
+with no card the cone is shorter, for the same reason the ordinary ring is six
+chunks there and sixteen on a card.
+
+Three things follow, and they are what separate an instrument from a prop:
+
+- **There is something out there to look at.** A third of a glassing player's
+  share of the animal roster is spawned down the line they are looking, and
+  nothing inside the cone is despawned while they are watching it. The spawn
+  ring is ninety-five metres and a ×15 spot is nine hundred; without this the
+  beautifully-drawn far shore would be empty.
+- **The host decides the reach.** Its range grows with the power and its
+  angular tolerance *shrinks* by it, so glassing is a longer and a more exact
+  way of pointing — you pick one bird out of the flock. The server refuses a
+  power to anybody without a spyglass in their satchel, because being able to
+  write down a bird nine hundred metres away is the one thing in this game
+  worth cheating for.
+- **It shakes.** Fifteen magnifications multiply the tremor in your hands by
+  fifteen too. The sway is scaled to the field of view and damped by the same
+  **stillness** stat the whole game already turns on, so crouching and standing
+  still is what steadies it, and a readout under the eyepiece says so.
+
+Making one is deliberately the deepest chain in the book: **quartz** off bare
+rock or crystal ground and **sand** off a dune or a beach, ground together into
+a **lens** at a bench, then two lenses, a plank, rope and sap into the tube.
+What the ground gives up is decided by the *surface underfoot* and not merely
+the biome you are standing in, so "go and find a beach" is a real instruction —
+nobody has a glass in their first ten minutes, and wanting one is a reason to
+walk somewhere new.
 
 ### Building
 
@@ -3230,7 +3283,11 @@ Chunks are 32 m square, generated and meshed on a pool of background workers
 ([`ChunkStreamer`](src/main/java/com/larsons/engine/watch/world/ChunkStreamer.java)),
 nearest first, at a level of detail that falls off with distance — which is
 what the pure-function generator buys: any chunk, on any thread, in any order,
-byte-identical every time.
+byte-identical every time. A raised **spyglass** adds a second, much longer
+ring: a cone down the line of sight whose chunks are built at a detail chosen
+from their distance *divided by the magnification*, which is how a distant
+hillside seen through a glass is the same ground the near one is rather than a
+coarse impostor of it.
 
 **Ground that has been built stays built.** A chunk walked away from moves into
 a least-recently-used cache sized from the heap this JVM was given
@@ -3322,7 +3379,9 @@ land and **rises** in water; <kbd>Shift</kbd> sprints on land and **sinks** in
 water — up is up and crouch is down, as in every game with swimming in it, and
 neither key means anything else while you are in the water.
 <kbd>F5</kbd> goes third person. <kbd>Mouse 1</kbd> spots what you are looking
-at, <kbd>E</kbd> does whatever is in reach, <kbd>G</kbd> opens the book,
+at, <kbd>Mouse 2</kbd> (or <kbd>Z</kbd>) holds the spyglass up — the wheel
+changes its stop while it is up — <kbd>E</kbd> does whatever is in reach,
+<kbd>G</kbd> opens the book,
 <kbd>Tab</kbd> the satchel, <kbd>F</kbd> puts down a feeder, <kbd>R</kbd>
 plants, <kbd>C</kbd> cross-pollinates, <kbd>Y</kbd> boards and leaves a boat,
 <kbd>B</kbd> builds, <kbd>X</kbd> turns the piece, <kbd>V</kbd> casts and

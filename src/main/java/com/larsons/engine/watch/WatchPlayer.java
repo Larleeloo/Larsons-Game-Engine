@@ -60,6 +60,18 @@ public final class WatchPlayer {
     /** The boat being rowed, or {@code 0}. */
     private long boatId;
 
+    /**
+     * The magnification of the glass this player has up; {@code 1} for none.
+     *
+     * <p>Server state rather than a client's business, because it is what
+     * decides how far away they may record something — see
+     * {@code WatchGame.glass}, which refuses a power to anybody without a
+     * spyglass in their satchel. It is also in the snapshot, so everybody else
+     * can see somebody with a glass to their eye and follow where they are
+     * looking, which is half of watching things with other people.
+     */
+    private double glassPower = Spyglass.NONE;
+
     private final Satchel satchel = new Satchel();
     private final Fishing rod;
 
@@ -117,6 +129,18 @@ public final class WatchPlayer {
 
     /** Whether they are rowing rather than walking. */
     public boolean inBoat() { return boatId != 0; }
+
+    /** The magnification they are looking through; {@code 1} is the naked eye. */
+    public double glassPower() { return glassPower; }
+
+    /** Whether they have a glass up at all. */
+    public boolean glassing() { return glassPower > 1.02; }
+
+    /** Raise or lower the glass. Clamped to what a tube in this game can do. */
+    public void setGlassPower(double power) {
+        double top = Spyglass.POWERS[Spyglass.POWERS.length - 1];
+        this.glassPower = Math.max(Spyglass.NONE, Math.min(top, power));
+    }
 
     /** Take the oars of a boat. */
     public void boardBoat(long id) { this.boatId = id; }
@@ -220,6 +244,7 @@ public final class WatchPlayer {
         if (submerged) m.put("uw", true);
         if (breath < 1) m.put("air", breath);
         if (boatId != 0) m.put("boat", boatId);
+        if (glassing()) m.put("gl", glassPower);
         return m;
     }
 
@@ -241,6 +266,9 @@ public final class WatchPlayer {
         submerged = WatchJson.bool(m, "uw", false);
         breath = WatchJson.num(m, "air", 1);
         boatId = WatchJson.big(m, "boat", 0);
+        // A glass is not left up across a save: you put it in the satchel when
+        // you stop for the night like everybody else.
+        glassPower = Spyglass.NONE;
         satchel.load(WatchJson.map(m, "bag"));
     }
 

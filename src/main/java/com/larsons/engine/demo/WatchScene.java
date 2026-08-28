@@ -17,6 +17,7 @@ import com.larsons.engine.watch.Lure;
 import com.larsons.engine.watch.Recipes;
 import com.larsons.engine.watch.Satchel;
 import com.larsons.engine.watch.Spotlight;
+import com.larsons.engine.watch.Spyglass;
 import com.larsons.engine.watch.WatchClock;
 import com.larsons.engine.watch.WatchGame;
 import com.larsons.engine.watch.WatchPlayer;
@@ -176,6 +177,23 @@ public class WatchScene extends AbstractScene {
     private double smoothedGround;
     private boolean crouching;
     private boolean thirdPerson;
+
+    /**
+     * The glass, and where it is actually pointing.
+     *
+     * <p>{@link #yaw} and {@link #pitch} are where the player has aimed;
+     * {@code aimYaw} and {@code aimPitch} are that plus the tremor in their
+     * hands, and they are what the camera looks along, what the crosshair
+     * means, and what goes to the host. Keeping them apart is what lets
+     * walking still be walking while the view wanders — see
+     * {@link Spyglass#swayYaw}.
+     */
+    private final Spyglass glass = new Spyglass();
+
+    private double aimYaw, aimPitch;
+
+    /** The power last sent to the host, so a steady glass is not re-announced. */
+    private double sentGlassPower = Spyglass.NONE;
 
     /**
      * How far the player's feet are below the waterline, in metres.
@@ -350,6 +368,13 @@ public class WatchScene extends AbstractScene {
 
         if (panel != Panel.NONE) {
             Pointer.restore();
+            // A panel puts the glass away: you cannot read a recipe through a
+            // telescope, and coming back to a screen still zoomed to ×15 with
+            // no memory of having raised it is disorienting.
+            glass.tick(dt, false, 1);
+            applySway();
+            announceGlass();
+            aimGlass();
             updatePanel(dt, input);
             // The pause screen is where "Leave Walk" lives, and leaving closes
             // the session out from under the two calls below. This is the line
@@ -384,6 +409,7 @@ public class WatchScene extends AbstractScene {
         }
         if (KeyBinds.pressed(input, GameAction.TOGGLE_VIEW)) thirdPerson = !thirdPerson;
 
+        useGlass(dt, input);
         steerLook(input);
         walk(dt, input);
         // The reach gesture and the pickup flash decay on their own clock,
@@ -408,6 +434,9 @@ public class WatchScene extends AbstractScene {
         syncClock();
         noticePickups();
 
+        // Where the glass is pointed decides which chunks this call asks for,
+        // so it is set first.
+        aimGlass();
         streamer.update(px, py, dt);
         saveTimer += dt;
         if (saveTimer >= AUTOSAVE_INTERVAL) {
@@ -430,18 +459,126 @@ public class WatchScene extends AbstractScene {
      * Mouse look, exactly as the world game does it: hide the pointer, pin it
      * to the middle of the window, and read the hand's own travel rather than
      * where the arrow ended up. See {@code PlayScene.steerLook} for why.
+     *
+     * <p>The one addition is {@link Spyglass#lookScale()}: turning is slowed by
+     * the magnification, so a hand movement sweeps the same distance
+     * <em>across the eyepiece</em> at every power. Without it a flick at ×15
+     * throws the view fifteen screens and the glass is unusable at exactly the
+     * power it exists for.
      */
     private void steerLook(InputManager input) {
         int w = Math.max(1, viewportWidth), h = Math.max(1, viewportHeight);
         Pointer.setVisible(false);
         Pointer.lockTo(input, w / 2, h / 2);
         input.consumeMouseMotion(lookMotion);
-        double step = LOOK_STEP * PlayerSettings.active().lookSensitivity;
+        double step = LOOK_STEP * PlayerSettings.active().lookSensitivity
+                * glass.lookScale();
         double sign = PlayerSettings.active().invertLook ? 1 : -1;
         yaw += lookMotion[0] * step;
         pitch += lookMotion[1] * step * sign;
         pitch = Math.max(-EyeCamera.MAX_PITCH, Math.min(EyeCamera.MAX_PITCH, pitch));
         yaw = yaw % (Math.PI * 2);
+
+        applySway();
+    }
+
+    /**
+     * The aim: the heading plus whatever the hands are doing.
+     *
+     * <p>Worked out after the mouse has been read, so that the camera, the
+     * crosshair and the host all use this frame's number rather than last
+     * frame's. The tremor goes on the aim and <em>not</em> on the heading —
+     * walking is still walking, and only the view wanders.
+     */
+    private void applySway() {
+        aimYaw = yaw + glass.swayYaw(EyeCamera.DEFAULT_FOV);
+        aimPitch = Math.max(-EyeCamera.MAX_PITCH, Math.min(EyeCamera.MAX_PITCH,
+                pitch + glass.swayPitch(EyeCamera.DEFAULT_FOV)));
+    }
+
+    /**
+     * Raise, lower and focus the glass, and tell the host when any of that
+     * changed.
+     *
+     * <p><b>Held rather than toggled</b>, because that is what raising
+     * something to your eye is. The wheel changes the stop while it is up —
+     * three pulls of a draw tube, wrapping — which is the only control in this
+     * game on the wheel and so cannot be mistaken for anything else.
+     *
+     * <p>Carrying one is checked here rather than in {@link Spyglass}: the
+     * satchel belongs to the view, and the optic has no business reading it.
+     * The host checks it again, because the host checks everything.
+     */
+    private void useGlass(double dt, InputManager input) {
+        boolean carried = view().satchel().has(Spyglass.ITEM);
+        boolean wanted = carried && KeyBinds.down(input, GameAction.WATCH_SPYGLASS);
+        if (wanted) {
+            // AWT's wheel is positive toward the user; scrolling away — the
+            // gesture everybody makes for "closer" — pulls the tube out.
+            int notches = input.getWheelRotation();
+            if (notches != 0) glass.nudge(-notches);
+        }
+        glass.tick(dt, wanted, stillness());
+        announceGlass();
+    }
+
+    /**
+     * Tell the host the glass moved, if it did.
+     *
+     * <p>Only on a change, and only past a threshold, so a tube travelling
+     * between two stops does not put forty messages on the wire — but every
+     * change does have to go, because the host is what decides how far this
+     * player can record something and what stays alive out there to be
+     * recorded.
+     */
+    private void announceGlass() {
+        double power = glass.power();
+        if (Math.abs(power - sentGlassPower) <= 0.05
+                && (power == Spyglass.NONE) == (sentGlassPower == Spyglass.NONE)) {
+            return;
+        }
+        sentGlassPower = power;
+        if (session.local() != null) {
+            session.local().glass(session.selfId(), power);
+        } else if (session.client() != null) {
+            session.client().sendGlass(power);
+        }
+    }
+
+    /**
+     * Point the streamer's detail down the glass.
+     *
+     * <p>The cone is the camera's own frustum, widened a little so a chunk at
+     * its edge is built before it swings into view, and its reach is what the
+     * glass claims it can see — bounded by what the backend can hold. A card
+     * can carry a kilometre of full-detail ground in a ten-degree wedge; the
+     * painter cannot, and gets a shorter one for the same reason its ordinary
+     * ring is six chunks and not sixteen.
+     */
+    private void aimGlass() {
+        if (streamer == null) return;
+        if (!glass.up()) {
+            streamer.setFocus(null);
+            return;
+        }
+        double fov = glass.fov(EyeCamera.DEFAULT_FOV);
+        // The horizontal half angle, from the vertical one and the window's
+        // shape, plus a margin for turning.
+        double aspect = viewportHeight <= 0 ? 1.6 : viewportWidth / (double) viewportHeight;
+        double half = Math.atan(Math.tan(fov / 2) * Math.max(1, aspect)) * 1.5 + 0.05;
+        int reach = (int) Math.ceil(glass.range() / WatchChunk.SIZE);
+        reach = Math.min(reach, renderer.acceleratedByGpu() ? 30 : 10);
+        streamer.setFocus(ChunkStreamer.Focus.looking(px, py, aimYaw, reach, half,
+                glass.power()));
+    }
+
+    /** How settled this player is — the host's number when there is one. */
+    private double stillness() {
+        WatchPlayer me = session.local() == null ? null
+                : session.local().player(session.selfId());
+        if (me != null) return me.stillness();
+        WatchView.Walker self = view().self();
+        return self != null ? self.stillness() : 1;
     }
 
     /**
@@ -635,21 +772,26 @@ public class WatchScene extends AbstractScene {
         // crosshair returns early, and without this the ring stayed pulsing
         // round a bush the player had walked away from ten seconds ago.
         inReach = null;
-        double cp = Math.cos(pitch);
-        double dirX = Math.sin(yaw) * cp, dirY = -Math.cos(yaw) * cp, dirZ = Math.sin(pitch);
+        // The aim, not the heading: what the crosshair covers is where the
+        // glass is actually wandering. See `useGlass`.
+        double cp = Math.cos(aimPitch);
+        double dirX = Math.sin(aimYaw) * cp, dirY = -Math.cos(aimYaw) * cp;
+        double dirZ = Math.sin(aimPitch);
         double eyeZ = pz + (crouching ? 1.10 : 1.68);
+        double power = glass.power();
+        double range = Spyglass.spotRange(power, WatchGame.SPOT_RANGE);
         double best = Double.MAX_VALUE;
         WatchView.Creature found = null;
         for (WatchView.Creature creature : view().creatures()) {
             double dx = creature.x() - px, dy = creature.y() - py;
             double dz = creature.z() + creature.def().bodyLength() * 0.5 - eyeZ;
             double distance = Math.sqrt(dx * dx + dy * dy + dz * dz);
-            if (distance > WatchGame.SPOT_RANGE || distance < 0.01) continue;
+            if (distance > range || distance < 0.01) continue;
             double dot = (dx * dirX + dy * dirY + dz * dirZ) / distance;
             if (dot <= 0) continue;
             double angle = Math.acos(Math.min(1, dot));
-            double tolerance = Math.max(0.022,
-                    Math.atan2(creature.def().bodyLength() * 1.6, distance));
+            double tolerance = Spyglass.tolerance(creature.def().bodyLength(), distance,
+                    power);
             if (angle > tolerance) continue;
             double score = angle * 1000 + distance;
             if (score < best) {
@@ -669,6 +811,14 @@ public class WatchScene extends AbstractScene {
         prompt = known
                 ? found.def().name() + "  —  click to point it out"
                 : "Something new  —  click to record it";
+        // How far off it is, but only through the glass: unaided, everything is
+        // within a hundred metres and the number is noise. Glassing, it is the
+        // whole reason you raised it — "there is something four hundred metres
+        // out on that spit" is what one walker says to another.
+        if (glass.up()) {
+            double dx = found.x() - px, dy = found.y() - py;
+            prompt += "  ·  " + Math.round(Math.hypot(dx, dy)) + " m";
+        }
     }
 
     /**
@@ -951,9 +1101,19 @@ public class WatchScene extends AbstractScene {
      */
     private String flashedKey;
 
+    /**
+     * Tell the host where we are and which way we are looking.
+     *
+     * <p><b>The aim goes on the wire, not the heading.</b> The host traces its
+     * own ray to decide what a click hit, and the ray it should trace is the
+     * one under the crosshair — which, with a glass up, includes the shake in
+     * the player's hands. Sending the un-swayed heading would mean the label
+     * said "Redpoll" and the click recorded whatever was a third of a degree
+     * away, which is a different bird at four hundred metres.
+     */
     private void sendMove() {
         if (session.online()) {
-            session.client().sendMove(px, py, pz, yaw, pitch, crouching);
+            session.client().sendMove(px, py, pz, aimYaw, aimPitch, crouching);
             // The host decides whether that position is under water and what
             // that does to the breath; adopt its answer rather than our own.
             WatchView.Walker me = view().self();
@@ -962,7 +1122,7 @@ public class WatchScene extends AbstractScene {
                 boatId = me.boatId();
             }
         } else if (session.local() != null) {
-            session.local().move(session.selfId(), px, py, pz, yaw, pitch, crouching,
+            session.local().move(session.selfId(), px, py, pz, aimYaw, aimPitch, crouching,
                     MOVE_INTERVAL);
             WatchPlayer me = session.local().player(session.selfId());
             if (me != null) boatId = me.boatId();
@@ -1182,7 +1342,13 @@ public class WatchScene extends AbstractScene {
         // one thing on screen that is measured from the camera rather than from
         // the world and so has to be rebuilt whenever the camera turns — which
         // is every frame, whether or not anything else moved.
-        if (!thirdPerson) renderer.submit(buildViewMesh(), VIEW_MODEL_KEY);
+        // Not while the glass is up. At ×8 the hands subtend twenty degrees of
+        // a ten-degree view, so they are not "off to the side" — they are the
+        // whole frame, in front of the thing being looked at. What a player
+        // sees instead is the eyepiece, drawn over the finished world by
+        // `drawEyepiece`, which is how a scope has always been done and is also
+        // the honest picture: your hands are behind the glass, not in it.
+        if (!thirdPerson && !glass.up()) renderer.submit(buildViewMesh(), VIEW_MODEL_KEY);
 
         for (WatchChunk chunk : streamer.chunks()) {
             long key = chunk.key();
@@ -1194,6 +1360,7 @@ public class WatchScene extends AbstractScene {
         renderer.flush(target);
 
         drawWeatherOverlay(target, weather);
+        drawEyepiece(target);
         drawHud(target, biome, weather);
         switch (panel) {
             case SATCHEL -> drawSatchel(target);
@@ -1212,9 +1379,25 @@ public class WatchScene extends AbstractScene {
      */
     private void applyVisibility(Weather weather) {
         double reach = streamer.viewRadius() * WatchChunk.SIZE;
+        // A glass sees past the fog as well as past the ring — and it has to,
+        // because the painter path throws away anything beyond the far plane
+        // and a card fades it to the horizon's colour. Whatever ground the
+        // focus cone actually asked for is what the fog is allowed to hide.
+        ChunkStreamer.Focus focus = streamer.focus();
+        if (focus != null) {
+            reach = Math.max(reach, focus.radius() * (double) WatchChunk.SIZE);
+        }
         double scale = weather.visibility();
         if (submerged) scale = Math.min(scale, UNDERWATER_VISIBILITY);
-        renderer.setFogRange(reach * 0.45 * scale, reach * 1.02 * scale);
+        // Haze thins as it is magnified out of the way: the far half of a ×15
+        // view would otherwise be a flat wash of fog colour, which is exactly
+        // the detail the glass was raised to see through.
+        double lens = Math.min(3.0, glass.power() * 0.5 + 0.5);
+        double end = reach * 1.02 * scale;
+        // Pulled back toward the far plane, never past it: the horizon still
+        // has to meet the sky in the same colour. See WatchRenderer.sky.
+        double start = Math.min(end * 0.92, reach * 0.45 * scale * lens);
+        renderer.setFogRange(start, end);
     }
 
     /** A biome colour, pushed toward the weather's own grey. */
@@ -1253,6 +1436,10 @@ public class WatchScene extends AbstractScene {
 
     private void placeCamera() {
         eye.setViewport(viewportWidth, viewportHeight);
+        // The whole of the zoom: a shorter field of view through a longer lens.
+        // Nothing else about the frame changes, which is why what comes back is
+        // more detail rather than bigger pixels. See Spyglass.
+        eye.setFov(glass.fov(EyeCamera.DEFAULT_FOV));
         double eyeHeight = eyeHeight();
         // A head bob, at a fifth of the amplitude a shooter would use. Enough
         // that walking feels like walking; little enough that nobody watching a
@@ -1261,7 +1448,7 @@ public class WatchScene extends AbstractScene {
             eyeHeight += Math.sin(gait * Math.PI * 4) * 0.028
                     * Math.min(1, lastSpeed / WatchPlayer.WALK_SPEED);
         }
-        if (thirdPerson) {
+        if (thirdPerson && !glass.up()) {
             // Behind and a little above, and pulled up out of the ground if the
             // slope behind is steeper than the camera arm.
             double bx = px - Math.sin(yaw) * THIRD_PERSON_BACK;
@@ -1270,9 +1457,13 @@ public class WatchScene extends AbstractScene {
                     pz + eyeHeight + 1.0);
             eye.place(bx, by, bz);
         } else {
+            // A raised glass is at your eye whatever the view setting says:
+            // looking through a telescope from four metres behind your own head
+            // is not a thing, and the third-person camera's own body would be
+            // in the middle of the eyepiece.
             eye.place(px, py, pz + eyeHeight);
         }
-        eye.look(yaw, pitch);
+        eye.look(aimYaw, aimPitch);
     }
 
     /**
@@ -1425,6 +1616,20 @@ public class WatchScene extends AbstractScene {
         WalkerModel.walker(mesh, x, y, walker.z(), walker.yaw(), walker.crouching(),
                 phase, speed * WatchPlayer.WALK_SPEED,
                 WalkerModel.coatFor(walker.id()), sunk);
+
+        // Somebody with a glass up, seen from outside: a tube at their eye,
+        // pointing where they are pointing. This is the only way in the game to
+        // tell at a glance that a friend across the clearing has found
+        // something and which way to look — the party's own gesture, before
+        // anybody clicks anything.
+        if (walker.glassing()) {
+            double head = (walker.crouching() ? 1.10 : 1.68) + sunk;
+            double lean = 0.18;
+            ItemModel.item(mesh, Spyglass.ITEM,
+                    x + Math.sin(walker.yaw()) * lean,
+                    y - Math.cos(walker.yaw()) * lean,
+                    walker.z() + head, 1.0, walker.yaw());
+        }
     }
 
     /** Whoever is rowing a boat, or {@code null} if it is moored. */
@@ -1437,7 +1642,8 @@ public class WatchScene extends AbstractScene {
                 if (walker.id() == view.selfId()) {
                     return new WatchView.Walker(walker.id(), walker.name(), px, py, pz,
                             yaw, pitch, walker.stillness(), walker.crouching(),
-                            walker.submerged(), walker.breath(), walker.boatId());
+                            walker.submerged(), walker.breath(), walker.boatId(),
+                            walker.glass());
                 }
                 return walker;
             }
@@ -1514,8 +1720,9 @@ public class WatchScene extends AbstractScene {
         WatchView view = view();
         int pad = 16;
 
-        // Crosshair, and whatever is under it.
-        if (panel == Panel.NONE) {
+        // Crosshair, and whatever is under it. The eyepiece draws its own,
+        // finer, and two crosses on top of each other is one too many.
+        if (panel == Panel.NONE && !glass.up()) {
             int cx = viewportWidth / 2, cy = viewportHeight / 2;
             target.fillRect(cx - 6, cy - 1, 12, 2, new Color(255, 255, 255, 120));
             target.fillRect(cx - 1, cy - 6, 2, 12, new Color(255, 255, 255, 120));
@@ -1603,9 +1810,59 @@ public class WatchScene extends AbstractScene {
         if (panel == Panel.NONE) {
             String keys = "E use · F feeder · R plant · C cross · V rod · Y boat "
                     + "· B build · Tab satchel · G guide";
+            if (view.satchel().has(Spyglass.ITEM)) {
+                keys += " · Right-click glass";
+            }
             label(target, keys, pad, viewportHeight - pad - 22, HUD_SMALL,
                     new Color(150, 168, 152));
         }
+        drawGlassReadout(target);
+    }
+
+    /**
+     * What the glass is doing: its power, its reach, and how steady it is.
+     *
+     * <p><b>Inside the bore</b>, near the bottom of it, where a scope puts its
+     * own numbers — and where the walk's HUD is not. Below the tube it would
+     * land on the satchel strip and the key hints, which is exactly where it
+     * was first put and exactly why it moved: the two most-read lines on the
+     * screen and the one line you raised the glass to read, all on top of each
+     * other.
+     *
+     * <p>It answers the questions asked while looking through it — "am I at ×8
+     * or ×15" and "is it settled enough to identify this". The steadiness bar
+     * is the existing stillness stat seen from the other end, and putting it
+     * here is what makes the connection between crouching and identifying a
+     * distant bird something a player works out for themselves.
+     */
+    private void drawGlassReadout(DrawTarget target) {
+        if (!glass.up() || panel != Panel.NONE) return;
+        int cx = viewportWidth / 2, cy = viewportHeight / 2;
+        int radius = boreRadius();
+        int y = cy + (int) (radius * 0.62);
+
+        String power = "×" + Math.round(glass.power())
+                + "   ·   " + Math.round(glass.range()) + " m";
+        label(target, power, cx - target.textWidth(power, HUD_BOLD) / 2, y,
+                HUD_BOLD, HUD_ACCENT);
+
+        double steady = glass.steadiness();
+        int barW = 120, barH = 4;
+        int barX = cx - barW / 2, barY = y + 10;
+        target.fillRect(barX, barY, barW, barH, new Color(0, 0, 0, 140));
+        target.fillRect(barX, barY, (int) (barW * steady), barH,
+                steady > 0.6 ? HUD_ACCENT : HUD_WARN);
+        if (steady < 0.6) {
+            String hint = "Crouch and stand still to steady it";
+            label(target, hint, cx - target.textWidth(hint, HUD_SMALL) / 2, barY + 18,
+                    HUD_SMALL, HUD_DIM);
+        }
+    }
+
+    /** How wide the tube's bore is on screen, in pixels. */
+    private int boreRadius() {
+        return (int) (Math.min(viewportWidth, viewportHeight)
+                * (0.30 + 0.13 * glass.deployment()));
     }
 
     /** What the weather is doing to the watching, in a few words. */
@@ -1754,6 +2011,95 @@ public class WatchScene extends AbstractScene {
             // Lightning: two frames of a pale wash, rare enough to startle.
             target.fillRect(0, 0, viewportWidth, viewportHeight,
                     new Color(255, 255, 245, 70));
+        }
+    }
+
+    /**
+     * What looking through a tube looks like.
+     *
+     * <p><b>Drawn as a mask over a finished frame, and it is not the zoom.</b>
+     * The magnification already happened, in the projection, before a single
+     * triangle was transformed — this is only the round hole you are seeing it
+     * through. Anybody reading this file to find out how the spyglass works
+     * should be reading {@link Spyglass} and {@link #placeCamera}; this method
+     * would be just as correct if it drew nothing, and the view would be just
+     * as magnified.
+     *
+     * <p>The hole is cut by filling the two rectangles either side of the
+     * circle on each band of scanlines. Fifty bands is a hundred fills for a
+     * shape no primitive in {@link DrawTarget} can express — cheaper than an
+     * image mask, exact enough that nobody can see the steps at four pixels a
+     * band, and it works identically on both backends because it is nothing but
+     * rectangles.
+     */
+    private void drawEyepiece(DrawTarget target) {
+        double open = glass.deployment();
+        if (!glass.up() || open <= 0.01) return;
+
+        int cx = viewportWidth / 2, cy = viewportHeight / 2;
+        // The tube's own bore, which widens as the glass comes up to the eye —
+        // so raising it reads as a tube arriving rather than as a hole opening.
+        int radius = boreRadius();
+        int alpha = (int) (245 * Math.min(1, open * 1.4));
+        int surround = (alpha << 24);
+
+        int band = 4;
+        for (int y = 0; y < viewportHeight; y += band) {
+            int dy = y + band / 2 - cy;
+            int halfWidth = Math.abs(dy) >= radius ? 0
+                    : (int) Math.sqrt((double) radius * radius - (double) dy * dy);
+            int left = cx - halfWidth, right = cx + halfWidth;
+            if (left > 0) target.fillRect(0, y, left, band, surround);
+            if (right < viewportWidth) {
+                target.fillRect(right, y, viewportWidth - right, band, surround);
+            }
+        }
+
+        // The brass, and the soft edge of the field of view inside it. Three
+        // rings rather than one: a single hard circle over a landscape reads as
+        // a cut-out sticker.
+        int inner = (int) (140 * open);
+        target.drawOval(cx - radius, cy - radius, radius * 2, radius * 2,
+                new Color(0, 0, 0, inner), 6f);
+        target.drawOval(cx - radius, cy - radius, radius * 2, radius * 2,
+                new Color(176, 138, 60, (int) (210 * open)), 2.5f);
+        int flare = radius + 4;
+        target.drawOval(cx - flare, cy - flare, flare * 2, flare * 2,
+                new Color(232, 206, 150, (int) (70 * open)), 1.5f);
+
+        drawReticle(target, cx, cy, radius, open);
+    }
+
+    /**
+     * The scale in the eyepiece: a fine cross, and ticks that say how wide the
+     * view is.
+     *
+     * <p>The ticks are a <b>real</b> scale — they are drawn a fixed number of
+     * degrees apart, worked out from the field of view the camera is actually
+     * using — so the gaps close up as the tube is drawn out, and the whole
+     * reticle is a readout of the magnification rather than decoration. Half a
+     * degree at ×15 is about eight metres at half a kilometre, which is the
+     * kind of judgement this instrument exists to support.
+     */
+    private void drawReticle(DrawTarget target, int cx, int cy, int radius, double open) {
+        Color ink = new Color(228, 236, 224, (int) (150 * open));
+        int arm = radius / 5;
+        target.drawLine(cx - arm, cy, cx - arm / 3, cy, ink, 1f);
+        target.drawLine(cx + arm / 3, cy, cx + arm, cy, ink, 1f);
+        target.drawLine(cx, cy - arm, cx, cy - arm / 3, ink, 1f);
+        target.drawLine(cx, cy + arm / 3, cx, cy + arm, ink, 1f);
+
+        double degrees = Math.toDegrees(glass.fov(EyeCamera.DEFAULT_FOV));
+        if (degrees <= 0.01) return;
+        // Pixels per half a degree, from the pixels the whole field of view is
+        // worth. The camera measures its field vertically; so does this.
+        double perTick = viewportHeight * 0.5 / degrees;
+        if (perTick < 6) return;
+        for (int i = 1; i * perTick < radius * 0.92; i++) {
+            int at = (int) (i * perTick);
+            int length = i % 2 == 0 ? 7 : 4;
+            target.drawLine(cx + at, cy - length, cx + at, cy + length, ink, 1f);
+            target.drawLine(cx - at, cy - length, cx - at, cy + length, ink, 1f);
         }
     }
 

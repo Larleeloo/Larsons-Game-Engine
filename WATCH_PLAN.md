@@ -286,7 +286,85 @@ A placed feeder (`Lure`) has a radius, a strength and a decay; `WatchGame`
 resolves which species within its radius are drawn to it each tick and steers
 them in.
 
-### 4.3 Building (`watch/build`)
+### 4.3 The spyglass (`watch/Spyglass`)
+
+A draw tube with three stops — **×4, ×8, ×15** — held up on the right mouse
+button, its stop changed with the wheel. It is the one craftable object that
+changes what the world *is* rather than what comes to you.
+
+**It is optics, not a crop.** The temptation is to draw the frame as usual and
+scale the middle of it up; that is a magnifying glass held over a photograph,
+and a chaffinch four hundred metres away stays the three grey pixels it was.
+Instead the camera's own field of view is narrowed —
+
+```
+  fov(power) = 2·atan( tan(fov₀ / 2) / power )
+```
+
+— so the far hillside is re-projected at the size it now subtends and drawn with
+the triangles it deserves at that size. `EyeCamera`'s floor moved from 20° to 2°
+for this; twenty degrees is ×3.5, which would have silently clamped the top two
+stops and made "×15" a lie.
+
+**And the distance is actually built.** A raised glass sets a
+`ChunkStreamer.Focus` — an origin, a heading, a reach and a magnification — and
+chunks inside that cone are wanted even far outside the view radius, at a level
+of detail chosen from their distance **divided by the magnification**. At ×8 a
+chunk twenty out is meshed as though it were two and a half away: real trunks,
+bushes, the lot. It is affordable because the same narrowing that asks for the
+detail pays for it — a ×8 glass is a ten-degree frustum, so nearly everything in
+the ordinary ring fails the frustum test and is never submitted. On the software
+path the cone is capped shorter, for the same reason the ring is six chunks
+there and sixteen on a card.
+
+Measured on the **software** path (960×540, seed 20260828, standing in the
+deciduous woods, cone capped at ten chunks there):
+
+| | naked eye | ×15 glass |
+|---|---|---|
+| field of view | 70° | 5° |
+| chunks in memory | 169 | 192 |
+| chunks at full detail | 9 | 38 |
+| furthest full-detail chunk | 45 m | **326 m** |
+| triangles submitted to the frame | 34,992 | **11,152** |
+
+Full detail reaches seven times further and the frame costs a third of the
+triangles, because the narrowing that asks for the detail is the same
+narrowing that culls everything either side of it.
+
+Three more things follow, and all three are the difference between an
+instrument and a prop:
+
+* **There is something out there.** A third of a glassing player's share of the
+  animal roster is spawned down the line they are looking, and nothing inside
+  the cone is ever despawned. Without it the beautifully-drawn far shore would
+  be empty, because the spawn ring is ninety-five metres and a ×15 spot is nine
+  hundred.
+* **The host decides the reach.** `WatchGame.glass` refuses a power to anybody
+  without a spyglass in their satchel, and `lookingAt` takes its range and its
+  tolerance from `Spyglass` — the reach grows with the power and the angular
+  tolerance shrinks by it, so glassing is a longer *and* a more exact way of
+  pointing. Being able to record a bird nine hundred metres away is the one
+  thing in this game worth cheating for.
+* **It shakes.** Fifteen magnifications multiply the tremor in your hands by
+  fifteen too. The sway is scaled to the current field of view and damped by
+  the game's existing `stillness` stat, so crouching and standing still is what
+  steadies it — the same answer the whole game already has for getting near
+  anything.
+
+Making one is the deepest chain in the book, deliberately: quartz off bare rock
+or crystal, sand off a dune or a beach, ground together into a **lens** at a
+bench, two lenses plus a plank, rope and sap into the **tube**. What the ground
+gives up is `Forage.underfoot`, which reads the *surface underfoot* and not only
+the biome — so "go and find a beach" is a real instruction. Nobody has a glass
+in their first ten minutes, and anybody who wants one has a reason to walk
+somewhere they have not been.
+
+The eyepiece on screen — the round mask, the brass ring, the half-degree
+reticle — is drawn over a finished frame and is *not* the zoom. It would be just
+as correct if it drew nothing, and the view would be just as magnified.
+
+### 4.4 Building (`watch/build`)
 
 Ten piece types — post, beam, floor, wall, window wall, roof, ladder, door,
 platform and rope bridge — each with a **foraged** recipe (fallen branches,
@@ -589,3 +667,20 @@ what widened is which fish you find where.
   view both by snapshot and over the wire.
 * `WatchRenderTest` — a frame draws triangles, sorted far to near, and nothing
   behind the camera reaches the target.
+* `SpyglassTest` — three claims, in order. It is **optics**: each stop's field
+  of view is the true ratio of tangents, the camera takes the narrowest one
+  without clamping, and a thing at four hundred metres projects exactly ×N
+  larger at ×N — measured on the projection, which is where the extra detail
+  comes from, and not on a scaled frame, which would give the same number and
+  no more pixels. There is **something to see**: ground twelve chunks out is
+  built, and built at the finest level of detail, with a glass on it and does
+  not exist at all without one; a chunk being looked at survives eviction and
+  is released when the glass comes down; animals turn up past two hundred and
+  fifty metres for a glassing player and one of them can be recorded through
+  the glass and not without. And you can **make one**: every ingredient is a
+  real item, the ground this world generates actually hands out quartz and
+  sand, and the two-step chain runs through the game's own crafting out of
+  nothing but raw materials. Then the whole thing through the scene a player
+  plays — hold the key and the camera narrows, the streamer is pointed and the
+  host is told; let go and all three go back; hold it with an empty satchel and
+  nothing happens at all.

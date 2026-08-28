@@ -139,6 +139,7 @@ public final class ItemModel {
                 Shapes.box(mesh, x, y, z + 0.02 * scale, 0.07 * scale, 0.10 * scale,
                         0.02 * scale, yaw, uv, colour);
             }
+            case "spyglass" -> spyglass(mesh, x, y, z, scale, yaw, uv, colour);
             default -> {
                 WatchMaterials.uv(WatchMaterial.BARK, uv);
                 Shapes.box(mesh, x, y, z + 0.03 * scale, 0.03 * scale, 0.12 * scale,
@@ -149,6 +150,53 @@ public final class ItemModel {
                         WatchMaterials.shade(WatchMaterial.ROCK));
             }
         }
+    }
+
+    /**
+     * A draw-tube spyglass: three barrels, two collars and a lens.
+     *
+     * <p>Built along the facing axis rather than standing up like the rod,
+     * because the one thing that has to read from across a clearing is
+     * <em>which way somebody is pointing it</em> — a party watching a walker
+     * raise a glass wants to know where to look, and a foreshortened tube
+     * pointing at you is exactly the shape that says "at you".
+     *
+     * <p>The barrels step down toward the eye, which is what a drawn tube does
+     * and what makes twenty triangles read as an instrument rather than as a
+     * stick. The far end gets a pale disc: the objective, which catches the
+     * light and is the only part anybody can see at range.
+     */
+    private static void spyglass(Mesh.Builder mesh, double x, double y, double z,
+                                 double scale, double yaw, float[] uv, int colour) {
+        double fx = Math.sin(yaw), fy = -Math.cos(yaw);
+        WatchMaterials.uv(WatchMaterial.PLANK, uv);
+        int brass = 0xB08A3C;
+        int leather = 0x5A3F28;
+
+        // eyepiece, barrel, objective — narrow to wide, back to front.
+        barrel(mesh, x, y, z, fx, fy, -0.11, 0.05, 0.020, scale, yaw, uv, leather);
+        barrel(mesh, x, y, z, fx, fy, 0.00, 0.06, 0.026, scale, yaw, uv, brass);
+        barrel(mesh, x, y, z, fx, fy, 0.12, 0.06, 0.032, scale, yaw, uv, brass);
+        // the collars where one tube slides into the next
+        barrel(mesh, x, y, z, fx, fy, -0.06, 0.010, 0.030, scale, yaw, uv, leather);
+        barrel(mesh, x, y, z, fx, fy, 0.06, 0.010, 0.036, scale, yaw, uv, leather);
+        // the glass itself, at the front
+        WatchMaterials.uv(WatchMaterial.ICE, uv);
+        barrel(mesh, x, y, z, fx, fy, 0.178, 0.006, 0.030, scale, yaw, uv,
+                WatchMaterials.shade(WatchMaterial.ICE));
+        // Keep the tint the rest of the tool code computed doing something, so
+        // two spyglasses in one clearing are not identically shiny.
+        barrel(mesh, x, y, z, fx, fy, -0.155, 0.006, 0.018, scale, yaw, uv, colour);
+    }
+
+    /** One length of tube, {@code along} metres up the facing axis. */
+    private static void barrel(Mesh.Builder mesh, double x, double y, double z,
+                               double fx, double fy, double along, double halfLength,
+                               double radius, double scale, double yaw, float[] uv,
+                               int colour) {
+        Shapes.box(mesh, x + fx * along * scale, y + fy * along * scale,
+                z + 0.03 * scale, radius * scale, halfLength * scale, radius * scale,
+                yaw, uv, colour);
     }
 
     /**

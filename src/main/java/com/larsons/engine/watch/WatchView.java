@@ -28,13 +28,22 @@ import java.util.Map;
  */
 public final class WatchView {
 
-    /** One person, as drawn. */
+    /**
+     * One person, as drawn.
+     *
+     * @param glass the magnification they have a spyglass up at, {@code 1} for
+     *              none — so a party can see who is looking at something, and
+     *              which way, without anybody having to say so
+     */
     public record Walker(int id, String name, double x, double y, double z,
                          double yaw, double pitch, double stillness, boolean crouching,
-                         boolean submerged, double breath, long boatId) {
+                         boolean submerged, double breath, long boatId, double glass) {
 
         /** Whether they are rowing rather than walking. */
         public boolean inBoat() { return boatId != 0; }
+
+        /** Whether they have a glass to their eye. */
+        public boolean glassing() { return glass > 1.02; }
     }
 
     /** One animal, as drawn. */
@@ -184,7 +193,7 @@ public final class WatchView {
             walkers.add(new Walker(player.id(), player.name(), player.x(), player.y(),
                     player.z(), player.yaw(), player.pitch(), player.stillness(),
                     player.crouching(), player.submerged(), player.breath(),
-                    player.boatId()));
+                    player.boatId(), player.glassPower()));
         }
         creatures.clear();
         for (Animal animal : game.animals()) {
@@ -221,7 +230,7 @@ public final class WatchView {
                     WatchJson.num(row, "yaw", 0), WatchJson.num(row, "p", 0),
                     WatchJson.num(row, "st", 1), WatchJson.bool(row, "c", false),
                     WatchJson.bool(row, "uw", false), WatchJson.num(row, "air", 1),
-                    WatchJson.big(row, "boat", 0)));
+                    WatchJson.big(row, "boat", 0), WatchJson.num(row, "gl", 1)));
         }
     }
 
