@@ -13,6 +13,8 @@ import com.larsons.engine.watch.world.TreeGenome;
 import com.larsons.engine.watch.world.TreeInstance;
 import com.larsons.engine.watch.world.TreeSpecies;
 import com.larsons.engine.watch.world.WatchBiome;
+import com.larsons.engine.watch.world.WatchChunk;
+import com.larsons.engine.watch.world.WatchMaterial;
 
 import java.util.ArrayList;
 import java.util.Comparator;
@@ -124,6 +126,18 @@ public final class WatchGame implements Animal.Surroundings {
 
     /** …and in total, however many players there are. */
     private static final int TOTAL_CAP = 150;
+
+    /**
+     * What share of a glassing player's spawns go out down the glass.
+     *
+     * <p>A third: enough that a minute of sweeping a valley finds things in it,
+     * little enough that the clearing you are standing in is still populated
+     * when you put the glass down.
+     */
+    private static final double GLASS_SHARE = 0.34;
+
+    /** How wide the cone spawns spread, as a share of how far down it they are. */
+    private static final double GLASS_SPREAD = 0.35;
 
     /** How far a click can reach to spot something, in metres. */
     public static final double SPOT_RANGE = 130;
@@ -345,6 +359,40 @@ public final class WatchGame implements Animal.Surroundings {
     // --- spotting --------------------------------------------------------------------
 
     /**
+     * How far a player can pick something out, in metres.
+     *
+     * <p>{@link #SPOT_RANGE} with the naked eye, and as far as the glass
+     * reaches with one up — which is the whole point of carrying one, and the
+     * reason the server rather than the client decides it. See
+     * {@link Spyglass#spotRange}.
+     */
+    public synchronized double spotRange(int playerId) {
+        WatchPlayer player = players.get(playerId);
+        return player == null ? SPOT_RANGE
+                : Spyglass.spotRange(player.glassPower(), SPOT_RANGE);
+    }
+
+    /**
+     * Raise or lower a player's spyglass.
+     *
+     * <p><b>Checked here, because what it changes is what the server will let
+     * you record.</b> A client claiming ×15 without a glass in its satchel
+     * would be able to write down a bird nine hundred metres away, which is
+     * the one thing in this game worth cheating for. So the power is only
+     * taken if the player is actually carrying one.
+     *
+     * @param power the magnification, or {@code 1} to put it away
+     * @return the power that was actually adopted
+     */
+    public synchronized double glass(int playerId, double power) {
+        WatchPlayer player = players.get(playerId);
+        if (player == null) return Spyglass.NONE;
+        boolean carried = player.satchel().has(Spyglass.ITEM);
+        player.setGlassPower(carried ? power : Spyglass.NONE);
+        return player.glassPower();
+    }
+
+    /**
      * The animal a player is looking at, or {@code null}.
      *
      * <p>An angular test rather than a ray-box intersection: an animal is
@@ -354,6 +402,11 @@ public final class WatchGame implements Animal.Surroundings {
      * geometric hit test, which is the right trade for a game where the target
      * is a sparrow forty metres away in a tree and the reward for hitting it is
      * a line in a book rather than damage.
+     *
+     * <p>Both numbers move when a glass goes up: the reach grows with the
+     * magnification and the tolerance shrinks by it, so glassing is a longer
+     * <em>and</em> a more exact way of pointing at something. See
+     * {@link Spyglass#tolerance}.
      */
     public synchronized Animal lookingAt(int playerId) {
         WatchPlayer player = players.get(playerId);
@@ -363,6 +416,8 @@ public final class WatchGame implements Animal.Surroundings {
         double dirY = -Math.cos(player.yaw()) * cp;
         double dirZ = Math.sin(player.pitch());
         double eyeZ = player.eyeZ();
+        double power = player.glassPower();
+        double range = Spyglass.spotRange(power, SPOT_RANGE);
 
         Animal best = null;
         double bestScore = Double.MAX_VALUE;
@@ -371,14 +426,14 @@ public final class WatchGame implements Animal.Surroundings {
             double dy = animal.y() - player.y();
             double dz = animal.z() + animal.def().bodyLength() * 0.5 - eyeZ;
             double distance = Math.sqrt(dx * dx + dy * dy + dz * dz);
-            if (distance > SPOT_RANGE || distance < 0.01) continue;
+            if (distance > range || distance < 0.01) continue;
             double dot = (dx * dirX + dy * dirY + dz * dirZ) / distance;
             if (dot <= 0) continue;
             double angle = Math.acos(Math.min(1, dot));
             // The tolerance an animal of this size subtends, with a floor so a
             // hummingbird at forty metres is not impossible to click.
-            double tolerance = Math.max(0.022,
-                    Math.atan2(animal.def().bodyLength() * 1.6, distance));
+            double tolerance = Spyglass.tolerance(animal.def().bodyLength(), distance,
+                    power);
             if (angle > tolerance) continue;
             // Prefer the one nearest the centre of the view, then the nearest.
             double score = angle * 1000 + distance;
@@ -584,7 +639,7 @@ public final class WatchGame implements Animal.Surroundings {
             player.satchel().add(seed, 1);
             return seed;
         }
-        String material = materialUnderfoot(biome);
+        String material = materialUnderfoot(biome, player.x(), player.y());
         player.satchel().add(material, 1);
         return material;
     }
@@ -638,21 +693,32 @@ public final class WatchGame implements Animal.Surroundings {
         return wild != null && wild.fruiting() ? wild : null;
     }
 
-    /** What a biome's floor gives up when there is nothing better to pick. */
-    private String materialUnderfoot(WatchBiome biome) {
-        List<String> options = new ArrayList<>();
-        if (!biome.trees().isEmpty()) {
-            options.add("fallen_branch");
-            options.add("bark_strip");
-            options.add("sap");
-        }
-        if (biome.humidity() > 70) options.add("reed_bundle");
-        if (biome.humidity() > 55) options.add("vine");
-        if (biome.rockDensity() > 0.004) options.add("stone");
-        if (biome.humidity() > 45) options.add("clay_lump");
-        options.add("clover");
-        options.add("feather");
+    /**
+     * What the floor gives up when there is nothing better to pick.
+     *
+     * <p><b>The ground you are standing on, not only the biome you are in.</b>
+     * The table itself is {@link Forage#underfoot}; what this adds is asking the
+     * generator what the surface actually <em>is</em> at this point, which costs
+     * four height samples on a key that can only be pressed once a second
+     * anyway. It is the difference between "go and find a beach" and "stand
+     * anywhere in a biome whose shoreline happens to be sandy", and it is what
+     * makes the spyglass's materials worth walking for.
+     */
+    private String materialUnderfoot(WatchBiome biome, double x, double y) {
+        List<String> options = Forage.underfoot(biome, surfaceUnderfoot(biome, x, y));
         return options.get(rng.nextInt(options.size()));
+    }
+
+    /** What the generator says the surface is at a point. */
+    public WatchMaterial surfaceUnderfoot(WatchBiome biome, double x, double y) {
+        double height = field.heightAt(x, y);
+        // The slope the material rule wants, read the way the mesher reads it:
+        // a central difference over a couple of metres, which is the grid the
+        // heightfield is sampled on.
+        double step = WatchChunk.STEP;
+        double dx = (field.heightAt(x + step, y) - field.heightAt(x - step, y)) / (2 * step);
+        double dy = (field.heightAt(x, y + step) - field.heightAt(x, y - step)) / (2 * step);
+        return field.surfaceAt(x, y, height, Math.hypot(dx, dy), biome);
     }
 
     /**
@@ -1078,6 +1144,12 @@ public final class WatchGame implements Animal.Surroundings {
             for (WatchPlayer player : players.values()) {
                 double dx = animal.x() - player.x(), dy = animal.y() - player.y();
                 if (dx * dx + dy * dy < DESPAWN * DESPAWN) return false;
+                // …and nothing being watched through a glass is ever dropped
+                // out from under the person watching it, however far away it
+                // is. Without this the ring's edge is a wall a spyglass can
+                // see straight over: the far hillside would be beautifully
+                // drawn and completely empty.
+                if (underGlass(player, animal.x(), animal.y())) return false;
             }
             return true;
         });
@@ -1094,6 +1166,29 @@ public final class WatchGame implements Animal.Surroundings {
             double radius = SPAWN_NEAR + rng.nextDouble() * (SPAWN_FAR - SPAWN_NEAR);
             double x = host.x() + Math.cos(angle) * radius;
             double y = host.y() + Math.sin(angle) * radius;
+
+            // A raised glass moves some of that player's share of the roster
+            // out along the line they are looking down, so the far shore has
+            // things on it to find. A share and not all of it: the wood you are
+            // standing in should not empty out because you looked at a
+            // mountain. See GLASS_SHARE.
+            if (host.glassing() && rng.nextDouble() < GLASS_SHARE) {
+                double reach = Spyglass.spotRange(host.glassPower(), SPOT_RANGE);
+                double along = DESPAWN * 0.7 + rng.nextDouble() * (reach - DESPAWN * 0.7);
+                double cp = Math.cos(host.pitch());
+                double fx = Math.sin(host.yaw()) * cp, fy = -Math.cos(host.yaw()) * cp;
+                double flat = Math.hypot(fx, fy);
+                if (flat > 1e-6 && along > 0) {
+                    fx /= flat;
+                    fy /= flat;
+                    // Scattered across the cone rather than piled on the exact
+                    // sight line: the spread grows with distance, which is what
+                    // the cone the glass is looking down actually does.
+                    double spread = (rng.nextDouble() - 0.5) * along * GLASS_SPREAD;
+                    x = host.x() + fx * along - fy * spread;
+                    y = host.y() + fy * along + fx * spread;
+                }
+            }
 
             // <b>A diver gets a wet ring and a wet species table.</b> Without
             // this the sea floor is the emptiest place in the world, which is
@@ -1131,6 +1226,31 @@ public final class WatchGame implements Animal.Surroundings {
                     ? z + Math.max(0, depth - Math.min(depth * 0.5, 0.6)) : z;
             animals.put(id, new Animal(id, def, x, y, spawnZ, config.seed() ^ id));
         }
+    }
+
+    /**
+     * Whether a point is inside the cone a player has a glass on.
+     *
+     * <p>Deliberately wider than the cone things are <em>spawned</em> into —
+     * twice it, with a floor around the watcher — because this decides what is
+     * <b>kept</b>, and a bird dropped because the watcher's hand moved is the
+     * worst possible moment to drop one.
+     */
+    private boolean underGlass(WatchPlayer player, double x, double y) {
+        if (!player.glassing()) return false;
+        double dx = x - player.x(), dy = y - player.y();
+        double distance = Math.hypot(dx, dy);
+        double reach = Spyglass.spotRange(player.glassPower(), SPOT_RANGE);
+        if (distance > reach * 1.15) return false;
+        if (distance < 1e-6) return true;
+        double cp = Math.cos(player.pitch());
+        double fx = Math.sin(player.yaw()) * cp, fy = -Math.cos(player.yaw()) * cp;
+        double flat = Math.hypot(fx, fy);
+        if (flat < 1e-6) return true;
+        double along = (dx * fx + dy * fy) / flat;
+        if (along <= 0) return false;
+        double across = Math.abs(dx * -fy + dy * fx) / flat;
+        return across <= Math.max(DESPAWN * 0.5, along * GLASS_SPREAD);
     }
 
     private WatchPlayer pickPlayer() {

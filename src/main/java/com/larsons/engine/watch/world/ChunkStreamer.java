@@ -42,6 +42,25 @@ import java.util.concurrent.atomic.AtomicLong;
  * cadence with the wind field advanced, which is how a meadow sways without
  * costing a single operation on a normal frame.
  *
+ * <h2>…and detail follows a spyglass</h2>
+ *
+ * <p>A raised glass sets a {@link Focus}: an origin, a direction, a reach and a
+ * magnification. Chunks inside that cone are <b>wanted even when they are far
+ * outside the view radius</b>, and their level of detail is chosen from their
+ * distance <em>divided by the magnification</em> — which is exactly what a
+ * longer focal length does to a hillside. At ×8 a chunk twenty out is drawn as
+ * though it were two and a half away, so it gets its bushes and its real
+ * trunks, and the far shore in the eyepiece is the same ground the near one is
+ * rather than a coarse impostor of it.
+ *
+ * <p>That is affordable for one reason: <b>the same narrowing that asks for the
+ * detail pays for it.</b> A ×8 glass is a ten-degree frustum, so almost
+ * everything in the ordinary ring fails {@code EyeCamera.boxVisible} and is
+ * never submitted at all. The cone is a few hundred chunks of a circle whose
+ * whole area would be thousands. The cost that is real is memory — those chunks
+ * are held while the glass is up and retire to the LRU cache when it comes
+ * down.
+ *
  * <h2>Ground that has been built stays built</h2>
  *
  * <p>A chunk walked away from is <b>retained, not destroyed</b>. It moves out
@@ -83,6 +102,15 @@ public final class ChunkStreamer implements AutoCloseable {
     /** How far past the view radius a chunk is kept before being thrown away. */
     private static final int EVICT_MARGIN = 3;
 
+    /**
+     * The furthest a focus cone may reach, in chunks — a kilometre and a bit.
+     *
+     * <p>A ceiling rather than a policy: the scene picks the reach from the
+     * glass's power and from whether there is a card behind the frame, and this
+     * is only here so that no caller can ask for a hundred thousand chunks.
+     */
+    public static final int MAX_FOCUS_RADIUS = 34;
+
     /** How long between rebuilds of the near grass, in seconds. */
     private static final double GRASS_PERIOD = 2.2;
 
@@ -122,6 +150,16 @@ public final class ChunkStreamer implements AutoCloseable {
     private double grassClock;
     private double grassRebuiltAt = -GRASS_PERIOD;
     private long generated;
+
+    /**
+     * Where a glass is pointed, or {@code null} for the naked eye.
+     *
+     * <p>Volatile because the frame thread writes it and the same thread reads
+     * it on the next {@link #update} — but also because a worker's
+     * {@code lodFor} could otherwise see a stale one, and a chunk built at the
+     * wrong detail is a chunk re-meshed a frame later for nothing.
+     */
+    private volatile Focus focus;
 
     public ChunkStreamer(long seed) {
         this(new TerrainField(seed));
@@ -173,6 +211,71 @@ public final class ChunkStreamer implements AutoCloseable {
     public void setDetailRadius(int chunks) {
         this.detailRadius = Math.max(0, Math.min(viewRadius, chunks));
     }
+
+    /**
+     * Where a spyglass is pointed, and how much world it is asking for.
+     *
+     * <p>Everything here is in world units except {@link #radius()}, which is
+     * in chunks because it is a ring size like {@link #viewRadius()} and is
+     * clamped against {@link #MAX_FOCUS_RADIUS}.
+     *
+     * @param x             where the eye is
+     * @param dirX          the way it is looking, flattened onto the ground and
+     *                      normalised — the pitch is deliberately dropped,
+     *                      because a chunk is a column and looking up the side
+     *                      of a mountain still wants the mountain
+     * @param radius        how far down that line to build, in chunks
+     * @param cosHalfAngle  the cosine of the cone's half angle; a chunk whose
+     *                      bearing is outside it is not wanted
+     * @param magnification what to divide a chunk's distance by when choosing
+     *                      its level of detail — the whole of "renders distant
+     *                      areas in full detail", in one number
+     */
+    public record Focus(double x, double y, double dirX, double dirY, int radius,
+                        double cosHalfAngle, double magnification) {
+
+        /**
+         * A cone from an eye down a heading.
+         *
+         * @param yaw       the heading, radians clockwise from north, as
+         *                  {@code EyeCamera} means it
+         * @param halfAngle how wide the cone is either side of that, radians
+         */
+        public static Focus looking(double x, double y, double yaw, int radius,
+                                    double halfAngle, double magnification) {
+            return new Focus(x, y, Math.sin(yaw), -Math.cos(yaw),
+                    Math.max(1, Math.min(MAX_FOCUS_RADIUS, radius)),
+                    Math.cos(Math.max(0.02, Math.min(Math.PI / 2, halfAngle))),
+                    Math.max(1, magnification));
+        }
+
+        /** Whether a chunk's middle is inside the cone. */
+        public boolean holds(int cx, int cy) {
+            double wx = cx * (double) WatchChunk.SIZE + WatchChunk.SIZE / 2.0 - x;
+            double wy = cy * (double) WatchChunk.SIZE + WatchChunk.SIZE / 2.0 - y;
+            double distance = Math.hypot(wx, wy);
+            if (distance > radius * (double) WatchChunk.SIZE) return false;
+            // The chunks around the eye are always in: at any real half-angle
+            // the cone is narrower than a chunk for the first few, and a hole
+            // under the player's feet is not what a spyglass is for.
+            if (distance <= WatchChunk.SIZE * 1.5) return true;
+            return (wx * dirX + wy * dirY) / distance >= cosHalfAngle;
+        }
+    }
+
+    /**
+     * Point the detail down a line, or pass {@code null} to stop.
+     *
+     * <p>Called every frame while a glass is up — it is one field write, and
+     * the cone is walked from it on the same {@link #update} the ordinary ring
+     * is.
+     */
+    public void setFocus(Focus focus) {
+        this.focus = focus == null || focus.radius() <= 0 ? null : focus;
+    }
+
+    /** Where the glass is pointed, or {@code null}. */
+    public Focus focus() { return focus; }
 
     /** How many chunks out individual blades of grass are built. */
     public int grassRadius() { return grassRadius; }
@@ -251,16 +354,31 @@ public final class ChunkStreamer implements AutoCloseable {
         List<int[]> wanted = ring(ccx, ccy, viewRadius);
         for (int[] at : wanted) {
             if (inFlight.get() >= maxInFlight) break;
-            long key = WatchChunk.key(at[0], at[1]);
-            WatchChunk chunk = loaded.get(key);
-            int lod = lodFor(at[0] - ccx, at[1] - ccy);
-            if (chunk == null) {
-                queueBuild(at[0], at[1], lod);
-            } else if (chunk.lod() != lod) {
-                queueMesh(chunk, lod, grassDue);
-            } else if (grassDue && lod == 0 && withinGrass(at[0] - ccx, at[1] - ccy)) {
-                queueMesh(chunk, lod, true);
-            }
+            want(at[0], at[1], ccx, ccy, grassDue);
+        }
+
+        // Then whatever the glass is looking at, which is outside that ring by
+        // construction — nearest first again, so the eyepiece fills from the
+        // middle distance outward rather than from the horizon in.
+        Focus glass = focus;
+        if (glass == null) return;
+        for (int[] at : cone(glass)) {
+            if (inFlight.get() >= maxInFlight) break;
+            want(at[0], at[1], ccx, ccy, grassDue);
+        }
+    }
+
+    /** Build, re-mesh or leave alone one chunk the camera wants. */
+    private void want(int cx, int cy, int ccx, int ccy, boolean grassDue) {
+        long key = WatchChunk.key(cx, cy);
+        WatchChunk chunk = loaded.get(key);
+        int lod = lodFor(cx, cy, ccx, ccy);
+        if (chunk == null) {
+            queueBuild(cx, cy, lod);
+        } else if (chunk.lod() != lod) {
+            queueMesh(chunk, lod, grassDue);
+        } else if (grassDue && lod == 0 && withinGrass(cx - ccx, cy - ccy)) {
+            queueMesh(chunk, lod, true);
         }
     }
 
@@ -275,7 +393,7 @@ public final class ChunkStreamer implements AutoCloseable {
         for (int[] at : ring(ccx, ccy, radius)) {
             long key = WatchChunk.key(at[0], at[1]);
             if (loaded.containsKey(key)) continue;
-            int lod = lodFor(at[0] - ccx, at[1] - ccy);
+            int lod = lodFor(at[0], at[1], ccx, ccy);
             WatchChunk kept = recall(key);
             if (kept != null) {
                 loaded.put(key, kept);
@@ -301,13 +419,57 @@ public final class ChunkStreamer implements AutoCloseable {
         return Math.max(Math.abs(dx), Math.abs(dy)) <= grassRadius;
     }
 
-    /** The detail a chunk this far from the camera is drawn at. */
-    private int lodFor(int dx, int dy) {
-        int distance = Math.max(Math.abs(dx), Math.abs(dy));
+    /**
+     * The detail a chunk is drawn at.
+     *
+     * <p>Its distance from the camera in chunks — <b>divided by the
+     * magnification when it is inside a focus cone</b>, which is the one line
+     * that makes a spyglass render distant ground finely rather than merely
+     * bigger. A chunk in the cone is never drawn more coarsely than its plain
+     * distance would give it, so raising a glass can only ever sharpen the
+     * view.
+     */
+    private int lodFor(int cx, int cy, int ccx, int ccy) {
+        int distance = Math.max(Math.abs(cx - ccx), Math.abs(cy - ccy));
+        Focus glass = focus;
+        if (glass != null && glass.holds(cx, cy)) {
+            distance = (int) Math.floor(distance / glass.magnification());
+        }
+        return lodAt(distance);
+    }
+
+    /** The detail a chunk this many chunks out is drawn at. */
+    private int lodAt(int distance) {
         if (distance <= detailRadius) return 0;
         if (distance <= detailRadius * 2 + 1) return 1;
         if (distance <= detailRadius * 4 + 3) return 2;
         return WatchChunk.MAX_LOD;
+    }
+
+    /**
+     * The chunks inside a focus cone, nearest first.
+     *
+     * <p>The bounding square of the cone, filtered. That is up to a few
+     * thousand cheap tests once a frame, against a cone whose contents are a
+     * few hundred — worth it rather than trying to walk the wedge exactly,
+     * which is fiddly and no faster at this size.
+     */
+    private static List<int[]> cone(Focus focus) {
+        int ccx = WatchChunk.chunkOf(focus.x());
+        int ccy = WatchChunk.chunkOf(focus.y());
+        int radius = focus.radius();
+        List<int[]> out = new ArrayList<>();
+        for (int dy = -radius; dy <= radius; dy++) {
+            for (int dx = -radius; dx <= radius; dx++) {
+                int cx = ccx + dx, cy = ccy + dy;
+                if (focus.holds(cx, cy)) out.add(new int[]{cx, cy});
+            }
+        }
+        out.sort(Comparator.comparingInt(at -> {
+            int dx = at[0] - ccx, dy = at[1] - ccy;
+            return dx * dx + dy * dy;
+        }));
+        return out;
     }
 
     /** Chunk coordinates within a radius of a centre, nearest first. */
@@ -334,11 +496,15 @@ public final class ChunkStreamer implements AutoCloseable {
      */
     private void evictBeyond(int ccx, int ccy) {
         int limit = viewRadius + EVICT_MARGIN;
+        Focus glass = focus;
         for (Map.Entry<Long, WatchChunk> entry : loaded.entrySet()) {
             long key = entry.getKey();
             int cx = (int) (key >> 32);
             int cy = (int) (key & 0xFFFFFFFFL);
             if (Math.max(Math.abs(cx - ccx), Math.abs(cy - ccy)) <= limit) continue;
+            // A chunk the glass is looking at is in view however far away it
+            // is; evicting it would be evicting the thing on screen.
+            if (glass != null && glass.holds(cx, cy)) continue;
             WatchChunk gone = loaded.remove(key);
             if (gone != null) retire(key, gone);
         }

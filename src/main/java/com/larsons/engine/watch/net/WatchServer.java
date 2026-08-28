@@ -396,6 +396,8 @@ public final class WatchServer implements WatchGame.Sink {
                 }
             }
 
+            case "glass" -> game.glass(id, WatchJson.num(message, "m", 1));
+
             case "cast" -> game.castRod(id);
 
             case "strike" -> {

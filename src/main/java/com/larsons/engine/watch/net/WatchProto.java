@@ -39,6 +39,7 @@ import java.util.Map;
  *   client → server   {"t":"build","p":"platform","r":2,"tree":true}
  *   client → server   {"t":"craft","o":"suet_cake","st":"FIRE"}
  *   client → server   {"t":"cast"} {"t":"strike"}
+ *   client → server   {"t":"glass","m":8}            (1 = put it away)
  *
  *   server → client   {"t":"bag","items":{…}}          (private, after any change)
  *   server → all      {"t":"world","grove":{…},"crops":{…},"built":{…}}
@@ -235,6 +236,22 @@ public final class WatchProto {
         Map<String, Object> m = msg("craft");
         m.put("o", output);
         m.put("st", station);
+        return m;
+    }
+
+    /**
+     * A spyglass going up or coming down.
+     *
+     * <p>Its own message rather than a field on {@code move}, because it
+     * changes perhaps twice a minute and {@code move} goes out twenty times a
+     * second. The host answers by refusing it outright when the sender has no
+     * glass — see {@code WatchGame.glass}.
+     *
+     * @param power the magnification, or {@code 1} to put it away
+     */
+    public static Map<String, Object> glass(double power) {
+        Map<String, Object> m = msg("glass");
+        m.put("m", round(power));
         return m;
     }
 

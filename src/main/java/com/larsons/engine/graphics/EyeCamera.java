@@ -184,9 +184,29 @@ public final class EyeCamera {
     /** The vertical field of view, radians. */
     public double fov() { return fov; }
 
+    /**
+     * The narrowest field of view this camera will take — two degrees, which is
+     * a magnification of about forty.
+     *
+     * <p><b>It used to be twenty degrees, and that was a limit on the game
+     * rather than on the arithmetic.</b> Twenty degrees is ×3.5 against the
+     * default, so anything that wanted to be a telescope — the field guide's
+     * spyglass is the first — could not be built out of this camera at all and
+     * would have had to fake magnification by scaling a finished frame, which
+     * is a magnifying glass held over a photograph. Nothing in the projection
+     * cares how narrow the frustum is: {@code focal} grows, the side planes
+     * close in, and the same triangles are drawn larger and culled harder. The
+     * floor is only here so that a bad number cannot divide by a tangent of
+     * zero.
+     */
+    public static final double MIN_FOV = Math.toRadians(2);
+
+    /** The widest, past which a flat projection plane bows the edges unusably. */
+    public static final double MAX_FOV = Math.toRadians(130);
+
     /** Set the vertical field of view, clamped to something a screen can show. */
     public void setFov(double radians) {
-        this.fov = Math.max(Math.toRadians(20), Math.min(Math.toRadians(130), radians));
+        this.fov = Math.max(MIN_FOV, Math.min(MAX_FOV, radians));
         rebuildFrustum();
     }
 
