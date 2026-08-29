@@ -40,6 +40,7 @@ import java.util.Map;
  *   client → server   {"t":"craft","o":"suet_cake","st":"FIRE"}
  *   client → server   {"t":"cast"} {"t":"strike"}
  *   client → server   {"t":"glass","m":8}            (1 = put it away)
+ *   client → server   {"t":"debug","c":"7799"}       (the host's walk only)
  *
  *   server → client   {"t":"bag","items":{…}}          (private, after any change)
  *   server → all      {"t":"world","grove":{…},"crops":{…},"built":{…}}
@@ -236,6 +237,21 @@ public final class WatchProto {
         Map<String, Object> m = msg("craft");
         m.put("o", output);
         m.put("st", station);
+        return m;
+    }
+
+    /**
+     * A code somebody typed on the number keys.
+     *
+     * <p>The code travels rather than the conclusion: a client that sent
+     * {@code {"t":"debug","on":true}} would be a client that decides whether it
+     * is allowed unlimited items, which is not a thing a client decides. See
+     * {@code WatchGame.debug}, which checks the digits <em>and</em> whose walk
+     * it is.
+     */
+    public static Map<String, Object> debug(String code) {
+        Map<String, Object> m = msg("debug");
+        m.put("c", code);
         return m;
     }
 

@@ -364,7 +364,49 @@ The eyepiece on screen — the round mask, the brass ring, the half-degree
 reticle — is drawn over a finished frame and is *not* the zoom. It would be just
 as correct if it drew nothing, and the view would be just as magnified.
 
-### 4.4 Building (`watch/build`)
+### 4.4 Debug mode (`watch/Debug`)
+
+Type **7799** on the number keys anywhere in the walk and debug mode comes on;
+type it again and it goes off. A typed code rather than a key bind (the
+controls screen is for the game's verbs, and putting ten digits on it would put
+the answer on it too) or a menu item (which invites a first-time player to press
+it and skip the game).
+
+`Debug.Power` is the whole of what it grants, and it is two rows rather than
+twelve:
+
+| | |
+|---|---|
+| **Unlimited items** | Every recipe, every build piece, every feeder, every seed, every tool. |
+| **Readout** | Position, chunk and LOD, biome and material underfoot, streaming, triangles, what is alive, the glass, the guide. |
+
+**Two rows because the first one is structural.** Debug mode does not hand out
+a list of items — it makes the player's satchel `bottomless`, and *every* cost
+in this game is a `has` and a `take`
+against a `Satchel`. One lens over one class covers crafting, building,
+feeders, planting, fishing and the spyglass, and it covers whatever is added
+next **without being edited**: an item added to `Forage` is already unlimited, a
+recipe added to `Recipes` already affordable, a piece added to `BuildPiece`
+already free. A debug mode written as a list of grants is a copy of a registry
+that keeps moving, and it is stale a week later.
+
+Three properties worth keeping:
+
+* **A lens, not a gift.** Nothing is added when it goes on and nothing taken
+  when it comes off, so switching it off leaves the walk exactly as it was.
+* **It reaches the screen.** The flag is on the player, rides in their own
+  snapshot, and is copied onto the view's satchel on both the solo and the wire
+  paths — so a client's cooking and build screens light up exactly when the
+  host says they should rather than greying out things the host would allow. It
+  survives a save, too.
+* **The host's walk only.** `WatchGame.debug` refuses the code to anybody who
+  is not the first walker on the walk, because the guide is shared.
+
+The extension point, stated once so it does not have to be guessed: a future
+power is **a row in `Debug.Power`** — which is what puts it on the readout —
+**and one `if (player.debugging())` where it acts.**
+
+### 4.5 Building (`watch/build`)
 
 Ten piece types — post, beam, floor, wall, window wall, roof, ladder, door,
 platform and rope bridge — each with a **foraged** recipe (fallen branches,
@@ -684,3 +726,14 @@ what widened is which fish you find where.
   plays — hold the key and the camera narrows, the streamer is pointed and the
   host is told; let go and all three go back; hold it with an empty satchel and
   nothing happens at all.
+* `DebugModeTest` — the code (it lands, it toggles, a stray keypress in front
+  of it is harmless, a half-typed one is forgotten, and random digits do not
+  find it), what it grants, and who may have it: a guest on somebody else's
+  walk is refused and the host is not. The test that carries the design is
+  `everythingInTheGameIsFreeIncludingWhatIsAddedNext`, which walks
+  `Recipes.all()` and `BuildPiece.all()` rather than naming anything — so a
+  recipe added tomorrow is in the test tomorrow without the test being edited,
+  which is the same property the feature has. Then that the flag reaches the
+  screen on both the solo and the wire paths, that it survives a save, and that
+  typing the code into a running `WatchScene` turns it on, draws the readout,
+  and turns it off again.

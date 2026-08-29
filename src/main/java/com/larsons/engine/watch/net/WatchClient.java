@@ -141,6 +141,9 @@ public final class WatchClient implements AutoCloseable {
     /** Tell the host the glass went up, changed power, or came down. */
     public void sendGlass(double power) { send(WatchProto.glass(power)); }
 
+    /** Offer the host a code somebody typed. It decides what it means. */
+    public void sendDebug(String code) { send(WatchProto.debug(code)); }
+
     // --- receiving ------------------------------------------------------------------
 
     /**

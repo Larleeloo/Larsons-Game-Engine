@@ -72,6 +72,16 @@ public final class WatchPlayer {
      */
     private double glassPower = Spyglass.NONE;
 
+    /**
+     * Whether this player has typed {@link Debug#CODE}.
+     *
+     * <p>Kept here rather than on the {@link Satchel} — even though the satchel
+     * is where it does its work — because it is a fact about the <em>player</em>
+     * and the next power that wants it will not be about items. The satchel's
+     * lens is set from it, in one place, by {@link #setDebug}.
+     */
+    private boolean debug;
+
     private final Satchel satchel = new Satchel();
     private final Fishing rod;
 
@@ -140,6 +150,21 @@ public final class WatchPlayer {
     public void setGlassPower(double power) {
         double top = Spyglass.POWERS[Spyglass.POWERS.length - 1];
         this.glassPower = Math.max(Spyglass.NONE, Math.min(top, power));
+    }
+
+    /**
+     * Whether this player is in debug mode.
+     *
+     * <p>The single gate every debug power is asked through — see
+     * {@link Debug.Power}. One of them is already answered without asking,
+     * because it is the satchel underneath that is bottomless.
+     */
+    public boolean debugging() { return debug; }
+
+    /** Turn debug mode on or off, and the satchel's lens with it. */
+    public void setDebug(boolean on) {
+        this.debug = on;
+        satchel.setBottomless(on);
     }
 
     /** Take the oars of a boat. */
@@ -245,6 +270,10 @@ public final class WatchPlayer {
         if (breath < 1) m.put("air", breath);
         if (boatId != 0) m.put("boat", boatId);
         if (glassing()) m.put("gl", glassPower);
+        // In the snapshot as well as the save: a client has to know its own
+        // satchel is bottomless or its build and cooking screens would grey out
+        // everything the host would happily let it make.
+        if (debug) m.put("dbg", true);
         return m;
     }
 
@@ -270,6 +299,10 @@ public final class WatchPlayer {
         // you stop for the night like everybody else.
         glassPower = Spyglass.NONE;
         satchel.load(WatchJson.map(m, "bag"));
+        // …but debug mode does survive: a walk played with everything unlimited
+        // is that walk when it is reopened, and the code turns it off as easily
+        // as it turned it on.
+        setDebug(WatchJson.bool(m, "dbg", false));
     }
 
     @Override public String toString() {

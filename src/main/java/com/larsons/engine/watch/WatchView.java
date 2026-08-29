@@ -34,10 +34,14 @@ public final class WatchView {
      * @param glass the magnification they have a spyglass up at, {@code 1} for
      *              none — so a party can see who is looking at something, and
      *              which way, without anybody having to say so
+     * @param debug whether they are in {@link Debug} mode; on this player's own
+     *              row it is what turns their satchel bottomless on this side
+     *              of the wire
      */
     public record Walker(int id, String name, double x, double y, double z,
                          double yaw, double pitch, double stillness, boolean crouching,
-                         boolean submerged, double breath, long boatId, double glass) {
+                         boolean submerged, double breath, long boatId, double glass,
+                         boolean debug) {
 
         /** Whether they are rowing rather than walking. */
         public boolean inBoat() { return boatId != 0; }
@@ -193,7 +197,7 @@ public final class WatchView {
             walkers.add(new Walker(player.id(), player.name(), player.x(), player.y(),
                     player.z(), player.yaw(), player.pitch(), player.stillness(),
                     player.crouching(), player.submerged(), player.breath(),
-                    player.boatId(), player.glassPower()));
+                    player.boatId(), player.glassPower(), player.debugging()));
         }
         creatures.clear();
         for (Animal animal : game.animals()) {
@@ -211,6 +215,10 @@ public final class WatchView {
         WatchPlayer me = game.player(selfId);
         if (me != null) {
             satchel.load(me.satchel().toMap());
+            // The lens is not in the contents — see Satchel.load — so it is
+            // copied across here, on the same line of thinking that copies
+            // everything else the screen needs from the thing that owns it.
+            satchel.setBottomless(me.debugging());
         }
         guide.load(game.guide().toMap());
         grove.load(game.grove().toMap());
@@ -220,7 +228,15 @@ public final class WatchView {
 
     // --- filling from the wire ---------------------------------------------------------
 
-    /** Replace the party from a snapshot's {@code players} array. */
+    /**
+     * Replace the party from a snapshot's {@code players} array.
+     *
+     * <p>Ends by taking this player's own debug flag off their row and putting
+     * it on the satchel, which is the online half of what {@link #snapshot}
+     * does on the last line of the solo one: the flag arrives with the party
+     * and the contents arrive in a {@code bag}, and the screen needs both to
+     * agree before it can grey a recipe out.
+     */
     public void loadWalkers(List<Map<String, Object>> rows) {
         walkers.clear();
         for (Map<String, Object> row : rows) {
@@ -230,8 +246,11 @@ public final class WatchView {
                     WatchJson.num(row, "yaw", 0), WatchJson.num(row, "p", 0),
                     WatchJson.num(row, "st", 1), WatchJson.bool(row, "c", false),
                     WatchJson.bool(row, "uw", false), WatchJson.num(row, "air", 1),
-                    WatchJson.big(row, "boat", 0), WatchJson.num(row, "gl", 1)));
+                    WatchJson.big(row, "boat", 0), WatchJson.num(row, "gl", 1),
+                    WatchJson.bool(row, "dbg", false)));
         }
+        Walker me = self();
+        satchel.setBottomless(me != null && me.debug());
     }
 
     /** Replace the animals from a snapshot's {@code animals} array. */
