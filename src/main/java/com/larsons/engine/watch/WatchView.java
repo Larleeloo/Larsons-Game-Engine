@@ -8,9 +8,11 @@ import com.larsons.engine.watch.life.AnimalRegistry;
 import com.larsons.engine.watch.world.Grove;
 
 import java.util.ArrayList;
+import java.util.HashSet;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.Set;
 
 /**
  * Everything the screen needs, and nothing that decides anything.
@@ -64,6 +66,15 @@ public final class WatchView {
     private final List<Lure> lures = new ArrayList<>();
     private final List<Spotlight> spotlights = new ArrayList<>();
     private final List<String> log = new ArrayList<>();
+
+    /**
+     * The pieces of ground litter somebody has already picked up.
+     *
+     * <p>The one thing about what is lying on the floor that cannot be worked
+     * out from the seed. See {@link WatchGame#takenLitter()} for why it travels
+     * and the rest of the litter does not.
+     */
+    private final Set<Long> takenLitter = new HashSet<>();
 
     private int selfId;
     private long seed;
@@ -141,6 +152,21 @@ public final class WatchView {
 
     /** The last few things that happened. */
     public List<String> log() { return List.copyOf(log); }
+
+    /** Whether a piece of ground litter has already been picked up. */
+    public boolean litterTaken(long id) { return takenLitter.contains(id); }
+
+    /**
+     * Remember a piece as taken without waiting to be told.
+     *
+     * <p>What the walk calls the instant it asks the host to pick something up.
+     * The host is still the only thing that decides whether the pick succeeded
+     * — but the answer takes a round trip, and a piece of litter that stays on
+     * the ground for two hundred milliseconds after you have taken it is two
+     * hundred milliseconds of the world disagreeing with you. The next world
+     * sync replaces this set wholesale, so a refused pick corrects itself.
+     */
+    public void noteLitterTaken(long id) { takenLitter.add(id); }
 
     /** This player, or {@code null} before the first snapshot. */
     public Walker self() {
@@ -224,6 +250,8 @@ public final class WatchView {
         grove.load(game.grove().toMap());
         crops.load(game.crops().toMap());
         structure.load(game.structure().toMap());
+        takenLitter.clear();
+        takenLitter.addAll(game.takenLitter());
     }
 
     // --- filling from the wire ---------------------------------------------------------
@@ -265,6 +293,14 @@ public final class WatchView {
                     AnimState.of(WatchJson.str(row, "s", "idle"), AnimState.IDLE),
                     WatchJson.num(row, "ph", 0), WatchJson.num(row, "tr", 0),
                     WatchJson.str(row, "own", null)));
+        }
+    }
+
+    /** Replace the taken-litter set from a world sync's {@code taken} array. */
+    public void loadTakenLitter(List<Object> ids) {
+        takenLitter.clear();
+        for (Object id : ids) {
+            if (id instanceof Number n) takenLitter.add(n.longValue());
         }
     }
 

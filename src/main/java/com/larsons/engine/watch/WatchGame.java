@@ -145,9 +145,21 @@ public final class WatchGame implements Animal.Surroundings {
     /** How far a hand can reach to pick, plant or build, in metres. */
     public static final double REACH = 4.5;
 
+    /**
+     * How wide the ring round a thing on the ground is drawn, in metres.
+     *
+     * <p>Small, and smaller than the bush and tree it shares a highlight with:
+     * a hoop three times the width of the acorn inside it points at a patch of
+     * grass rather than at the acorn. The screen holds it to a floor in pixels
+     * (see {@code WatchScene.drawReachHighlight}) so it does not shrink to
+     * nothing at arm's length either.
+     */
+    public static final double GROUND_HIGHLIGHT = 0.10;
+
     private final Config config;
     private final TerrainField field;
     private final Flora flora;
+    private final Litter litter;
     private final Flora.Ground ground;
     private final WatchClock clock;
     private final Random rng;
@@ -194,6 +206,7 @@ public final class WatchGame implements Animal.Surroundings {
         this.sink = sink;
         this.field = new TerrainField(config.seed());
         this.flora = new Flora(config.seed(), field);
+        this.litter = new Litter(config.seed(), field);
         this.ground = Flora.ground(field);
         this.clock = WatchClock.fromSystem();
         this.rng = new Random(config.seed() ^ 0x5EED);
@@ -211,6 +224,17 @@ public final class WatchGame implements Animal.Surroundings {
 
     /** The flora scatterer, so a client can ask the same questions. */
     public Flora flora() { return flora; }
+
+    /** What is lying on the ground, so a client can ask the same questions. */
+    public Litter litter() { return litter; }
+
+    /**
+     * The generator seen as ground, which is what {@link Flora} and
+     * {@link Litter} both want. Handed out rather than rebuilt by every caller
+     * so that a host adjudicating a pick and a client drawing the same clearing
+     * are sampling the identical thing.
+     */
+    public Flora.Ground ground() { return ground; }
 
     /** What time it is here — the host's clock, in a hosted game. */
     public WatchClock clock() { return clock; }
@@ -588,7 +612,38 @@ public final class WatchGame implements Animal.Surroundings {
             return new Pickable(Pickable.Kind.BOAT, "boat", "Rowing boat",
                     boat.x(), boat.y(), boat.z() + 0.4, 1.6);
         }
+
+        // Last, because everything above it is something somebody put there or
+        // grew, and a stone on the shingle must not stop you taking the oars.
+        Litter.Piece piece = nearestLitter(player.x(), player.y());
+        if (piece != null) {
+            return new Pickable(Pickable.Kind.GROUND, piece.key(),
+                    Forage.nameOf(piece.key()), piece.x(), piece.y(),
+                    piece.z() + 0.10, GROUND_HIGHLIGHT);
+        }
         return null;
+    }
+
+    /**
+     * The nearest thing lying on the ground that has not already been taken.
+     *
+     * <p>Walks outward rather than taking {@link Litter#nearest} at face value:
+     * the nearest piece may be one somebody picked up an hour ago, and stopping
+     * at it would make every piece behind it unreachable until it grew back.
+     */
+    private Litter.Piece nearestLitter(double x, double y) {
+        Litter.Piece best = null;
+        double bestDistance = Double.MAX_VALUE;
+        for (Litter.Piece piece : litter.near(ground, x, y, REACH)) {
+            if (bare(piece.id())) continue;
+            double dx = piece.x() - x, dy = piece.y() - y;
+            double d = dx * dx + dy * dy;
+            if (d < bestDistance) {
+                bestDistance = d;
+                best = piece;
+            }
+        }
+        return best;
     }
 
     /**
@@ -613,7 +668,9 @@ public final class WatchGame implements Animal.Surroundings {
             /** A feeder somebody put out. */
             FEEDER("Top up"),
             /** A boat, drawn up on the shore. */
-            BOAT("Take the oars");
+            BOAT("Take the oars"),
+            /** Something lying on the ground. See {@link Litter}. */
+            GROUND("Pick up");
 
             private final String verb;
 
@@ -671,23 +728,54 @@ public final class WatchGame implements Animal.Surroundings {
             return tree.species().fruit();
         }
 
-        // Nothing in reach in front of you. Foraging the ground itself is
-        // still a thing you can do — but it takes a moment and gives one thing,
-        // rather than answering every press.
+        // Nothing growing in reach. What is left is whatever is lying on the
+        // floor — a particular thing, in a particular place, that you could see
+        // before you pressed anything.
+        //
+        // This used to be a roll: no target, a cooldown, and a handful of
+        // something out of `Forage.underfoot` announced from a patch of bare
+        // grass. The table has not changed and neither have the odds; what
+        // changed is that the roll happens when the world is generated rather
+        // than when the key is pressed, so the thing you pick up is the thing
+        // you walked to. See {@link Litter}.
+        Litter.Piece piece = nearestLitter(player.x(), player.y());
+        if (piece == null) return null;
+        // Still a moment between handfuls: two pieces of litter a metre apart
+        // are two presses, not one held key.
         long now = System.currentTimeMillis();
         Long last = foraged.get(playerId);
         if (last != null && now - last < GROUND_FORAGE_MILLIS) return null;
         foraged.put(playerId, now);
 
-        WatchBiome biome = field.biomeAt(player.x(), player.y());
-        if (!biome.seeds().isEmpty() && rng.nextDouble() < 0.55) {
-            String seed = biome.seeds().get(rng.nextInt(biome.seeds().size()));
-            player.satchel().add(seed, 1);
-            return seed;
+        picked.put(piece.id(), now);
+        player.satchel().add(piece.key(), 1);
+        return piece.key();
+    }
+
+    /**
+     * The pieces of litter that have been taken and have not grown back.
+     *
+     * <p><b>The one thing about the ground that has to be said out loud.</b>
+     * Where a piece of litter <em>is</em> and what it is are functions of the
+     * seed, so a client works both out for itself and neither ever goes on the
+     * wire. Whether somebody has already picked it up is not a function of
+     * anything, and a client that did not know would keep drawing a branch
+     * nobody can pick up — which is worse than the stale-bush case this game
+     * already tolerates, because a bush stays a bush when it is bare and a
+     * taken branch is simply not there.
+     *
+     * <p>Rides on the world sync rather than the snapshot: it changes when
+     * somebody picks something up, which is a few times a minute, and the
+     * snapshot goes out twenty times a second.
+     */
+    public synchronized List<Long> takenLitter() {
+        // The keys first, because `bare` prunes the map it is reading.
+        List<Long> keys = new ArrayList<>(picked.keySet());
+        List<Long> out = new ArrayList<>();
+        for (Long key : keys) {
+            if (Litter.isLitter(key) && bare(key)) out.add(key);
         }
-        String material = materialUnderfoot(biome, player.x(), player.y());
-        player.satchel().add(material, 1);
-        return material;
+        return out;
     }
 
     /**
@@ -739,22 +827,6 @@ public final class WatchGame implements Animal.Surroundings {
         return wild != null && wild.fruiting() ? wild : null;
     }
 
-    /**
-     * What the floor gives up when there is nothing better to pick.
-     *
-     * <p><b>The ground you are standing on, not only the biome you are in.</b>
-     * The table itself is {@link Forage#underfoot}; what this adds is asking the
-     * generator what the surface actually <em>is</em> at this point, which costs
-     * four height samples on a key that can only be pressed once a second
-     * anyway. It is the difference between "go and find a beach" and "stand
-     * anywhere in a biome whose shoreline happens to be sandy", and it is what
-     * makes the spyglass's materials worth walking for.
-     */
-    private String materialUnderfoot(WatchBiome biome, double x, double y) {
-        List<String> options = Forage.underfoot(biome, surfaceUnderfoot(biome, x, y));
-        return options.get(rng.nextInt(options.size()));
-    }
-
     /** What the generator says the surface is at a point. */
     public WatchMaterial surfaceUnderfoot(WatchBiome biome, double x, double y) {
         double height = field.heightAt(x, y);
@@ -795,6 +867,10 @@ public final class WatchGame implements Animal.Surroundings {
             case BUSH, TREE -> {
                 String got = pick(playerId);
                 yield got == null ? null : "Picked " + Forage.nameOf(got);
+            }
+            case GROUND -> {
+                String got = pick(playerId);
+                yield got == null ? null : "Picked up " + Forage.nameOf(got);
             }
             case CROP -> {
                 String got = harvest(playerId);
@@ -1461,6 +1537,18 @@ public final class WatchGame implements Animal.Surroundings {
         List<Object> lureRows = new ArrayList<>();
         for (Lure lure : lures.values()) lureRows.add(lure.toMap());
         m.put("lures", lureRows);
+        // What has been picked and has not grown back. Worth keeping now that
+        // some of it is visible: a stripped bush looked the same either way,
+        // but reopening a walk to find every branch you cleared out of your
+        // camp lying there again is the world contradicting itself.
+        List<Object> pickedRows = new ArrayList<>();
+        for (Map.Entry<Long, Long> entry : List.copyOf(picked.entrySet())) {
+            Map<String, Object> row = new LinkedHashMap<>();
+            row.put("k", entry.getKey());
+            row.put("t", entry.getValue());
+            pickedRows.add(row);
+        }
+        m.put("picked", pickedRows);
         // Everybody on the walk, and everybody the last save was still holding a
         // place for — a friend who has not been back since should not lose
         // their satchel because you played on without them.
@@ -1482,6 +1570,19 @@ public final class WatchGame implements Animal.Surroundings {
         lures.clear();
         for (Map<String, Object> row : WatchJson.objects(m, "lures")) {
             addLure(Lure.fromMap(row));
+        }
+        picked.clear();
+        for (Map<String, Object> row : WatchJson.objects(m, "picked")) {
+            long key = WatchJson.big(row, "k", 0);
+            long when = WatchJson.big(row, "t", 0);
+            // Anything already grown back is dropped rather than loaded and
+            // forgotten on first touch, so a long-running world's save does not
+            // carry every berry ever picked in it.
+            if (key != 0 && when > 0
+                    && WatchClock.realHoursBetween(when, System.currentTimeMillis())
+                            < REGROW_HOURS) {
+                picked.put(key, when);
+            }
         }
         // The party, which {@link #toMap} has always written and this has never
         // read. Reopening a walk therefore put you back at the world origin

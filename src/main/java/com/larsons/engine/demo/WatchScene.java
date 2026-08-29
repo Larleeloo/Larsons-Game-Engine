@@ -14,6 +14,7 @@ import com.larsons.engine.watch.Cultivation;
 import com.larsons.engine.watch.Debug;
 import com.larsons.engine.watch.Fishing;
 import com.larsons.engine.watch.Forage;
+import com.larsons.engine.watch.Litter;
 import com.larsons.engine.watch.Lure;
 import com.larsons.engine.watch.Recipes;
 import com.larsons.engine.watch.Satchel;
@@ -32,11 +33,13 @@ import com.larsons.engine.watch.net.WatchSession;
 import com.larsons.engine.watch.render.BoatModel;
 import com.larsons.engine.watch.render.FloraMesher;
 import com.larsons.engine.watch.render.ItemModel;
+import com.larsons.engine.watch.render.ItemPortrait;
 import com.larsons.engine.watch.render.Mesh;
 import com.larsons.engine.watch.render.Shapes;
 import com.larsons.engine.watch.render.WalkerModel;
 import com.larsons.engine.watch.render.WatchRenderer;
 import com.larsons.engine.watch.world.ChunkStreamer;
+import com.larsons.engine.watch.world.Flora;
 import com.larsons.engine.watch.world.TerrainField;
 import com.larsons.engine.watch.world.TreeInstance;
 import com.larsons.engine.watch.world.WatchBiome;
@@ -129,6 +132,24 @@ public class WatchScene extends AbstractScene {
     /** How often a solo walk is written to disk, in seconds. */
     private static final double AUTOSAVE_INTERVAL = 45;
 
+    /**
+     * How far off a thing lying on the ground is still drawn, in metres — on a
+     * card, and on a machine drawing through Java2D.
+     *
+     * <p>These are ten-centimetre objects that cost around a hundred triangles
+     * each: at eighty metres one is a single pixel and costs the same hundred
+     * it costs at two. Forty metres is about fifty of them, which is five
+     * thousand triangles — nothing on a card and a tenth of the painter's whole
+     * frame, so the painter gets a shorter ring for the same reason its chunk
+     * ring is six and not sixteen. See {@link #applyDistanceSettings}.
+     */
+    private static final double LITTER_RANGE_GPU = 40;
+
+    private static final double LITTER_RANGE_PAINTER = 22;
+
+    /** How far the player walks before the litter sweep is redone, in metres. */
+    private static final double LITTER_RESTEP = 4;
+
     // --- palette --------------------------------------------------------------------
 
     private static final Color HUD_INK = new Color(238, 244, 236);
@@ -165,6 +186,39 @@ public class WatchScene extends AbstractScene {
     private WatchSession session;
     private WatchStore store;
     private ChunkStreamer streamer;
+
+    /**
+     * What is lying on the ground, and the ground it is lying on.
+     *
+     * <p>The scene's own copy, built from the same seed the streamer is: a
+     * piece of litter is a function of its position, so the drawing side works
+     * out where the pieces are for itself and the host is only ever asked which
+     * of them have already been taken. That is the same arrangement the trees
+     * and the boats use, and it is why a party of eight can walk through a wood
+     * full of fallen branches without a single one of them going on the wire.
+     */
+    private Litter litter;
+
+    private Flora.Ground litterGround;
+
+    /** Whichever of the two litter ranges the backend turned out to afford. */
+    private double litterRange = LITTER_RANGE_PAINTER;
+
+    /**
+     * The pieces near enough to draw, and where the player was when they were
+     * last worked out.
+     *
+     * <p><b>Not recomputed per frame.</b> Sweeping forty metres of ground is a
+     * few hundred cells, and each cell costs a height, a slope and a surface
+     * off the generator — three or four thousand noise evaluations, which is a
+     * whole millisecond of a painter's frame budget to answer a question whose
+     * answer only changes when you walk. So it is redone every
+     * {@link #LITTER_RESTEP} metres of travel, which at walking pace is about
+     * twice a second, and the list is drawn from in between.
+     */
+    private final List<Litter.Piece> litterNearby = new ArrayList<>();
+
+    private double litterFromX = Double.NaN, litterFromY;
 
     private final EyeCamera eye = new EyeCamera();
     private final WatchRenderer renderer = new WatchRenderer();
@@ -237,12 +291,22 @@ public class WatchScene extends AbstractScene {
     private int satchelIndex;
     private int satchelScroll;
     private int recipeIndex;
+    private int recipeScroll;
     private int pieceIndex;
     private int pieceTurn;
     private boolean pieceInTree;
 
     /** Which of a panel's two columns the keys are driving. */
     private boolean recipeColumn;
+
+    /**
+     * Where the pointer was last frame, so a panel can tell hovering from
+     * resting. See {@link #pointerMoved}.
+     */
+    private int pointerX = -1, pointerY = -1;
+
+    /** Which scrollbar is being dragged: {@code 0} none, {@code 1} left, {@code 2} right. */
+    private int dragBar;
 
     private double moveTimer;
     private double saveTimer;
@@ -307,6 +371,12 @@ public class WatchScene extends AbstractScene {
         long seed = session.view().seed();
         if (session.local() != null) seed = session.local().config().seed();
         streamer = new ChunkStreamer(seed);
+        // The same seed and the same generator the host used, so the branch
+        // this side draws is the branch that side lets you pick up.
+        litter = new Litter(seed, streamer.field());
+        litterGround = Flora.ground(streamer.field());
+        litterNearby.clear();
+        litterFromX = Double.NaN;
         applyDistanceSettings();
 
         WatchView.Walker me = session.view().self();
@@ -352,6 +422,8 @@ public class WatchScene extends AbstractScene {
         // is one where the world visibly assembles itself every time you turn
         // round. A card has no such trouble and gets the full range.
         int radius = (int) Math.round((gpu ? 16 : 6) * scale);
+        litterRange = gpu ? LITTER_RANGE_GPU : LITTER_RANGE_PAINTER;
+        litterFromX = Double.NaN;
         streamer.setViewRadius(gpu ? radius : Math.min(6, radius));
         streamer.setDetailRadius(gpu ? 4 : 1);
         streamer.setGrassRadius(gpu ? 3 : 1);
@@ -383,6 +455,11 @@ public class WatchScene extends AbstractScene {
 
         if (panel != Panel.NONE) {
             Pointer.restore();
+            // A panel is worked with the pointer, and the walk steers with the
+            // pointer's *motion*. Without this the travel spent picking a
+            // recipe piles up unread and is spent all at once on the frame the
+            // panel closes, which throws the camera halfway round the world.
+            input.discardMouseMotion();
             // A panel puts the glass away: you cannot read a recipe through a
             // telescope, and coming back to a screen still zoomed to ×15 with
             // no memory of having raised it is disorienting.
@@ -413,6 +490,8 @@ public class WatchScene extends AbstractScene {
             satchelIndex = 0;
             satchelScroll = 0;
             recipeIndex = 0;
+            recipeScroll = 0;
+            dragBar = 0;
             // Opens on what you are carrying, not on what you could cook: the
             // question "what have I got" is asked ten times as often.
             recipeColumn = false;
@@ -453,11 +532,53 @@ public class WatchScene extends AbstractScene {
         // so it is set first.
         aimGlass();
         streamer.update(px, py, dt);
+        sweepLitter();
         saveTimer += dt;
         if (saveTimer >= AUTOSAVE_INTERVAL) {
             saveTimer = 0;
             saveIfSolo();
         }
+    }
+
+    /**
+     * Work out what is lying on the ground around us, when we have moved far
+     * enough for the answer to have changed. See {@link #litterNearby}.
+     */
+    private void sweepLitter() {
+        if (litter == null) return;
+        if (!Double.isNaN(litterFromX)
+                && Math.hypot(px - litterFromX, py - litterFromY) < LITTER_RESTEP) {
+            return;
+        }
+        litterFromX = px;
+        litterFromY = py;
+        litterNearby.clear();
+        // A margin of one restep, so a piece that comes into range between two
+        // sweeps was already in the list rather than popping into existence.
+        litterNearby.addAll(litter.near(litterGround, px, py,
+                litterRange + LITTER_RESTEP));
+    }
+
+    /**
+     * The nearest thing on the floor within arm's reach that nobody has taken.
+     *
+     * <p>What the highlight rings and what E picks up — worked out from the
+     * same swept list the drawing uses, so the ring can never be round a piece
+     * that is not being drawn.
+     */
+    private Litter.Piece litterInReach() {
+        Litter.Piece best = null;
+        double bestDistance = WatchGame.REACH * WatchGame.REACH;
+        for (Litter.Piece piece : litterNearby) {
+            if (view().litterTaken(piece.id())) continue;
+            double dx = piece.x() - px, dy = piece.y() - py;
+            double d = dx * dx + dy * dy;
+            if (d < bestDistance) {
+                bestDistance = d;
+                best = piece;
+            }
+        }
+        return best;
     }
 
     /** Adopt the host's time of day, so a party shares one sunset. */
@@ -933,6 +1054,12 @@ public class WatchScene extends AbstractScene {
                         "Rowing boat", boat.x(), boat.y(), boat.z() + 0.4, 1.6);
             }
         }
+        Litter.Piece piece = litterInReach();
+        if (piece != null) {
+            return new WatchGame.Pickable(WatchGame.Pickable.Kind.GROUND, piece.key(),
+                    Forage.nameOf(piece.key()), piece.x(), piece.y(),
+                    piece.z() + 0.10, WatchGame.GROUND_HIGHLIGHT);
+        }
         return null;
     }
 
@@ -977,6 +1104,17 @@ public class WatchScene extends AbstractScene {
                     if (line != null) picked(line);
                 } else {
                     session.client().sendAction("use");
+                    // Take it off the ground now rather than in a round trip's
+                    // time. The host still decides — the next world sync
+                    // replaces the whole set — but a thing that stays lying
+                    // there for a fifth of a second after you have picked it up
+                    // reads as the pick having failed. See
+                    // WatchView.noteLitterTaken.
+                    if (inReach != null
+                            && inReach.kind() == WatchGame.Pickable.Kind.GROUND) {
+                        Litter.Piece piece = litterInReach();
+                        if (piece != null) view().noteLitterTaken(piece.id());
+                    }
                 }
             }
             case "boat" -> {
@@ -1205,7 +1343,8 @@ public class WatchScene extends AbstractScene {
     }
 
     /**
-     * The satchel screen: two columns, both of which scroll.
+     * The satchel screen: two columns, both of which scroll, and both of which
+     * the mouse drives.
      *
      * <p><b>The carrying list could not be scrolled at all.</b> It drew from the
      * top of the panel until it ran out of room and then stopped, so a satchel
@@ -1213,15 +1352,31 @@ public class WatchScene extends AbstractScene {
      * hour — simply had a tail nobody could see or reach. Everything
      * <em>was</em> in there; the game just would not show it to you.
      *
-     * <p>Now the left column is a proper list with a cursor, a scroll window
-     * and a bar, and ←/→ move between the two columns so the same up-and-down
-     * keys drive whichever one you are in. Enter on an item puts it out on a
-     * feeder or plants it, which is the other half of the fix: a list you can
-     * see to the bottom of but cannot act on is only half a list.
+     * <p>Then it grew a cursor, a window and a bar, and ←/→ to move between the
+     * columns — and was still a screen you could only work with the arrow keys,
+     * in a game whose every other verb is on the mouse. Forty rows of inventory
+     * navigated one press at a time is a cooking screen nobody cooks on. So:
+     *
+     * <ul>
+     *   <li>the pointer <b>hovers</b> a row to select it — but only when it has
+     *       actually moved, so a mouse sitting still on the desk does not undo
+     *       every arrow-key press;</li>
+     *   <li>a <b>click</b> does what Enter does to that row: makes the recipe,
+     *       plants the seed, puts the food out;</li>
+     *   <li>the <b>wheel</b> scrolls whichever column it is over, independently
+     *       of where the cursor is — which is what makes reading a long list
+     *       different from walking it;</li>
+     *   <li>the <b>bars</b> can be dragged, and the ✕ closes the panel.</li>
+     * </ul>
+     *
+     * <p>None of that takes anything away from the keys. Both drive the same
+     * two indices and the same two scroll offsets, and either can be left alone
+     * for a whole session.
      */
     private void updateSatchel(InputManager input) {
         List<String> items = view().satchel().keys();
         List<Recipes.Recipe> recipes = Recipes.all();
+        SatchelBox box = satchelBox();
 
         if (KeyBinds.pressed(input, GameAction.MENU_LEFT)) recipeColumn = false;
         if (KeyBinds.pressed(input, GameAction.MENU_RIGHT)) recipeColumn = true;
@@ -1229,24 +1384,136 @@ public class WatchScene extends AbstractScene {
         int step = 0;
         if (KeyBinds.pressed(input, GameAction.MENU_DOWN)) step = 1;
         if (KeyBinds.pressed(input, GameAction.MENU_UP)) step = -1;
+        if (step != 0) {
+            if (recipeColumn) {
+                recipeIndex = Math.floorMod(recipeIndex + step,
+                        Math.max(1, recipes.size()));
+                recipeScroll = clampScroll(recipeScroll, recipeIndex, recipes.size(),
+                        box.rows());
+            } else {
+                satchelIndex = items.isEmpty() ? 0
+                        : Math.floorMod(satchelIndex + step, items.size());
+                satchelScroll = clampScroll(satchelScroll, satchelIndex, items.size(),
+                        box.rows());
+            }
+        }
 
-        if (recipeColumn) {
-            recipeIndex += step;
-            recipeIndex = Math.floorMod(recipeIndex, Math.max(1, recipes.size()));
-        } else {
-            satchelIndex += step;
-            satchelIndex = items.isEmpty() ? 0
-                    : Math.floorMod(satchelIndex, items.size());
+        // --- the mouse -------------------------------------------------------
+        boolean moved = pointerMoved(input);
+        int mx = pointerX, my = pointerY;
+        int over = box.columnAt(mx, my);
+
+        if (dragging(input, box, items.size(), recipes.size())) return;
+
+        int wheel = input.getWheelRotation();
+        if (wheel != 0) {
+            int which = over >= 0 ? over : recipeColumn ? 1 : 0;
+            if (which == 1) {
+                recipeScroll = boundScroll(recipeScroll + wheel * WHEEL_ROWS,
+                        recipes.size(), box.rows());
+            } else {
+                satchelScroll = boundScroll(satchelScroll + wheel * WHEEL_ROWS,
+                        items.size(), box.rows());
+            }
+        }
+
+        int hovered = -1;
+        if (over >= 0) {
+            int row = box.rowAt(my);
+            int total = over == 1 ? recipes.size() : items.size();
+            int scroll = over == 1 ? recipeScroll : satchelScroll;
+            if (row >= 0 && scroll + row < total) hovered = scroll + row;
+        }
+        if (hovered >= 0 && moved) {
+            recipeColumn = over == 1;
+            if (recipeColumn) recipeIndex = hovered;
+            else satchelIndex = hovered;
+        }
+
+        if (input.isMouseJustPressed()) {
+            if (box.overClose(mx, my)) {
+                panel = Panel.NONE;
+                return;
+            }
+            if (hovered >= 0) {
+                recipeColumn = over == 1;
+                if (recipeColumn) {
+                    recipeIndex = hovered;
+                    craft(recipes.get(hovered));
+                } else {
+                    satchelIndex = hovered;
+                    useFromSatchel(items.get(hovered));
+                }
+            }
         }
 
         if (KeyBinds.pressed(input, GameAction.MENU_SELECT)) {
             if (recipeColumn && !recipes.isEmpty()) {
-                craft(recipes.get(recipeIndex));
+                craft(recipes.get(Math.min(recipeIndex, recipes.size() - 1)));
             } else if (!items.isEmpty()) {
                 useFromSatchel(items.get(Math.min(satchelIndex, items.size() - 1)));
             }
         }
         if (KeyBinds.pressed(input, GameAction.WATCH_SATCHEL)) panel = Panel.NONE;
+    }
+
+    /** How many rows one notch of the wheel moves a list. */
+    private static final int WHEEL_ROWS = 3;
+
+    /**
+     * Whether the pointer has moved since the last frame — and remember where
+     * it is either way.
+     *
+     * <p>The whole of what stops hovering from fighting the arrow keys. Without
+     * it, a pointer resting anywhere over a list re-selects the row under it
+     * every frame, so pressing ↓ moves the cursor for exactly one frame and it
+     * springs back. The panels are the only place in this scene that reads the
+     * pointer's <em>position</em> — the walk reads its motion — so the two
+     * fields live here rather than beside the look controls.
+     */
+    private boolean pointerMoved(InputManager input) {
+        int mx = input.getMouseX(), my = input.getMouseY();
+        boolean moved = mx != pointerX || my != pointerY;
+        pointerX = mx;
+        pointerY = my;
+        return moved;
+    }
+
+    /**
+     * Carry on a scrollbar drag, or start one.
+     *
+     * @return whether a drag is in progress, in which case the rest of the
+     *         panel's mouse handling is skipped — a hand dragging a bar past a
+     *         row is not hovering that row, and letting go over one is not a
+     *         click on it
+     */
+    private boolean dragging(InputManager input, SatchelBox box, int items,
+                             int recipes) {
+        if (dragBar == 0 && input.isMouseJustPressed()) {
+            if (box.overBar(pointerX, pointerY, 0) && items > box.rows()) dragBar = 1;
+            else if (box.overBar(pointerX, pointerY, 1) && recipes > box.rows()) {
+                dragBar = 2;
+            }
+        }
+        if (dragBar == 0) return false;
+        if (!input.isMouseDown()) {
+            dragBar = 0;
+            return false;
+        }
+        int total = dragBar == 2 ? recipes : items;
+        // Where the pointer sits down the track, as a share of it, turned into
+        // a first visible row.
+        double share = (pointerY - box.barTop()) / (double) Math.max(1, box.barHeight());
+        int at = boundScroll((int) Math.round(share * (total - box.rows())), total,
+                box.rows());
+        if (dragBar == 2) recipeScroll = at;
+        else satchelScroll = at;
+        return true;
+    }
+
+    /** A scroll offset kept inside a list, ignoring where the cursor is. */
+    private static int boundScroll(int scroll, int total, int rows) {
+        return Math.max(0, Math.min(scroll, Math.max(0, total - rows)));
     }
 
     private void craft(Recipes.Recipe recipe) {
@@ -1294,8 +1561,16 @@ public class WatchScene extends AbstractScene {
         say(item.name() + " — " + item.note());
     }
 
+    /**
+     * The build screen — driven by the same two hands as the satchel, and for
+     * the same reason.
+     *
+     * <p>Ten pieces fit on one page, so there is nothing to scroll; what it
+     * needed was a pointer that selects a row, a click that builds it, and a ✕.
+     */
     private void updateBuild(InputManager input) {
         List<BuildPiece> pieces = BuildPiece.all();
+        SatchelBox box = buildBox();
         if (KeyBinds.pressed(input, GameAction.MENU_DOWN)) pieceIndex++;
         if (KeyBinds.pressed(input, GameAction.MENU_UP)) pieceIndex--;
         pieceIndex = Math.floorMod(pieceIndex, pieces.size());
@@ -1306,7 +1581,24 @@ public class WatchScene extends AbstractScene {
                 || KeyBinds.pressed(input, GameAction.MENU_LEFT)) {
             pieceInTree = !pieceInTree;
         }
-        if (KeyBinds.pressed(input, GameAction.MENU_SELECT)) {
+
+        boolean moved = pointerMoved(input);
+        int row = box.columnAt(pointerX, pointerY) == 0 ? box.rowAt(pointerY) : -1;
+        if (row >= 0 && row >= pieces.size()) row = -1;
+        if (row >= 0 && moved) pieceIndex = row;
+
+        boolean build = KeyBinds.pressed(input, GameAction.MENU_SELECT);
+        if (input.isMouseJustPressed()) {
+            if (box.overClose(pointerX, pointerY)) {
+                panel = Panel.NONE;
+                return;
+            }
+            if (row >= 0) {
+                pieceIndex = row;
+                build = true;
+            }
+        }
+        if (build) {
             BuildPiece piece = pieces.get(pieceIndex);
             if (session.local() != null) {
                 say(session.local().build(session.selfId(), piece, pieceTurn, pieceInTree)
@@ -1318,6 +1610,22 @@ public class WatchScene extends AbstractScene {
             }
         }
         if (KeyBinds.pressed(input, GameAction.WATCH_BUILD)) panel = Panel.NONE;
+    }
+
+    /**
+     * Where the build screen's parts are — the satchel's box, one column wide.
+     *
+     * <p>The same record, because the two panels want the same three answers
+     * ("which row is that", "is the pointer on the ✕", "where does the list
+     * start") and a second nearly-identical layout type would be a second
+     * chance to get one of them wrong.
+     */
+    private SatchelBox buildBox() {
+        int w = Math.min(600, Math.max(320, viewportWidth - 80));
+        int h = Math.min(460, Math.max(240, viewportHeight - 80));
+        int x = (viewportWidth - w) / 2, y = (viewportHeight - h) / 2;
+        int listTop = y + 62;
+        return new SatchelBox(x, y, w, h, listTop, BuildPiece.all().size(), w - 40);
     }
 
     private void updatePaused(InputManager input) {
@@ -1615,6 +1923,22 @@ public class WatchScene extends AbstractScene {
                 ItemModel.item(mesh, lure.food(), lure.x() - ox, lure.y() - oy,
                         lure.z() + 1.20, 1.1, frame * 0.004);
             }
+        }
+
+        // Everything lying on the floor near us. It goes in the moving mesh
+        // rather than in a chunk's static flora, and that is not laziness: a
+        // picked-up branch has to be gone <em>this frame</em>, and a chunk mesh
+        // is rebuilt when the level of detail changes and not when somebody
+        // stoops. The z comes off the streamer rather than off the piece so it
+        // sits on the ground as drawn, which is a bilinear interpolation of the
+        // heightfield and can be a few centimetres from the raw generator.
+        for (Litter.Piece piece : litterNearby) {
+            if (view.litterTaken(piece.id())) continue;
+            double dx = piece.x() - px, dy = piece.y() - py;
+            if (dx * dx + dy * dy > litterRange * litterRange) continue;
+            ItemModel.item(mesh, piece.key(), piece.x() - ox, piece.y() - oy,
+                    streamer.groundAt(piece.x(), piece.y()), piece.scale(),
+                    piece.yaw());
         }
 
         for (Cultivation.Crop crop : view.crops().all()) {
@@ -2041,32 +2365,60 @@ public class WatchScene extends AbstractScene {
     }
 
     /**
-     * A ring round whatever E would take.
+     * A glow round whatever E would take, and a ring inside it.
      *
-     * <p>The other half of {@link WatchGame#pickTarget}: the ring says
+     * <p>The other half of {@link WatchGame#pickTarget}: the glow says
      * <em>which</em> thing, the prompt says what would happen to it. Drawn in
      * the same shape as a spotlight so the two read as one language, and dimmer
      * so an animal somebody has pointed at always wins the eye.
+     *
+     * <p><b>The halo is what makes it work on small things.</b> A ring on its
+     * own was enough while everything that could be picked up was a bush or a
+     * tree, which is to say a metre across and hard to miss. A quartz pebble in
+     * the shingle is eight centimetres and the same colour as the shingle: an
+     * outline round it is an outline round nothing anybody has spotted yet. Four
+     * concentric ovals of decreasing alpha cost four draws and make the thing
+     * itself light up, which is the difference between "there is a marker here"
+     * and "that stone is worth picking up".
      */
     private void drawReachHighlight(DrawTarget target) {
         if (inReach == null || panel != Panel.NONE) return;
         double[] point = new double[3];
         if (!eye.project(inReach.x(), inReach.y(), inReach.z(), point)) return;
+        // A floor in metres so a small thing still gets a ring, and a floor in
+        // pixels so a distant one does not vanish. The metre floor was 0.25 —
+        // wider than an acorn, a pebble or a seed head, so every one of them
+        // was ringed as though it were a bush.
         int radius = (int) Math.max(10,
-                eye.scaleAt(point[2]) * Math.max(0.25, inReach.radius()));
+                eye.scaleAt(point[2]) * Math.max(0.08, inReach.radius()));
+        int cx = (int) point[0], cy = (int) point[1];
         // A slow pulse, so it reads as live rather than as part of the scenery.
-        int alpha = (int) (110 + 60 * Math.sin(frame * 0.09));
-        target.drawOval((int) point[0] - radius, (int) point[1] - radius,
-                radius * 2, radius * 2, new Color(230, 240, 210, alpha), 2f);
+        double pulse = 0.5 + 0.5 * Math.sin(frame * 0.09);
+        int alpha = (int) (110 + 60 * pulse);
+
+        // The halo: filled discs from the outside in, each faint enough that a
+        // dozen of them would still not hide what is underneath.
+        for (int i = GLOW_RINGS; i >= 1; i--) {
+            int r = (int) (radius * (1.15 + 0.42 * i / (double) GLOW_RINGS
+                    + 0.06 * pulse));
+            int wash = (int) (11 * (1 - (i - 1) / (double) GLOW_RINGS) + 4);
+            target.fillOval(cx - r, cy - r, r * 2, r * 2,
+                    new Color(226, 244, 186, wash));
+        }
+        target.drawOval(cx - radius, cy - radius, radius * 2, radius * 2,
+                new Color(230, 240, 210, alpha), 2f);
         // Four corner ticks, which is what makes a circle read as a selection
         // rather than as a hoop somebody left in a tree.
         int tick = Math.max(4, radius / 3);
         Color ink = new Color(230, 240, 210, Math.min(255, alpha + 60));
-        target.fillRect((int) point[0] - radius, (int) point[1] - 1, tick, 2, ink);
-        target.fillRect((int) point[0] + radius - tick, (int) point[1] - 1, tick, 2, ink);
-        target.fillRect((int) point[0] - 1, (int) point[1] - radius, 2, tick, ink);
-        target.fillRect((int) point[0] - 1, (int) point[1] + radius - tick, 2, tick, ink);
+        target.fillRect(cx - radius, cy - 1, tick, 2, ink);
+        target.fillRect(cx + radius - tick, cy - 1, tick, 2, ink);
+        target.fillRect(cx - 1, cy - radius, 2, tick, ink);
+        target.fillRect(cx - 1, cy + radius - tick, 2, tick, ink);
     }
+
+    /** How many washes make the halo under a highlighted thing. */
+    private static final int GLOW_RINGS = 4;
 
     /** What just went in the satchel, under the crosshair, fading. */
     private void drawPickedFlash(DrawTarget target) {
@@ -2316,110 +2668,226 @@ public class WatchScene extends AbstractScene {
 
     // --- overlays ----------------------------------------------------------------------
 
-    /** Pixels between rows in a scrolling list. */
-    private static final int ROW_HEIGHT = 19;
+    /** Pixels between rows in a scrolling list — tall enough to hold a picture. */
+    private static final int ROW_HEIGHT = 28;
+
+    /** The picture beside a row, in pixels. */
+    private static final int ICON = ROW_HEIGHT - 6;
+
+    /** The picture in the footer, of whichever row the cursor is on. */
+    private static final int DETAIL_ICON = 60;
+
+    /** What a portrait is rendered over — the panel's own dark card. */
+    private static final int ICON_BACKDROP = 0x121C17;
+
+    /**
+     * Where the satchel screen's parts are.
+     *
+     * <p>Worked out in one place because two methods need it and they must
+     * agree exactly: {@link #drawSatchel} paints the rows and
+     * {@link #updateSatchel} decides which one the pointer is over. A panel
+     * whose hit boxes are computed separately from its drawing is a panel that
+     * selects the row above the one you clicked on, for ever, on some window
+     * sizes and not others.
+     */
+    private record SatchelBox(int x, int y, int w, int h, int listTop, int rows,
+                              int colWidth) {
+
+        int leftX() { return x + 20; }
+
+        int rightX() { return x + w / 2 + 14; }
+
+        /** The left edge of a column: {@code 0} carrying, {@code 1} recipes. */
+        int columnX(int column) { return column == 1 ? rightX() : leftX(); }
+
+        int barTop() { return listTop; }
+
+        int barHeight() { return rows * ROW_HEIGHT; }
+
+        int barX(int column) { return columnX(column) + colWidth - 5; }
+
+        /** The top of a visible row's band. */
+        int rowTop(int row) { return listTop + row * ROW_HEIGHT; }
+
+        /** Which list a point is over: {@code 0} carrying, {@code 1} recipes, {@code −1} neither. */
+        int columnAt(int mx, int my) {
+            if (my < barTop() || my >= barTop() + barHeight()) return -1;
+            if (mx >= leftX() - 8 && mx < leftX() + colWidth) return 0;
+            if (mx >= rightX() - 8 && mx < rightX() + colWidth) return 1;
+            return -1;
+        }
+
+        /** Which visible row a {@code y} lands on, or {@code −1}. */
+        int rowAt(int my) {
+            int row = (my - listTop) / ROW_HEIGHT;
+            return my >= listTop && row < rows ? row : -1;
+        }
+
+        boolean overBar(int mx, int my, int column) {
+            int bx = barX(column);
+            return mx >= bx - 4 && mx <= bx + 7
+                    && my >= barTop() && my < barTop() + barHeight();
+        }
+
+        boolean overClose(int mx, int my) {
+            return mx >= x + w - 38 && mx <= x + w - 12
+                    && my >= y + 12 && my <= y + 38;
+        }
+    }
+
+    private SatchelBox satchelBox() {
+        int w = Math.min(880, Math.max(320, viewportWidth - 80));
+        int h = Math.min(560, Math.max(240, viewportHeight - 80));
+        int x = (viewportWidth - w) / 2, y = (viewportHeight - h) / 2;
+        int listTop = y + 82;
+        int listBottom = y + h - DETAIL_ICON - 26;
+        int rows = Math.max(1, (listBottom - listTop) / ROW_HEIGHT);
+        return new SatchelBox(x, y, w, h, listTop, rows, w / 2 - 34);
+    }
 
     private void drawSatchel(DrawTarget target) {
-        int w = Math.min(820, viewportWidth - 80);
-        int h = Math.min(500, viewportHeight - 80);
-        int x = (viewportWidth - w) / 2, y = (viewportHeight - h) / 2;
+        SatchelBox box = satchelBox();
+        int x = box.x(), y = box.y(), w = box.w(), h = box.h();
         target.fillRect(x, y, w, h, HUD_PANEL);
         target.drawRect(x, y, w, h, HUD_ACCENT);
         target.drawText("Satchel & Cooking", x + 20, y + 32, TITLE_FONT, HUD_INK);
+        drawCloseButton(target, box);
 
         Satchel satchel = view().satchel();
         List<String> items = satchel.keys();
-        int listTop = y + 84;
-        int listBottom = y + h - 46;
-        int rows = Math.max(1, (listBottom - listTop) / ROW_HEIGHT);
-        int colWidth = w / 2 - 34;
+        List<Recipes.Recipe> recipes = Recipes.all();
+        // Only bounded here, never pulled back to the cursor: the wheel and the
+        // bar move the window on its own, and a draw that dragged it back to
+        // wherever the cursor happened to be would undo the scroll every frame.
+        satchelScroll = boundScroll(satchelScroll, items.size(), box.rows());
+        recipeScroll = boundScroll(recipeScroll, recipes.size(), box.rows());
 
         // --- carrying ------------------------------------------------------
-        int col = x + 20;
+        int col = box.leftX();
         String carrying = satchel.bottomless()
                 ? "Carrying  (everything — debug)"
                 : "Carrying  (" + satchel.kinds() + " kinds, "
                         + satchel.total() + " things)";
         target.drawText(carrying, col, y + 68, HUD_BOLD,
                 recipeColumn ? HUD_DIM : HUD_ACCENT);
-        // Keep the cursor on screen: the window follows it rather than the
-        // other way round, which is what makes a long list navigable with two
-        // keys and no page-up.
-        satchelScroll = clampScroll(satchelScroll, satchelIndex, items.size(), rows);
-        for (int i = 0; i < rows; i++) {
+        for (int i = 0; i < box.rows(); i++) {
             int index = satchelScroll + i;
             if (index >= items.size()) break;
             String key = items.get(index);
             Forage.Item item = Forage.byKey(key);
-            int row = listTop + i * ROW_HEIGHT;
+            int top = box.rowTop(i);
+            int text = top + ROW_HEIGHT - 9;
             if (index == satchelIndex && !recipeColumn) {
-                target.fillRect(col - 6, row - 13, colWidth, ROW_HEIGHT - 1,
+                target.fillRect(col - 8, top, box.colWidth(), ROW_HEIGHT - 2,
                         new Color(60, 110, 70, 160));
             }
-            target.drawText(satchel.countLabel(key) + "×", col, row, HUD_FONT, HUD_ACCENT);
-            target.drawText(Forage.nameOf(key), col + 36, row, HUD_FONT, HUD_INK);
+            // Its own model, not a coloured square: forty rows of "Berry" and
+            // "Seed" tell you what category a thing is and nothing about what
+            // it is. See ItemPortrait.
+            target.drawImage(ItemPortrait.of(key, ICON, ICON_BACKDROP),
+                    col, top + 3, ICON, ICON);
+            target.drawText(satchel.countLabel(key) + "×", col + ICON + 8, text,
+                    HUD_FONT, HUD_ACCENT);
+            target.drawText(Forage.nameOf(key), col + ICON + 44, text, HUD_FONT, HUD_INK);
             if (item != null) {
-                target.drawText(item.kind().label(), col + colWidth - 96, row,
+                target.drawText(item.kind().label(), col + box.colWidth() - 96, text,
                         HUD_SMALL, HUD_DIM);
             }
         }
         if (items.isEmpty()) {
-            target.drawText("Nothing yet — press E out there", col, listTop,
-                    HUD_SMALL, HUD_DIM);
+            target.drawText("Nothing yet — press E out there", col,
+                    box.rowTop(0) + 18, HUD_SMALL, HUD_DIM);
         }
-        scrollbar(target, col + colWidth - 4, listTop - 13, listBottom - listTop,
-                satchelScroll, rows, items.size());
+        scrollbar(target, box.barX(0), box.barTop(), box.barHeight(), satchelScroll,
+                box.rows(), items.size());
 
         // --- recipes -------------------------------------------------------
-        int rx = x + w / 2 + 14;
-        List<Recipes.Recipe> recipes = Recipes.all();
+        int rx = box.rightX();
         target.drawText("Recipes", rx, y + 68, HUD_BOLD,
                 recipeColumn ? HUD_ACCENT : HUD_DIM);
-        int recipeScroll = clampScroll(0, recipeIndex, recipes.size(), rows);
-        for (int i = 0; i < rows; i++) {
+        for (int i = 0; i < box.rows(); i++) {
             int index = recipeScroll + i;
             if (index >= recipes.size()) break;
             Recipes.Recipe recipe = recipes.get(index);
             boolean can = recipe.affordable(satchel);
-            int row = listTop + i * ROW_HEIGHT;
+            int top = box.rowTop(i);
+            int text = top + ROW_HEIGHT - 9;
             if (index == recipeIndex && recipeColumn) {
-                target.fillRect(rx - 6, row - 13, colWidth, ROW_HEIGHT - 1,
+                target.fillRect(rx - 8, top, box.colWidth(), ROW_HEIGHT - 2,
                         new Color(60, 110, 70, 160));
             }
-            target.drawText(recipe.name(), rx, row, HUD_FONT,
+            target.drawImage(ItemPortrait.of(recipe.output(), ICON, ICON_BACKDROP),
+                    rx, top + 3, ICON, ICON);
+            target.drawText(recipe.name(), rx + ICON + 8, text, HUD_FONT,
                     can ? HUD_INK : new Color(130, 140, 132));
             // Clipped to the column rather than drawn over the panel's own
             // edge and out into the world, which is what a four-ingredient
             // recipe did. Whichever row the cursor is on says it in full along
             // the footer, so nothing is actually hidden.
-            int costX = rx + 168;
-            target.drawText(fitted(target, recipe.costLine(), rx + colWidth - 8 - costX),
-                    costX, row, HUD_SMALL, can ? HUD_DIM : new Color(120, 110, 100));
+            int costX = rx + ICON + 152;
+            target.drawText(fitted(target, recipe.costLine(), rx + box.colWidth() - 10 - costX),
+                    costX, text, HUD_SMALL, can ? HUD_DIM : new Color(120, 110, 100));
         }
-        scrollbar(target, rx + colWidth - 4, listTop - 13, listBottom - listTop,
-                recipeScroll, rows, recipes.size());
+        scrollbar(target, box.barX(1), box.barTop(), box.barHeight(), recipeScroll,
+                box.rows(), recipes.size());
 
-        // --- the footer, which explains whichever column has the cursor -----
-        String note;
+        drawSatchelFooter(target, box, satchel, items, recipes);
+        String keys = "Click to use · wheel to scroll · ↑↓←→ · Enter · Tab close";
+        target.drawText(keys, x + w - target.textWidth(keys, HUD_SMALL) - 46, y + 32,
+                HUD_SMALL, HUD_DIM);
+    }
+
+    /**
+     * The footer: a big picture of whatever the cursor is on, and what it is
+     * for.
+     *
+     * <p>The one place on the screen with room to draw an item properly, which
+     * is what makes the row icons legible rather than decorative — the small
+     * one says which row, and this says what the thing actually looks like.
+     */
+    private void drawSatchelFooter(DrawTarget target, SatchelBox box, Satchel satchel,
+                                   List<String> items, List<Recipes.Recipe> recipes) {
+        int x = box.x(), y = box.y(), w = box.w(), h = box.h();
+        int top = y + h - DETAIL_ICON - 16;
+        target.fillRect(x + 12, top - 8, w - 24, 1, new Color(90, 120, 96, 120));
+
+        String key = null;
+        String title = "";
+        String note = "";
         if (recipeColumn && !recipes.isEmpty()) {
-            Recipes.Recipe recipe = recipes.get(recipeIndex);
+            Recipes.Recipe recipe = recipes.get(Math.min(recipeIndex, recipes.size() - 1));
+            key = recipe.output();
+            title = recipe.name() + "  ·  " + recipe.station().label()
+                    + (recipe.affordable(satchel) ? "" : "  ·  short of ingredients");
             // The cost in full, because the list's copy of it may have been
             // cut to fit the column.
-            note = recipe.station().label() + "  ·  " + recipe.costLine()
-                    + "  ·  " + recipe.note();
+            note = recipe.costLine() + "  —  " + recipe.note();
         } else if (!items.isEmpty()) {
-            Forage.Item item = Forage.byKey(items.get(
-                    Math.min(satchelIndex, items.size() - 1)));
+            key = items.get(Math.min(satchelIndex, items.size() - 1));
+            Forage.Item item = Forage.byKey(key);
+            title = Forage.nameOf(key)
+                    + (item == null ? "" : "  ·  " + item.kind().label());
             note = item == null ? "" : item.note();
-        } else {
-            note = "";
         }
-        target.drawText(fitted(target, note, w - 40), x + 20, y + h - 18, HUD_SMALL, HUD_DIM);
-        String keys = recipeColumn
-                ? "↑↓ choose · Enter make · ← carrying · Tab close"
-                : "↑↓ choose · Enter put out or plant · → recipes · Tab close";
-        target.drawText(keys, x + w - target.textWidth(keys, HUD_SMALL) - 20, y + 32,
-                HUD_SMALL, HUD_DIM);
+        if (key == null) return;
+
+        target.drawImage(ItemPortrait.of(key, DETAIL_ICON, ICON_BACKDROP),
+                x + 20, top, DETAIL_ICON, DETAIL_ICON);
+        target.drawRect(x + 20, top, DETAIL_ICON, DETAIL_ICON, new Color(70, 96, 76));
+        int tx = x + 28 + DETAIL_ICON;
+        int width = x + w - 20 - tx;
+        target.drawText(fitted(target, title, width), tx, top + 20, HUD_BOLD, HUD_INK);
+        target.drawText(fitted(target, note, width), tx, top + 42, HUD_SMALL, HUD_DIM);
+    }
+
+    /** The ✕ every panel that the mouse drives needs in its corner. */
+    private void drawCloseButton(DrawTarget target, SatchelBox box) {
+        boolean over = box.overClose(pointerX, pointerY);
+        int bx = box.x() + box.w() - 38, by = box.y() + 12;
+        target.fillRect(bx, by, 26, 26,
+                over ? new Color(90, 40, 40, 200) : new Color(30, 44, 36, 160));
+        target.drawRect(bx, by, 26, 26, over ? HUD_WARN : new Color(80, 104, 86));
+        target.drawText("✕", bx + 8, by + 19, HUD_FONT, over ? HUD_WARN : HUD_DIM);
     }
 
     /**
@@ -2468,36 +2936,39 @@ public class WatchScene extends AbstractScene {
     }
 
     private void drawBuild(DrawTarget target) {
-        int w = Math.min(560, viewportWidth - 80);
-        int h = Math.min(420, viewportHeight - 80);
-        int x = (viewportWidth - w) / 2, y = (viewportHeight - h) / 2;
+        SatchelBox box = buildBox();
+        int x = box.x(), y = box.y(), w = box.w(), h = box.h();
         target.fillRect(x, y, w, h, HUD_PANEL);
         target.drawRect(x, y, w, h, HUD_ACCENT);
         target.drawText("Build", x + 20, y + 32, TITLE_FONT, HUD_INK);
+        drawCloseButton(target, box);
 
         Satchel satchel = view().satchel();
-        int row = y + 62;
         List<BuildPiece> pieces = BuildPiece.all();
         for (int i = 0; i < pieces.size(); i++) {
             BuildPiece piece = pieces.get(i);
             boolean can = piece.affordable(satchel);
+            int top = box.rowTop(i);
+            int text = top + ROW_HEIGHT - 9;
             if (i == pieceIndex) {
-                target.fillRect(x + 14, row - 13, w - 28, 18, new Color(60, 110, 70, 160));
+                target.fillRect(x + 14, top, w - 28, ROW_HEIGHT - 2,
+                        new Color(60, 110, 70, 160));
             }
-            target.drawText(piece.displayName(), x + 20, row, HUD_FONT,
+            target.drawText(piece.displayName(), x + 20, text, HUD_FONT,
                     can ? HUD_INK : new Color(130, 140, 132));
-            target.drawText(piece.costLine(), x + 190, row, HUD_SMALL,
+            target.drawText(piece.costLine(), x + 190, text, HUD_SMALL,
                     can ? HUD_DIM : new Color(120, 110, 100));
-            row += 20;
         }
         BuildPiece chosen = pieces.get(pieceIndex);
-        target.drawText(chosen.note(), x + 20, y + h - 44, HUD_SMALL, HUD_DIM);
+        target.drawText(fitted(target, chosen.note(), w - 40), x + 20, y + h - 44,
+                HUD_SMALL, HUD_DIM);
         String facing = "Facing " + (pieceTurn * 45) + "°"
                 + (pieceInTree ? " · fixed to the nearest trunk" : " · on the ground");
         target.drawText(facing, x + 20, y + h - 26, HUD_SMALL,
                 pieceInTree && !chosen.anchors() ? HUD_WARN : HUD_ACCENT);
-        target.drawText("↑↓ choose · X turn · ←→ ground/tree · Enter build · B close",
-                x + w - 400, y + 32, HUD_SMALL, HUD_DIM);
+        String keys = "Click to build · X turn · ←→ ground/tree · B close";
+        target.drawText(keys, x + w - target.textWidth(keys, HUD_SMALL) - 46, y + 32,
+                HUD_SMALL, HUD_DIM);
     }
 
     private void drawPaused(DrawTarget target) {
@@ -2525,6 +2996,31 @@ public class WatchScene extends AbstractScene {
 
     /** Whatever the local player is looking at, for tests and the debug overlay. */
     public long lookingAtId() { return lookingAtId; }
+
+    /** Which overlay is up, in lower case, or {@code "none"} — for tests. */
+    public String panelName() { return panel.name().toLowerCase(java.util.Locale.ROOT); }
+
+    /**
+     * What the satchel screen's cursor is on — an item key in the carrying
+     * column, a recipe's output in the cooking one, or {@code null} for an
+     * empty list. For tests.
+     */
+    public String panelCursor() {
+        if (recipeColumn) {
+            List<Recipes.Recipe> recipes = Recipes.all();
+            return recipes.isEmpty() ? null
+                    : recipes.get(Math.min(recipeIndex, recipes.size() - 1)).output();
+        }
+        List<String> items = view().satchel().keys();
+        return items.isEmpty() ? null
+                : items.get(Math.min(satchelIndex, items.size() - 1));
+    }
+
+    /** How far down its list the column with the cursor is scrolled — for tests. */
+    public int panelScroll() { return recipeColumn ? recipeScroll : satchelScroll; }
+
+    /** What is in reach of the local player this frame, or {@code null} — for tests. */
+    public WatchGame.Pickable inReach() { return inReach; }
 
     /** The camera, so a test can check where it ended up. */
     public EyeCamera camera() { return eye; }

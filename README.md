@@ -3173,7 +3173,7 @@ You do not chase things. You give them a reason to come.
 
 | | |
 |---|---|
-| **Forage** | Berries, seeds, nuts, mushrooms, sap, branches, stones — picked off the bushes and trees the world scattered. |
+| **Forage** | Berries, seeds, nuts, mushrooms, sap, branches, stones — picked off the bushes and trees the world scattered, and **picked up off the ground it scattered them on**. Everything a region can give you is lying there to be walked to: a fallen branch under the oaks, quartz on a shingle bank, sand on a dune ([`Litter`](src/main/java/com/larsons/engine/watch/Litter.java)). |
 | **Fish** | Cast into a lake, wait, and strike inside the bite window. Different waters hold different fish. |
 | **Cultivate** | Plant seed and it grows into a crop, or into a tree if it was a tree's seed. |
 | **Cook** | Nineteen recipes across bare hands (9), a fire (5) and a bench (5) — suet cake, grain loaf, berry mash, nectar and smoked fish for the animals, and the rod, the trowel, the feeder itself, planks, thatch, rope, a ground lens and the spyglass for you. Cooking outdraws foraging for most appetites, though a kingfisher would still rather have a live trout. |
@@ -3359,18 +3359,35 @@ it.
 Picking a bush, pulling a ripe crop, topping up a feeder and taking the oars
 used to be four keys, three of which failed silently at each other's targets —
 and you had no way of knowing which of the four you were standing at except by
-trying all of them. Now <kbd>E</kbd> does whatever is in reach, there is a
-**ring around it** saying which thing, and a line under the ring saying what
-would happen ([`WatchGame.pickTarget`](src/main/java/com/larsons/engine/watch/WatchGame.java)).
+trying all of them. Now <kbd>E</kbd> does whatever is in reach, the thing itself
+**glows** — a soft halo, a ring and four corner ticks — and a line under it says
+what would happen ([`WatchGame.pickTarget`](src/main/java/com/larsons/engine/watch/WatchGame.java)).
 What you picked up flashes under the crosshair rather than scrolling past in the
 chat log.
+
+**Everything that glows is a real object.** Every one of the hundred-odd things
+in [`Forage`](src/main/java/com/larsons/engine/watch/Forage.java) has a solid of
+its own — an acorn has a cap, a pine cone has scales, a beetle has legs, a
+bottle of nectar has a neck and a stopper
+([`ItemModel`](src/main/java/com/larsons/engine/watch/render/ItemModel.java)) —
+drawn wherever that item is: on a feeder's tray, in a hand, on the ground, and
+beside its own row in the satchel.
 
 The satchel screen is **two scrolling columns** — what you are carrying and what
 you could cook — with cursors, windows and bars. (It could not be scrolled at
 all before: the list drew until it ran out of panel and then stopped, so a
-satchel after an hour had a tail nobody could see.) <kbd>Enter</kbd> on an item
-puts it out on a feeder or plants it. A **compass** strip and a **breath meter**
-round it out; the breath only appears when you are spending it.
+satchel after an hour had a tail nobody could see.) Every row carries **a
+picture of the thing itself** — its own model, rendered three-quarters on
+([`ItemPortrait`](src/main/java/com/larsons/engine/watch/render/ItemPortrait.java)),
+with a larger one along the footer of whichever row the cursor is on.
+
+It is **worked entirely with the mouse or entirely with the keys**. Hovering a
+row selects it, clicking does what <kbd>Enter</kbd> does to it — make the
+recipe, plant the seed, put the food out — the wheel scrolls whichever column
+the pointer is over, the bars drag, and there is a ✕. The arrow keys still do
+all of it, and a pointer resting on the desk does not drag the cursor back to
+the row under it. A **compass** strip and a **breath meter** round it out; the
+breath only appears when you are spending it.
 
 ### Controls
 

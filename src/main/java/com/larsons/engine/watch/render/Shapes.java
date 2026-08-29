@@ -130,12 +130,41 @@ public final class Shapes {
      * An octahedron — eight triangles, and the cheapest solid that reads as a
      * blob rather than as a box. Leaf clusters, boulders and berries are all
      * this, at different proportions.
+     *
+     * <p>Axis-aligned: {@code rx} lies along world east and {@code ry} along
+     * world north. For anything whose length has to point <em>somewhere</em> —
+     * a fish, a beetle, a seed pod — use {@link #blob(Mesh.Builder, double,
+     * double, double, double, double, double, double, float[], int)} and give
+     * it the yaw the rest of the model is built at.
      */
     public static void blob(Mesh.Builder mesh, double x, double y, double z,
                             double rx, double ry, double rz, float[] uv, int albedo) {
-        double[][] equator = {
-                {x + rx, y, z}, {x, y + ry, z}, {x - rx, y, z}, {x, y - ry, z}
-        };
+        blob(mesh, x, y, z, rx, ry, rz, 0, uv, albedo);
+    }
+
+    /**
+     * An octahedron turned about the vertical, so its long axis can face
+     * somewhere.
+     *
+     * <p><b>The half of {@link #blob} that was missing.</b> Every other solid
+     * here takes a yaw and this one did not, so a model that placed a head, a
+     * tail and a pair of eyes along its facing direction and then used a blob
+     * for the body in between got a body lying across all three of them: a fish
+     * whose snout came out of its flank. The turn matches {@link #box}'s —
+     * local {@code +y} maps to {@code (−sin yaw, cos yaw)} — so a body and the
+     * boxes bolted to it agree about which way is along.
+     */
+    public static void blob(Mesh.Builder mesh, double x, double y, double z,
+                            double rx, double ry, double rz, double yaw,
+                            float[] uv, int albedo) {
+        double cos = Math.cos(yaw), sin = Math.sin(yaw);
+        double[][] local = {{rx, 0}, {0, ry}, {-rx, 0}, {0, -ry}};
+        double[][] equator = new double[4][3];
+        for (int i = 0; i < 4; i++) {
+            equator[i][0] = x + local[i][0] * cos - local[i][1] * sin;
+            equator[i][1] = y + local[i][0] * sin + local[i][1] * cos;
+            equator[i][2] = z;
+        }
         double topZ = z + rz, bottomZ = z - rz;
         for (int i = 0; i < 4; i++) {
             double[] p = equator[i];
