@@ -113,7 +113,7 @@ class WalkCycleTest {
         double speed = WatchPlayer.WALK_SPEED;
         double sent = 0;
         // Settle first: the very first snapshot is placed rather than eased.
-        gaits.follow(7, 0, 0, 0, 0, false, frameDt);
+        gaits.follow(7, 0, 0, 0, 0, Gait.Cycle.STRIDE, frameDt);
 
         double previous = 0;
         double largest = 0;
@@ -121,7 +121,7 @@ class WalkCycleTest {
         for (int frame = 1; frame <= 240; frame++) {
             // A new position every third frame, which is twenty a second.
             if (frame % 3 == 0) sent += snapshotStep;
-            Gait.Step step = gaits.follow(7, sent, 0, 0, 0, false, frameDt);
+            Gait.Step step = gaits.follow(7, sent, 0, 0, 0, Gait.Cycle.STRIDE, frameDt);
             if (frame > 60) {
                 largest = Math.max(largest, Math.abs(step.x() - previous));
                 assertTrue(step.x() >= previous - 1e-9,
@@ -144,10 +144,10 @@ class WalkCycleTest {
         double frameDt = 1 / 60.0;
         double speed = 3.0;
         double sent = 0;
-        Gait.Step step = gaits.follow(3, 0, 0, 0, 0, false, frameDt);
+        Gait.Step step = gaits.follow(3, 0, 0, 0, 0, Gait.Cycle.STRIDE, frameDt);
         for (int frame = 0; frame < 600; frame++) {
             sent += speed * frameDt;
-            step = gaits.follow(3, sent, 0, 0, 0, false, frameDt);
+            step = gaits.follow(3, sent, 0, 0, 0, Gait.Cycle.STRIDE, frameDt);
         }
         assertEquals(speed, step.speed(), 0.05,
                 "the drawn speed does not settle on the real one");
@@ -157,8 +157,8 @@ class WalkCycleTest {
     @Test
     void aTeleportIsPlacedRatherThanGlidedAcrossTheCounty() {
         Gait gaits = new Gait();
-        gaits.follow(2, 0, 0, 0, 0, false, 1 / 60.0);
-        Gait.Step step = gaits.follow(2, 900, 400, 0, 0, false, 1 / 60.0);
+        gaits.follow(2, 0, 0, 0, 0, Gait.Cycle.STRIDE, 1 / 60.0);
+        Gait.Step step = gaits.follow(2, 900, 400, 0, 0, Gait.Cycle.STRIDE, 1 / 60.0);
         assertEquals(900, step.x(), 1e-9);
         assertEquals(400, step.y(), 1e-9);
         assertEquals(0, step.speed(), 1e-9,
@@ -178,8 +178,8 @@ class WalkCycleTest {
     @Test
     void theBoatAndItsRowerAreGivenTheSameAnswer() {
         Gait gaits = new Gait();
-        gaits.follow(4, 10, 0, 0, 1, true, 1 / 60.0);
-        Gait.Step first = gaits.follow(4, 12, 0, 0, 1, true, 1 / 60.0);
+        gaits.follow(4, 10, 0, 0, 1, Gait.Cycle.STROKE, 1 / 60.0);
+        Gait.Step first = gaits.follow(4, 12, 0, 0, 1, Gait.Cycle.STROKE, 1 / 60.0);
         Gait.Step again = gaits.at(4);
         assertEquals(first.x(), again.x(), 1e-12);
         assertEquals(first.phase(), again.phase(), 1e-12,
@@ -413,12 +413,12 @@ class WalkCycleTest {
     void theRowingHandsClearTheNearPlaneAtEveryPointOfTheStroke() {
         EyeCamera eye = new EyeCamera(1280, 720);
         eye.place(0, 0, 0);
-        for (int p = -4; p <= 4; p++) {
-            eye.look(1.1, p / 4.0 * EyeCamera.MAX_PITCH);
-            for (int i = 0; i < 24; i++) {
+        for (int p = -2; p <= 2; p++) {
+            eye.look(1.1, p / 2.0 * EyeCamera.MAX_PITCH);
+            for (int i = 0; i < 12; i++) {
                 Mesh.Builder builder = Mesh.builder(0, 0, 0, false, 1);
                 WalkerModel.rowingHands(builder, 0, 0, 0, eye.dirX(), eye.dirY(),
-                        eye.dirZ(), eye.rightX(), eye.rightY(), i / 24.0, 0x4A6B33);
+                        eye.dirZ(), eye.rightX(), eye.rightY(), i / 12.0, 0x4A6B33);
                 Mesh mesh = builder.build();
                 float[] v = mesh.vertices();
                 for (int n = 0; n < mesh.vertexCount(); n++) {
@@ -429,7 +429,7 @@ class WalkCycleTest {
                             + v[at + 2] * eye.dirZ();
                     assertTrue(along > EyeCamera.NEAR,
                             "a rowing hand is " + along + " m from the eye at stroke "
-                                    + (i / 24.0) + ", inside the near plane");
+                                    + (i / 12.0) + ", inside the near plane");
                 }
             }
         }

@@ -220,6 +220,37 @@ public final class Shapes {
                              double x1, double y1, double z1,
                              double halfWidth, double halfThick,
                              float[] uv, int albedo) {
+        double dz = z1 - z0;
+        double length = Math.hypot(Math.hypot(x1 - x0, y1 - y0), dz);
+        // World up, unless the strut is within a few degrees of it, in which
+        // case world north — see the note above on why either will do for a
+        // limb and why neither will do for a chest.
+        boolean upright = length > 1e-7 && Math.abs(dz / length) > 0.995;
+        strut(mesh, x0, y0, z0, x1, y1, z1, halfWidth, halfThick,
+                0, upright ? 1 : 0, upright ? 0 : 1, uv, albedo);
+    }
+
+    /**
+     * The same, with the direction its cross-section is squared to given
+     * outright.
+     *
+     * <p>For anything whose section is not square and whose <em>roll</em>
+     * therefore matters: a swimmer's chest is wider than it is deep, and which
+     * way round that is has to follow the body rather than the world. Left to
+     * pick its own reference, a strut passing through vertical swaps from one
+     * to the other, and a torso that swapped would turn ninety degrees about
+     * its own spine in the middle of a dive.
+     *
+     * @param refX the direction {@code halfThick} is measured along, as far as
+     *             it is perpendicular to the strut; need not be a unit vector
+     *             and need not be perpendicular, but must not be parallel
+     */
+    public static void strut(Mesh.Builder mesh,
+                             double x0, double y0, double z0,
+                             double x1, double y1, double z1,
+                             double halfWidth, double halfThick,
+                             double refX, double refY, double refZ,
+                             float[] uv, int albedo) {
         double dx = x1 - x0, dy = y1 - y0, dz = z1 - z0;
         double length = Math.sqrt(dx * dx + dy * dy + dz * dz);
         // A strut of no length is a degenerate solid with no normals: skip it
@@ -229,13 +260,7 @@ public final class Shapes {
         dy /= length;
         dz /= length;
 
-        // A reference the strut is not parallel to; see the note above.
-        double rx = 0, ry = 0, rz = 1;
-        if (Math.abs(dz) > 0.995) {
-            rx = 0;
-            ry = 1;
-            rz = 0;
-        }
+        double rx = refX, ry = refY, rz = refZ;
         // side = along × reference, and up = along × side. In that order the
         // triple (side, up, along) is right-handed, which is what `solid`'s
         // winding assumes.
@@ -243,7 +268,20 @@ public final class Shapes {
         double sy = dz * rx - dx * rz;
         double sz = dx * ry - dy * rx;
         double slen = Math.sqrt(sx * sx + sy * sy + sz * sz);
-        if (slen < 1e-9) return;
+        if (slen < 1e-9) {
+            // The reference was parallel to the strut and says nothing about
+            // its roll. Anything perpendicular will do — a limb drawn at the
+            // wrong roll is a limb; a limb not drawn is a hole in a person.
+            sx = -dy;
+            sy = dx;
+            sz = 0;
+            slen = Math.hypot(dx, dy);
+            if (slen < 1e-9) {
+                sx = 1;
+                sy = 0;
+                slen = 1;
+            }
+        }
         sx /= slen;
         sy /= slen;
         sz /= slen;

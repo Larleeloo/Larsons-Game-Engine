@@ -75,19 +75,54 @@ public final class Gait {
     /** The same two numbers for a stroke of the oars, which covers more ground. */
     private static final double STROKE = 3.5, STROKE_PER_SPEED = 0.35;
 
+    /** …and for a stroke of a swimmer, who covers rather less. */
+    private static final double SWIM = 1.15, SWIM_PER_SPEED = 0.30;
+
+    /**
+     * The slowest a swimmer's stroke runs, in cycles a second.
+     *
+     * <p>The one cycle in the game with a floor under it, and the reason is
+     * gravity: a walker who stops walking stands there, and a swimmer who stops
+     * swimming <em>sinks</em>. Somebody treading water is working — sculling,
+     * gently, about a stroke every three and a half seconds — and a swimmer
+     * frozen mid-stroke while floating is the single most obviously wrong thing
+     * a figure in water can do.
+     */
+    private static final double SCULL = 0.28;
+
+    /** Which cycle a walker is running, and therefore what rate it runs at. */
+    public enum Cycle {
+
+        /** On their feet: one turn is a pair of steps. */
+        STRIDE,
+
+        /** In a boat: one turn is a stroke of the oars. */
+        STROKE,
+
+        /**
+         * In the water, off the bottom: one turn is a stroke of the arms and a
+         * kick. Unlike the other two, this one is clocked against speed through
+         * the water in <em>three</em> dimensions — a diver going straight down
+         * covers no ground at all, and clocked on the ground they cover would
+         * hang motionless while descending.
+         */
+        SWIM
+    }
+
     /**
      * Where one walker is being drawn, and how far through their cycle they are.
      *
      * @param speed how fast the drawn figure is moving, in metres per second —
      *              what the limb swing is scaled by
-     * @param phase the walk cycle or the rowing stroke, in turns
+     * @param phase the walk cycle, the rowing stroke or the swimming one, in
+     *              turns
      */
     public record Step(double x, double y, double z, double yaw,
                        double speed, double phase) {}
 
     private static final class Track {
         double x, y, z, yaw;
-        double speed;
+        double speed, through;
         double phase;
         boolean placed;
         Step step = new Step(0, 0, 0, 0, 0, 0);
@@ -109,11 +144,10 @@ public final class Gait {
      * all, which is drawn in a later pass and would otherwise slide about
      * underneath its own rower.
      *
-     * @param inBoat whether the cycle being clocked is a stroke of the oars
-     *               rather than a stride
+     * @param cycle which cycle they are running, and so what rate it runs at
      */
     public Step follow(int id, double x, double y, double z, double yaw,
-                       boolean inBoat, double dt) {
+                       Cycle cycle, double dt) {
         Track track = tracks.computeIfAbsent(id, key -> new Track());
         double step = Math.max(0, Math.min(0.25, dt));
         if (!track.placed || Math.hypot(x - track.x, y - track.y) > SNAP) {
@@ -123,8 +157,9 @@ public final class Gait {
             track.z = z;
             track.yaw = yaw;
             track.speed = 0;
+            track.through = 0;
         } else {
-            double fromX = track.x, fromY = track.y;
+            double fromX = track.x, fromY = track.y, fromZ = track.z;
             // Exponential rather than linear: the fraction closed in a frame
             // has to come from the frame's own length, or the smoothing runs at
             // the frame rate and is back to being the bug it fixes.
@@ -133,14 +168,20 @@ public final class Gait {
             track.y += (y - track.y) * close;
             track.z += (z - track.z) * close;
             track.yaw = turn(track.yaw, yaw, close);
-            double moved = Math.hypot(track.x - fromX, track.y - fromY);
-            double speed = step > 1e-6 ? moved / step : 0;
-            track.speed += (speed - track.speed) * Math.min(1, step * SPEED_SETTLE);
+            double over = Math.hypot(track.x - fromX, track.y - fromY);
+            double through = Math.hypot(over, track.z - fromZ);
+            double settle = Math.min(1, step * SPEED_SETTLE);
+            track.speed += ((step > 1e-6 ? over / step : 0) - track.speed) * settle;
+            track.through += ((step > 1e-6 ? through / step : 0) - track.through) * settle;
         }
-        double rate = inBoat ? strokeRate(track.speed) : cadence(track.speed);
+        double rate = switch (cycle) {
+            case STROKE -> strokeRate(track.speed);
+            case SWIM -> swimRate(track.through);
+            case STRIDE -> cadence(track.speed);
+        };
         track.phase = RowStroke.wrap(track.phase + rate * step);
-        track.step = new Step(track.x, track.y, track.z, track.yaw,
-                track.speed, track.phase);
+        double swung = cycle == Cycle.SWIM ? track.through : track.speed;
+        track.step = new Step(track.x, track.y, track.z, track.yaw, swung, track.phase);
         return track.step;
     }
 
@@ -163,6 +204,18 @@ public final class Gait {
     public static double strokeRate(double speed) {
         double v = Math.max(0, speed);
         return v / (STROKE + STROKE_PER_SPEED * v);
+    }
+
+    /**
+     * Strokes of a swimmer a second, at a speed through the water.
+     *
+     * <p>Never zero — see {@link #SCULL}. Everything else in this game is still
+     * when it is not going anywhere; a swimmer treading water is the exception,
+     * because not moving is the one thing they cannot do.
+     */
+    public static double swimRate(double speed) {
+        double v = Math.max(0, speed);
+        return SCULL + v / (SWIM + SWIM_PER_SPEED * v);
     }
 
     /**

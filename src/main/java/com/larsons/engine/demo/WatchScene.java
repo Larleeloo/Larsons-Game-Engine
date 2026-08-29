@@ -117,8 +117,14 @@ public class WatchScene extends AbstractScene {
      * so a swimmer whose feet are 1.2 below the waterline has their head above
      * it, which is what "swimming" has to look like before diving means
      * anything.
+     *
+     * <p>Public because {@link WalkerModel#swimmer} depends on it without being
+     * told it: a swimmer's body is laid down about the hips, which this number
+     * puts at the right depth for the head to end up at the waterline and the
+     * shoulders under it. Changing it moves how high a swimmer floats, and
+     * {@code SwimCycleTest} is what says so out loud.
      */
-    private static final double FLOAT_DEPTH = 1.2;
+    public static final double FLOAT_DEPTH = 1.2;
 
     /** How far a player's eyes have to be under water to count as submerged. */
     private static final double SUBMERGED_MARGIN = 0.05;
@@ -291,7 +297,14 @@ public class WatchScene extends AbstractScene {
      * stroke covers five or six metres and a stride covers two, so driving both
      * off one phase makes whichever is not being used run at the wrong rate.
      */
-    private double stroke;
+    private double rowPhase;
+
+    /**
+     * …and the swimming one, for the same reason again — a swimming stroke
+     * covers a metre and a bit, and unlike either of the others it never stops.
+     * See {@link Gait#swimRate}.
+     */
+    private double swimPhase;
 
     /**
      * A clock in seconds that only ever goes forward — what everything that
@@ -429,7 +442,8 @@ public class WatchScene extends AbstractScene {
         // re-entered is a walk begun, and a gait left halfway through a stride
         // by the last one would open on a figure mid-step.
         gait = 0;
-        stroke = 0;
+        rowPhase = 0;
+        swimPhase = 0;
         animSpeed = 0;
         lastSpeed = 0;
         drawnAt = -1;
@@ -553,7 +567,7 @@ public class WatchScene extends AbstractScene {
             // telescope, and coming back to a screen still zoomed to ×15 with
             // no memory of having raised it is disorienting.
             glass.tick(dt, false, 1);
-            driveGait(dt, 0, boatId != 0);
+            driveGait(dt, 0, cycleNow());
             applySway();
             announceGlass();
             aimGlass();
@@ -943,8 +957,7 @@ public class WatchScene extends AbstractScene {
             py = startY;
         }
 
-        driveGait(dt, Math.hypot(px - startX, py - startY) / Math.max(1e-6, dt), rowing);
-
+        double startZ = pz;
         if (rowing) {
             // Sitting in the boat: the body rides on the waterline whatever the
             // bed is doing under it.
@@ -953,45 +966,97 @@ public class WatchScene extends AbstractScene {
             pz = smoothedGround;
             submerged = false;
             breath = Math.min(1, breath + dt * 4 / WatchPlayer.BREATH_SECONDS);
-            return;
-        }
-
-        if (overWater) {
+        } else if (overWater) {
             swim(dt, depth, sinking, rising, ground, surface);
-            return;
+        } else {
+            // Back on dry land: shed whatever depth was left, and follow the ground.
+            dive = 0;
+            submerged = false;
+            breath = Math.min(1, breath + dt * 4 / WatchPlayer.BREATH_SECONDS);
+            // Eased rather than snapped: on a two-metre grid the ground under a
+            // walker changes by tens of centimetres a step, and a camera that
+            // tracked it exactly would jolt with every one of them.
+            smoothedGround += (ground - smoothedGround) * Math.min(1, dt * STEP_SMOOTHING);
+            pz = smoothedGround;
         }
 
-        // Back on dry land: shed whatever depth was left, and follow the ground.
-        dive = 0;
-        submerged = false;
-        breath = Math.min(1, breath + dt * 4 / WatchPlayer.BREATH_SECONDS);
-        // Eased rather than snapped: on a two-metre grid the ground under a
-        // walker changes by tens of centimetres a step, and a camera that
-        // tracked it exactly would jolt with every one of them.
-        smoothedGround += (ground - smoothedGround) * Math.min(1, dt * STEP_SMOOTHING);
-        pz = smoothedGround;
+        // Last, because which cycle this step belongs to depends on where the
+        // step left them — a stride into deep water is the step that becomes a
+        // swim — and because a swimmer's speed has to count the depth they
+        // covered as well as the ground. Somebody diving straight down covers
+        // no ground at all, and clocked on ground alone would hang motionless
+        // all the way to the bottom.
+        Gait.Cycle cycle = cycleNow();
+        double over = Math.hypot(px - startX, py - startY);
+        double covered = cycle == Gait.Cycle.SWIM
+                ? Math.hypot(over, pz - startZ) : over;
+        driveGait(dt, covered / Math.max(1e-6, dt), cycle);
     }
 
     /**
      * Advance the local player's animation clocks by one step.
      *
-     * <p>Two clocks, and only the one being used advances: a walker's legs must
-     * not be halfway through a stride when they step out of a boat, and a
-     * stroke must not have run on while its rower was ashore.
+     * <p>Three clocks, and only the one being used advances: a walker's legs
+     * must not be halfway through a stride when they step out of a boat, an oar
+     * must not have run on while its rower was ashore, and a swimmer coming out
+     * of a lake must not walk off mid-stroke.
      *
      * <p>Called from the panel branch as well, at a speed of nothing, so that
      * opening the satchel at a run winds the gait down over its usual tenth of
-     * a second rather than freezing it mid-stride until the panel closes.
+     * a second rather than freezing it mid-stride until the panel closes. A
+     * swimmer's does not wind down, because it does not have a bottom to wind
+     * down to — see {@link Gait#swimRate}.
      */
-    private void driveGait(double dt, double speed, boolean rowing) {
+    private void driveGait(double dt, double speed, Gait.Cycle cycle) {
         lastSpeed = speed;
         animSpeed += (speed - animSpeed) * Math.min(1, dt * SPEED_SETTLE);
-        if (rowing) {
-            stroke = RowStroke.wrap(stroke + Gait.strokeRate(animSpeed) * dt);
-        } else {
-            gait = RowStroke.wrap(gait + Gait.cadence(animSpeed) * dt);
+        switch (cycle) {
+            case STROKE ->
+                    rowPhase = RowStroke.wrap(rowPhase + Gait.strokeRate(animSpeed) * dt);
+            case SWIM ->
+                    swimPhase = RowStroke.wrap(swimPhase + Gait.swimRate(animSpeed) * dt);
+            case STRIDE -> gait = RowStroke.wrap(gait + Gait.cadence(animSpeed) * dt);
         }
     }
+
+    /**
+     * Which cycle the local player is running this step.
+     *
+     * <p>Swimming is <b>feet off the bottom</b> rather than "in the water",
+     * which is the distinction the game already makes and the only one that
+     * gives the right answer at both ends: somebody wading in the shallows has
+     * their feet on the bed and is walking, and the moment the bed drops away
+     * from under them they are swimming. {@link #swim} arranges exactly that —
+     * it clamps {@link #dive} to the depth of the water, so a player in the
+     * shallows is standing on the bed and one out of their depth is not — which
+     * is why {@link #afloat} can read it back off the position alone, and read
+     * it off everybody else's the same way.
+     */
+    private Gait.Cycle cycleNow() {
+        if (boatId != 0) return Gait.Cycle.STROKE;
+        return afloat(px, py, pz) ? Gait.Cycle.SWIM : Gait.Cycle.STRIDE;
+    }
+
+    /**
+     * Whether somebody at this position is off the bottom in water deep enough
+     * to swim in.
+     *
+     * <p>Answered from the terrain rather than from anything on the wire: the
+     * client generates the same ground the host does, so it can see the bed
+     * under anybody in the party without a byte being sent about it.
+     */
+    private boolean afloat(double x, double y, double z) {
+        if (streamer == null) return false;
+        double ground = streamer.groundAt(x, y);
+        if (TerrainField.WATER_LEVEL - ground <= WADING) return false;
+        return z > ground + FOOTING;
+    }
+
+    /** How deep the water has to be before anybody could be out of their depth. */
+    private static final double WADING = 0.6;
+
+    /** How far off the bed a swimmer's feet are before they stop being a walker. */
+    private static final double FOOTING = 0.25;
 
     /**
      * In the water: float, sink, rise, and run out of air.
@@ -1933,11 +1998,11 @@ public class WatchScene extends AbstractScene {
         //
         // Twice a stride, because both feet land in one — and driven by the
         // eased speed, so it fades in and out over a tenth of a second instead
-        // of switching on and off with the movement key. Not in a boat: an
-        // oarsman's head does not bounce, and at nine and a half metres a
-        // second this term used to shake the camera hard enough to be the first
-        // thing anybody said about rowing.
-        if (!thirdPerson && boatId == 0) {
+        // of switching on and off with the movement key. Only on foot: an
+        // oarsman's head does not bounce and a swimmer's does not either, and
+        // at nine and a half metres a second this term used to shake the camera
+        // hard enough to be the first thing anybody said about rowing.
+        if (!thirdPerson && cycleNow() == Gait.Cycle.STRIDE) {
             eyeHeight += Math.sin(gait * Math.PI * 4) * 0.028
                     * Math.min(1, animSpeed / WatchPlayer.WALK_SPEED);
         }
@@ -2039,7 +2104,7 @@ public class WatchScene extends AbstractScene {
             Boats.Boat mine = view.boats().byId(streamer.field(), boatId);
             if (mine != null) {
                 BoatModel.boat(mesh, px - ox, py - oy, mine.z(), yaw,
-                        bobOf(boatId), stroke);
+                        bobOf(boatId), rowPhase);
             }
         }
 
@@ -2133,12 +2198,36 @@ public class WatchScene extends AbstractScene {
         for (WatchView.Walker walker : view.walkers()) {
             if (walker.id() == view.selfId()) {
                 posed.put(walker.id(), new Gait.Step(px, py, pz, yaw, animSpeed,
-                        walker.inBoat() ? stroke : gait));
+                        phaseFor(cycleNow())));
             } else {
                 posed.put(walker.id(), gaits.follow(walker.id(), walker.x(), walker.y(),
-                        walker.z(), walker.yaw(), walker.inBoat(), frameSeconds));
+                        walker.z(), walker.yaw(), cycleOf(walker), frameSeconds));
             }
         }
+    }
+
+    /** This player's own clock for a cycle. See {@link #driveGait}. */
+    private double phaseFor(Gait.Cycle cycle) {
+        return switch (cycle) {
+            case STROKE -> rowPhase;
+            case SWIM -> swimPhase;
+            case STRIDE -> gait;
+        };
+    }
+
+    /**
+     * Which cycle somebody else is running, from where they are.
+     *
+     * <p>Nothing about it is sent. A walker's position and the ground under it
+     * are enough to say whether they are on their feet, in a boat or out of
+     * their depth, and all three are things this client already has — so a
+     * swimmer looks like a swimmer to everybody watching without the snapshot
+     * growing by a byte.
+     */
+    private Gait.Cycle cycleOf(WatchView.Walker walker) {
+        if (walker.inBoat()) return Gait.Cycle.STROKE;
+        return afloat(walker.x(), walker.y(), walker.z())
+                ? Gait.Cycle.SWIM : Gait.Cycle.STRIDE;
     }
 
     /**
@@ -2160,23 +2249,38 @@ public class WatchScene extends AbstractScene {
 
         // Where the eye of the figure just drawn is, so a raised glass can be
         // put at it. A rower's is over the thwart they are sitting on, which is
-        // aft of the boat's own centre and lower than a standing head.
+        // aft of the boat's own centre and lower than a standing head; a
+        // swimmer's is on the end of a spine that may be pointing anywhere.
         double eyeAlong = 0.18, eyeZ;
-        if (walker.inBoat()) {
-            // The hull's own waterline, recovered from the rower rather than
-            // looked up: a player in a boat stands on its deck, which is
-            // exactly Boats.DECK below the water they are floating on. That
-            // keeps the rower on the same swell as the boat without either of
-            // them having to find the other.
-            double waterZ = step.z() + Boats.DECK;
-            double bob = bobOf(walker.boatId());
-            WalkerModel.rower(mesh, x, y, waterZ, step.yaw(), bob, step.phase(), coat);
-            eyeAlong += BoatModel.SEAT_ALONG;
-            eyeZ = BoatModel.thwartZ(waterZ, bob) + WalkerModel.ROWER_EYE;
-        } else {
-            WalkerModel.walker(mesh, x, y, step.z(), step.yaw(), walker.crouching(),
-                    step.phase(), step.speed(), coat);
-            eyeZ = step.z() + (walker.crouching() ? 1.10 : 1.68);
+        switch (cycleOf(walker)) {
+            case STROKE -> {
+                // The hull's own waterline, recovered from the rower rather
+                // than looked up: a player in a boat stands on its deck, which
+                // is exactly Boats.DECK below the water they are floating on.
+                // That keeps the rower on the same swell as the boat without
+                // either of them having to find the other.
+                double waterZ = step.z() + Boats.DECK;
+                double bob = bobOf(walker.boatId());
+                WalkerModel.rower(mesh, x, y, waterZ, step.yaw(), bob, step.phase(), coat);
+                eyeAlong += BoatModel.SEAT_ALONG;
+                eyeZ = BoatModel.thwartZ(waterZ, bob) + WalkerModel.ROWER_EYE;
+            }
+            case SWIM -> {
+                double bodyPitch = WalkerModel.swimPitch(step.speed(), walker.pitch(),
+                        walker.submerged());
+                WalkerModel.swimmer(mesh, x, y, step.z(), step.yaw(), bodyPitch,
+                        WalkerModel.swimDrive(step.speed()), step.phase(),
+                        !walker.submerged(), coat);
+                double[] eye = new double[2];
+                WalkerModel.swimEye(bodyPitch, eye);
+                eyeAlong += eye[0];
+                eyeZ = step.z() + eye[1];
+            }
+            default -> {
+                WalkerModel.walker(mesh, x, y, step.z(), step.yaw(), walker.crouching(),
+                        step.phase(), step.speed(), coat);
+                eyeZ = step.z() + (walker.crouching() ? 1.10 : 1.68);
+            }
         }
 
         // Somebody with a glass up, seen from outside: a tube at their eye,
@@ -2207,13 +2311,16 @@ public class WatchScene extends AbstractScene {
 
     /** This player, before the first snapshot has told us where we are. */
     private void drawSelf(Mesh.Builder mesh, double ox, double oy) {
-        if (boatId != 0) {
-            WalkerModel.rower(mesh, px - ox, py - oy, pz + Boats.DECK, yaw,
-                    bobOf(boatId), stroke, WalkerModel.coatFor(session.selfId()));
-            return;
+        int coat = WalkerModel.coatFor(session.selfId());
+        switch (cycleNow()) {
+            case STROKE -> WalkerModel.rower(mesh, px - ox, py - oy, pz + Boats.DECK,
+                    yaw, bobOf(boatId), rowPhase, coat);
+            case SWIM -> WalkerModel.swimmer(mesh, px - ox, py - oy, pz, yaw,
+                    WalkerModel.swimPitch(animSpeed, pitch, submerged),
+                    WalkerModel.swimDrive(animSpeed), swimPhase, !submerged, coat);
+            case STRIDE -> WalkerModel.walker(mesh, px - ox, py - oy, pz, yaw,
+                    crouching, gait, animSpeed, coat);
         }
-        WalkerModel.walker(mesh, px - ox, py - oy, pz, yaw, crouching, gait,
-                animSpeed, WalkerModel.coatFor(session.selfId()));
     }
 
     /**
@@ -2231,23 +2338,34 @@ public class WatchScene extends AbstractScene {
         // What is being carried, in the right hand, when there is something
         // worth showing: a rod that is out, or the last thing picked up.
         String held = heldItem();
-        if (boatId != 0 && held == null) {
-            // Rowing, with both hands free: they work together on the stroke's
-            // own clock — the one the oars in the water in front of you are
-            // swinging on — rather than swinging against each other at a walk
-            // driven by nine and a half metres a second, which is what a boat
-            // used to look like from inside it.
-            WalkerModel.rowingHands(mesh, 0, 0, 0, eye.dirX(), eye.dirY(), eye.dirZ(),
-                    eye.rightX(), eye.rightY(), stroke, sleeve);
+        Gait.Cycle cycle = cycleNow();
+        // Both hands, working together, whenever they are both busy with the
+        // same thing — and nothing in a hand to show instead.
+        if (held == null && cycle != Gait.Cycle.STRIDE) {
+            if (cycle == Gait.Cycle.STROKE) {
+                // Rowing: on the stroke's own clock — the one the oars in the
+                // water in front of you are swinging on — rather than swinging
+                // against each other at a walk driven by nine and a half metres
+                // a second, which is what a boat used to look like from inside.
+                WalkerModel.rowingHands(mesh, 0, 0, 0, eye.dirX(), eye.dirY(),
+                        eye.dirZ(), eye.rightX(), eye.rightY(), rowPhase, sleeve);
+            } else {
+                // Swimming: the same breaststroke the body behind the camera is
+                // doing. It used to be the walking view model at a slower
+                // clock, which is a person striding along in front of your face
+                // while you cross a lake.
+                WalkerModel.swimmingHands(mesh, 0, 0, 0, eye.dirX(), eye.dirY(),
+                        eye.dirZ(), eye.rightX(), eye.rightY(), swimPhase, sleeve);
+            }
             return mesh.build();
         }
         double sway = Math.min(1, animSpeed / WatchPlayer.WALK_SPEED);
-        // Underwater the hands sweep rather than swing, which is a slower clock
-        // and a wider one; on land they follow the gait.
-        double bob = submerged ? RowStroke.wrap(gait * 0.6) : gait;
+        // Treading water with something in your hand: the hands still sweep
+        // rather than swing, but slowly and without going anywhere.
+        double bob = cycle == Gait.Cycle.SWIM ? swimPhase : gait;
         WalkerModel.hands(mesh, 0, 0, 0, eye.dirX(), eye.dirY(), eye.dirZ(),
-                eye.rightX(), eye.rightY(), bob, submerged ? 0.6 : sway,
-                reach, sleeve);
+                eye.rightX(), eye.rightY(), bob,
+                cycle == Gait.Cycle.SWIM ? 0.6 : sway, reach, sleeve);
 
         if (held != null) {
             double forward = WalkerModel.HAND_FORWARD + reach * 0.42 + 0.10;

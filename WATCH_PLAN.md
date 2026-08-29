@@ -913,6 +913,87 @@ aft, and blades sweeping aft are what push a boat along.
 
 ---
 
+## 7d. …and the swim
+
+> The third of the three ways to get about, and it had the same fault the row
+> did, for the same reason: **there was no swimming.**
+
+A player in the water was drawn as a standing walker, upright, legs striding at
+whatever speed they were making. Crossing a lake was somebody marching along
+the bottom of it with their head in the air; a dive was the same figure
+marching downwards; and the first-person hands were the walking ones on a
+slower clock, so what you saw from inside was a person striding along in front
+of your face while your body swam.
+
+### One angle, and everything else follows
+
+A swimmer is `WalkerModel.swimmer`: **the same figure as the walker, hung from
+its hips and tipped over**. Every joint stays at the proportion of the height
+it occupies when standing — the hips at 0.47, the neck at 0.86, the head at
+0.94 — so `swimPitch` of a right angle draws the standing pose exactly, and
+somebody wading out of their depth *tips* into a swim rather than cutting to a
+different model. Treading water and swimming are not two poses; they are one
+pose at two speeds, interpolated by `swimDrive`.
+
+The hips are the pivot, and that is load-bearing rather than arbitrary. The
+game floats a swimmer with their feet `FLOAT_DEPTH` under the surface, which is
+chest-deep for somebody upright — so a body laid down about its hips puts the
+head at the waterline and everything below the shoulders under it, without the
+model being told where the water is. Turned about the neck instead (which was
+tried first, and is in the history) the same swimmer floats with their whole
+chest in the air, swimming through the sky.
+
+Under water the body lies along the way they are looking, because under water
+that is the way they are travelling — `WatchScene.walk` already steers a
+submerged player by their pitch. At the surface it settles thirty degrees off
+horizontal instead: head and shoulders out, body trailing down behind, which is
+both what a breaststroker looks like and the only arrangement that keeps the
+body in the water given where the eye is.
+
+### Breaststroke, and why
+
+`watch/render/SwimStroke` is one stroke as five curves, written like
+`RowStroke` and meeting at their joins with matching slopes. It is breaststroke
+because this game's swimmer has to **breathe**: a player at the surface is one
+whose head is out and whose air is coming back, and a stroke that buries the
+face and turns it aside once a cycle contradicts the breath meter. It also
+reads at distance — both arms doing the same thing is a wide sweep and a narrow
+glide, where a front crawl at a hundred metres is two pixels flickering.
+
+Arms pull while the legs trail; legs kick while the arms recover; the head
+lifts to breathe on the pull and only when the head is actually out of the
+water. Both halves at once is the commonest way to draw a swimmer wrong and it
+looks like somebody falling downstairs.
+
+### Three things underneath it
+
+* **The cycle is clocked on distance through the water, not ground covered.**
+  A diver going straight down covers no ground at all, and clocked on ground
+  would hang motionless all the way to the bottom. `Gait.Cycle.SWIM` measures
+  in three dimensions; the other two stay on the flat, so a walker downhill is
+  not sprinting.
+* **It never stops.** Every other cycle in the game is still at a standstill,
+  because a walker who stops walking stands there. A swimmer who stops swimming
+  sinks, so `Gait.swimRate` has a floor under it and somebody treading water
+  sculls, gently, about a stroke every three and a half seconds.
+* **Who is swimming is worked out from the ground, not from the wire.** A
+  walker is swimming when their feet are off the bed in water deep enough to be
+  out of their depth — which is the distinction the game already makes, and the
+  only one that is right at both ends: wading in the shallows is walking, and
+  the moment the bed drops away it is not. The client generates the same terrain
+  the host does, so it can see the bed under anybody in the party without a byte
+  being sent about it.
+
+Two smaller things had to be fixed to draw it. `Shapes.strut` now takes the
+direction its cross-section is squared to, because a chest is wider than it is
+deep and a strut left to choose its own reference flips it on the way through
+vertical — which is exactly what a swimmer diving does. And a hat sits *on* a
+head rather than above it in world terms; for everybody standing up those are
+the same sentence, and for a prone swimmer the brim floated off the side of
+their head and followed them across the lake like a small yellow raft.
+
+---
+
 ## 8. Tests
 
 `src/test/java/com/larsons/engine/watch/`
@@ -1025,3 +1106,18 @@ aft, and blades sweeping aft are what push a boat along.
   primitive underneath it all: a strut is a closed box with every face wound
   outward, at three orientations including the degenerate vertical one, and a
   strut of no length is skipped rather than emitted with no normals.
+* `SwimCycleTest` — the same treatment for the swim. That the body lies down as
+  a swimmer sets off and stands back up when they stop, continuously in speed
+  and with no step in it anywhere; that a diver lies along their own course and
+  a surface swimmer never can, because the body has to stay in the water; that
+  floating still **is** the standing figure, within the depth of a boot sole,
+  which is what makes wading out of your depth one movement rather than a cut;
+  that a swimmer at the surface has their head out of the water and their legs
+  under it at every point of a stroke, and one treading water is in it to the
+  chest — both of which follow from `WatchScene.FLOAT_DEPTH`, which the test
+  reads rather than restates; that `swimEye` agrees with where the mesh
+  actually put the head, at every body angle; that the stroke never stops,
+  unlike every other cycle in the game, and that a diver going straight down is
+  clocked as swimming while a walker downhill is not; that the arms and the
+  legs take turns and neither jumps nor changes direction instantly; and that
+  the first-person hands sweep together and stay clear of the near plane.
