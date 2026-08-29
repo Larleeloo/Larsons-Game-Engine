@@ -3472,8 +3472,83 @@ changes its stop while it is up — <kbd>E</kbd> does whatever is in reach,
 <kbd>Tab</kbd> the satchel, <kbd>F</kbd> puts down a feeder, <kbd>R</kbd>
 plants, <kbd>C</kbd> cross-pollinates, <kbd>Y</kbd> boards and leaves a boat,
 <kbd>B</kbd> builds, <kbd>X</kbd> turns the piece, <kbd>V</kbd> casts and
-strikes, <kbd>L</kbd> leaves. All rebindable from **Controls (Key Binds)** in
+strikes, <kbd>M</kbd> draws a map (debug mode only, for now — see below),
+<kbd>L</kbd> leaves. All rebindable from **Controls (Key Binds)** in
 the walk's own lobby, which shows this game's keys rather than the engine's.
+
+### Maps (debug mode only, for now)
+
+Press <kbd>M</kbd> and you have a map of the country you are standing in. It
+goes in your satchel, it opens when you click it, you can write on it with a
+pen, and it shows where everybody is — including the ones who have walked off
+the edge of it. Build a **map board** and several of them join into one larger
+map that the whole party can read.
+
+The whole feature is behind
+[debug mode](#debug-mode-type-7799) while it is being finished; everything
+below already works, and what has not been decided is what a map should cost a
+player who is not in debug mode.
+
+**A map is as wide as you can see.** Its size comes from the render distance of
+the machine that drew it — a card with a long ring draws a map twice the width
+of one drawn on a laptop painting through Java2D — and wherever you were
+standing when you pressed the key, everything inside your view is inside the
+square. The sizes come off a ladder of doublings and the centre snaps to the
+grid that size defines, which is what makes two maps meet edge to edge instead
+of a hand's width apart.
+
+**It arrives finished.** There is no fog to walk off. The ground in this world
+is a pure function of the seed, so the paper is painted from the seed the
+moment the map exists
+([`ChartImage`](src/main/java/com/larsons/engine/watch/render/ChartImage.java)) —
+relief-shaded, with the water darkening by depth and the trails drawn in. The
+icons are collected at that same moment
+([`Survey`](src/main/java/com/larsons/engine/watch/Survey.java)): trading posts,
+camps, feeders, plantings, boats, the places species were first recorded, and
+the high ground read off the heightfield itself. A camp of forty pieces is one
+icon, not forty.
+
+Which means a map **ages**. The post is on it for ever because a post cannot
+move; the feeder you had out that morning stays on it long after it rotted; the
+camp you build next week is not on it at all. That is the difference between a
+map and a minimap, and it is the only reason to ever draw a second map of the
+same place.
+
+**Write on it.** Four tools down the side — a pen in six inks, a note, an
+eraser and a hand — with the wheel to zoom and the right button to move the
+paper. A pen stroke is one line, one thing to rub out and one thing your name is
+on; a note is a few words pinned at a point, which is where the information
+actually goes ("otters, dusk"). Ink is stored in **world metres**, not as a
+fraction of the paper, so a line you drew near one map's edge is in the same
+space as the line on the map next to it.
+
+**It shows everybody, on it or off it.** Every walker gets a pin, turned to
+face the way they are looking. Somebody who has walked off the paper is pinned
+to the border with a smaller arrow pointing after them and how far away they
+are — the Minecraft rule, and the one that makes a map useful to a party rather
+than to a person.
+
+**Rename it in the satchel.** Maps sit at the top of the carrying column, each
+with a thumbnail of itself for an icon. <kbd>Enter</kbd> or a click opens one;
+<kbd>F2</kbd> renames it, with the old name selected so the first character you
+type replaces it.
+
+**A map board joins them up.** Build one (`plank` ×6, `rope` ×2), stand at it
+and press <kbd>E</kbd>. Maps in your satchel are listed to the right; click one
+and it goes up. The board's paper is the union of everything pinned to it, with
+each map drawn where it actually is — so pinning a second map of the next
+valley simply makes the board bigger, with **no join to line up, no orientation
+to choose and no order to get right.** Two maps of the same size drawn a span
+apart meet exactly; a detailed map of one corner nests inside the overview it
+belongs to, because the sizes are doublings. Click a pinned map to take it back
+down, and your annotations come with it.
+
+**Nothing about a map ever travels as a picture.** A map on the wire and in the
+save is a centre, a radius, a name and whatever somebody drew on it
+([`Chart`](src/main/java/com/larsons/engine/watch/Chart.java)); both ends paint
+the identical paper from the seed they already share. That is the same argument
+the trading posts make for not being sent, and it is why two players' copies of
+one map agree pixel for pixel — and why the join on a board is invisible.
 
 ### Debug mode (type `7799`)
 
@@ -3491,6 +3566,10 @@ It grants:
   satchel, so the bottomless-satchel lens below does not reach them.
 - **Unlimited items.** Every recipe, every build piece, every feeder, every
   seed and every tool, in any number, for ever.
+- **[Maps](#maps-debug-mode-only-for-now).** Draw one with <kbd>M</kbd>, mark
+  it with a pen, and pin maps together on a board. The odd one out: it grants
+  *access* rather than abundance, because the feature is finished and its price
+  is not. It is the row that will be deleted rather than becoming free.
 - **A readout** down the left: position, chunk and level of detail, the biome
   and the material underfoot, what the streamer is holding and queueing, what
   the frame drew and culled, what is alive nearby, the spyglass, the guide.

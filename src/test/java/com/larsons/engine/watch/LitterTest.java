@@ -310,7 +310,7 @@ class LitterTest {
 
         var message = com.larsons.engine.watch.net.WatchProto.world(
                 game.grove().toMap(), game.crops().toMap(), game.structure().toMap(),
-                game.boats().toMap(), game.takenLitter());
+                game.maps().toMap(), game.boats().toMap(), game.takenLitter());
 
         WatchView view = new WatchView();
         assertFalse(view.litterTaken(piece.id()),

@@ -66,7 +66,32 @@ public enum BuildPiece {
 
     ROPE_BRIDGE("rope_bridge", "Rope Bridge", 5.0, 1.2, 0.16, WatchMaterial.ROPE, true,
             "Between two platforms. The reason to build a second one.",
-            "rope", 4, "plank", 3);
+            "rope", 4, "plank", 3),
+
+    /**
+     * A board to pin maps to. See {@link com.larsons.engine.watch.Cartography}.
+     *
+     * <p><b>The one piece that is more than its box</b>, and the only reason
+     * the enum needed an eleventh entry rather than the maps hanging off an
+     * existing wall. A map board is a place in the world that <em>holds
+     * something</em>: building one registers a {@code Cartography.Board}
+     * twinned with the placement, and walking up to it opens the combined map
+     * of everything anybody has pinned to it. A wall cannot do that without
+     * every wall in the world being asked whether it is a board.
+     *
+     * <p>Wide, thin and chest-high, because that is the shape of a thing eight
+     * people stand in front of and read. It anchors like the rest, so a board
+     * can go up on a platform in a tree.
+     *
+     * <p>It is {@linkplain com.larsons.engine.watch.Debug.Power#MAPS behind
+     * debug mode} with the rest of the map feature — {@code WatchGame.build}
+     * refuses it to anybody else, and the build screen does not list it — so
+     * the cost below is what it will cost when the gate lifts rather than
+     * something anybody can pay today.
+     */
+    MAP_BOARD("map_board", "Map Board", 3.0, 0.18, 2.0, WatchMaterial.PLANK, true,
+            "Pin maps to it. Neighbouring maps join into one larger map.",
+            "plank", 6, "rope", 2);
 
     private final String key;
     private final String name;
@@ -150,8 +175,37 @@ public enum BuildPiece {
         return true;
     }
 
+    /**
+     * Whether this piece is only offered in debug mode.
+     *
+     * <p>One method rather than a flag in every constructor, because there is
+     * one such piece and a column of {@code false}s down ten rows would be a
+     * column of noise. When a second one appears — or when
+     * {@link com.larsons.engine.watch.Debug.Power#MAPS} stops being a debug
+     * power — this becomes a set, or nothing.
+     */
+    public boolean debugOnly() { return this == MAP_BOARD; }
+
     /** Every piece, in the order the build menu lists them. */
     public static List<BuildPiece> all() { return List.of(values()); }
+
+    /**
+     * The pieces one player may build, which is everything except what debug
+     * mode is still holding back.
+     *
+     * <p>What the build screen lists and what its rows are indexed against. The
+     * screen must not simply grey the board out: a row that is always refused is
+     * a row that teaches a player the build menu lies, and the piece is not
+     * being withheld from <em>them</em> — it is not finished.
+     */
+    public static List<BuildPiece> available(boolean debugging) {
+        if (debugging) return all();
+        List<BuildPiece> out = new java.util.ArrayList<>();
+        for (BuildPiece piece : values()) {
+            if (!piece.debugOnly()) out.add(piece);
+        }
+        return List.copyOf(out);
+    }
 
     /** The piece a saved key means, or {@code null}. */
     public static BuildPiece of(String key) {

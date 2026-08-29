@@ -17,6 +17,7 @@ import java.net.InetSocketAddress;
 import java.net.ServerSocket;
 import java.net.Socket;
 import java.nio.charset.StandardCharsets;
+import java.util.List;
 import java.util.Map;
 import java.util.concurrent.ConcurrentLinkedQueue;
 import java.util.concurrent.CopyOnWriteArrayList;
@@ -256,7 +257,8 @@ public final class WatchServer implements WatchGame.Sink {
 
     private void sendWorld() {
         toAll(WatchProto.world(game.grove().toMap(), game.crops().toMap(),
-                game.structure().toMap(), game.boats().toMap(), game.takenLitter()));
+                game.structure().toMap(), game.maps().toMap(), game.boats().toMap(),
+                game.takenLitter()));
     }
 
     // --- requests -------------------------------------------------------------------
@@ -457,6 +459,69 @@ public final class WatchServer implements WatchGame.Sink {
                     // empty. FieldGuide.load replaces rather than merges it for
                     // exactly this.
                     sendLedger();
+                }
+            }
+
+            // --- maps ------------------------------------------------------
+            //
+            // Every one of these ends in sendWorld(), and none of them ends in
+            // bagChanged(): a map is world state, not a possession, even while
+            // it is in one player's satchel. The world sync is also what makes
+            // the wait bearable — the tick's own sync is five seconds away, and
+            // five seconds is a very long time to watch for a line you just
+            // drew to appear.
+
+            case "chart" -> {
+                var chart = game.drawMap(id, WatchJson.num(message, "r", 0));
+                if (chart != null) {
+                    conn.send(Protocol.encode(WatchProto.info(
+                            "Drew " + chart.name() + " — " + chart.describe())));
+                    sendWorld();
+                }
+            }
+
+            case "rename" -> {
+                if (game.renameMap(id, WatchJson.big(message, "c", 0),
+                        WatchJson.str(message, "n", ""))) {
+                    sendWorld();
+                }
+            }
+
+            case "mark" -> {
+                List<Object> flat = WatchJson.list(message, "p");
+                int points = flat.size() / 2;
+                double[] xs = new double[points];
+                double[] ys = new double[points];
+                for (int i = 0; i < points; i++) {
+                    xs[i] = flat.get(i * 2) instanceof Number a ? a.doubleValue() : 0;
+                    ys[i] = flat.get(i * 2 + 1) instanceof Number b ? b.doubleValue() : 0;
+                }
+                if (game.markMap(id, WatchJson.big(message, "c", 0),
+                        WatchJson.integer(message, "i", 0), xs, ys) != null) {
+                    sendWorld();
+                }
+            }
+
+            case "note" -> {
+                if (game.noteMap(id, WatchJson.big(message, "c", 0),
+                        WatchJson.integer(message, "i", 0),
+                        WatchJson.num(message, "x", 0), WatchJson.num(message, "y", 0),
+                        WatchJson.str(message, "s", "")) != null) {
+                    sendWorld();
+                }
+            }
+
+            case "erase" -> {
+                if (game.eraseMark(id, WatchJson.big(message, "c", 0),
+                        WatchJson.big(message, "s", 0))) {
+                    sendWorld();
+                }
+            }
+
+            case "pin" -> {
+                if (game.pinMap(id, WatchJson.big(message, "c", 0),
+                        WatchJson.big(message, "b", 0))) {
+                    sendWorld();
                 }
             }
 

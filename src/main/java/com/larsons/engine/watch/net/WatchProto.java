@@ -43,8 +43,15 @@ import java.util.Map;
  *   client → server   {"t":"debug","c":"7799"}       (the host's walk only)
  *   client → server   {"t":"buy","s":shopId,"k":"plank"}   {"t":"stamp","s":shopId}
  *
+ *   client → server   {"t":"chart","r":512}           (a map of what I can see)
+ *   client → server   {"t":"rename","c":mapId,"n":"North Wood"}
+ *   client → server   {"t":"mark","c":mapId,"i":1,"p":[x,y,x,y…]}   (a pen stroke)
+ *   client → server   {"t":"note","c":mapId,"i":1,"x":..,"y":..,"s":"otters"}
+ *   client → server   {"t":"erase","c":mapId,"s":markId}
+ *   client → server   {"t":"pin","c":mapId,"b":boardId}   (0 = take it back)
+ *
  *   server → client   {"t":"bag","items":{…}}          (private, after any change)
- *   server → all      {"t":"world","grove":{…},"crops":{…},"built":{…}}
+ *   server → all      {"t":"world","grove":{…},"crops":{…},"built":{…},"maps":{…}}
  *   server → all      {"t":"guide","entries":[…],"pets":[…],"earned":…,"tally":[…]}
  *   both              info / error / ping / pong
  * </pre>
@@ -55,6 +62,14 @@ import java.util.Map;
  * out for itself the way it works out the trails and the boats. The two verbs
  * above carry an <em>intention</em>, and the answer comes back as the two things
  * that genuinely changed: a satchel and a ledger.
+ *
+ * <p><b>And no map is ever a picture.</b> The same argument reaches further for
+ * maps than for anything else here: a map's paper is a square of ground, the
+ * ground is a function of the seed, so a map on the wire is a centre, a radius,
+ * a name and whatever somebody drew on it — see
+ * {@link com.larsons.engine.watch.Chart}. Both ends paint the identical picture
+ * from the seed they already share, which is also why two players' copies of one
+ * map agree pixel for pixel.
  *
  * <p><b>The server is authoritative about everything.</b> A client sends where
  * it thinks it is and what it would like to do; the server decides. That is
@@ -302,6 +317,98 @@ public final class WatchProto {
         return m;
     }
 
+    // --- maps --------------------------------------------------------------------
+    //
+    // Six verbs, and between them they carry no pictures. A map's paper is a
+    // function of the seed, which both ends already have, so what travels is
+    // where a map is and what somebody wrote on it. See
+    // com.larsons.engine.watch.Chart.
+
+    /**
+     * Draw a map here.
+     *
+     * <p><b>The reach is the one number a client is the authority on.</b> A map
+     * spans the render distance of the machine that drew it, and how far that
+     * machine can see is a fact about its graphics card that no host can
+     * discover. So it is sent, and the host clamps it — see
+     * {@code WatchGame.drawMap}, which rounds it up
+     * {@code Chart.RADII} and refuses anybody not in debug mode outright.
+     *
+     * @param reach how far this machine can see, in metres
+     */
+    public static Map<String, Object> chart(double reach) {
+        Map<String, Object> m = msg("chart");
+        m.put("r", round(reach));
+        return m;
+    }
+
+    /** Rename a map. */
+    public static Map<String, Object> renameChart(long chartId, String name) {
+        Map<String, Object> m = msg("rename");
+        m.put("c", chartId);
+        m.put("n", name);
+        return m;
+    }
+
+    /**
+     * One pen stroke, in world metres, as a flat {@code x, y, x, y…} array.
+     *
+     * <p>Flat for {@code Chart.Stroke.toMap}'s reason: a scribble is the only
+     * thing about a map with more than a handful of numbers in it, and a
+     * {@code {"x":…,"y":…}} per point triples what one costs for nothing
+     * anybody reads. The whole stroke goes at once, when the pen comes up,
+     * rather than a point per frame — a stroke is one thing a person did.
+     */
+    public static Map<String, Object> mark(long chartId, int ink, double[] xs,
+                                           double[] ys) {
+        Map<String, Object> m = msg("mark");
+        m.put("c", chartId);
+        m.put("i", ink);
+        int n = Math.min(xs.length, ys.length);
+        List<Object> flat = new ArrayList<>(n * 2);
+        for (int i = 0; i < n; i++) {
+            flat.add(round(xs[i]));
+            flat.add(round(ys[i]));
+        }
+        m.put("p", flat);
+        return m;
+    }
+
+    /** A few words written on a map at a point. */
+    public static Map<String, Object> note(long chartId, int ink, double x, double y,
+                                           String text) {
+        Map<String, Object> m = msg("note");
+        m.put("c", chartId);
+        m.put("i", ink);
+        m.put("x", round(x));
+        m.put("y", round(y));
+        m.put("s", text);
+        return m;
+    }
+
+    /** Rub one mark off a map. Strokes and notes share an id space. */
+    public static Map<String, Object> erase(long chartId, long markId) {
+        Map<String, Object> m = msg("erase");
+        m.put("c", chartId);
+        m.put("s", markId);
+        return m;
+    }
+
+    /**
+     * Pin a map to the board in front of you, or pass {@code 0} to take it back.
+     *
+     * <p>The board's id rides along for the reason a shop's does: to
+     * disambiguate between two boards, not to address one from across the
+     * world. {@code WatchGame.pinMap} checks it against the board the sender is
+     * actually standing at.
+     */
+    public static Map<String, Object> pin(long chartId, long boardId) {
+        Map<String, Object> m = msg("pin");
+        m.put("c", chartId);
+        m.put("b", boardId);
+        return m;
+    }
+
     // --- pushed state ------------------------------------------------------------
 
     public static Map<String, Object> bag(Map<String, Object> items) {
@@ -323,12 +430,18 @@ public final class WatchProto {
     public static Map<String, Object> world(Map<String, Object> grove,
                                             Map<String, Object> crops,
                                             Map<String, Object> built,
+                                            Map<String, Object> maps,
                                             Map<String, Object> boats,
                                             List<Long> taken) {
         Map<String, Object> m = msg("world");
         m.put("grove", grove);
         m.put("crops", crops);
         m.put("built", built);
+        // The maps ride with the buildings rather than on a channel of their
+        // own: they change at the same rate and for the same reason — somebody
+        // did something to the world — and a stroke of a pen is a few hundred
+        // bytes beside a grove.
+        if (maps != null) m.put("maps", maps);
         // Only the boats somebody has moved: every other boat in the world is a
         // function of the seed, which both ends already have.
         if (boats != null) m.put("boats", boats);

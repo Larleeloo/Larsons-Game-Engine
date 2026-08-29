@@ -150,6 +150,34 @@ public final class WatchClient implements AutoCloseable {
     /** Offer the host a code somebody typed. It decides what it means. */
     public void sendDebug(String code) { send(WatchProto.debug(code)); }
 
+    /** Ask for a map of everything this machine can see. */
+    public void sendChart(double reach) { send(WatchProto.chart(reach)); }
+
+    /** Rename a map. */
+    public void sendRenameChart(long chartId, String name) {
+        send(WatchProto.renameChart(chartId, name));
+    }
+
+    /** Lay a pen stroke on a map, in world metres. */
+    public void sendMark(long chartId, int ink, double[] xs, double[] ys) {
+        send(WatchProto.mark(chartId, ink, xs, ys));
+    }
+
+    /** Write a few words on a map. */
+    public void sendNote(long chartId, int ink, double x, double y, String text) {
+        send(WatchProto.note(chartId, ink, x, y, text));
+    }
+
+    /** Rub one mark off a map. */
+    public void sendErase(long chartId, long markId) {
+        send(WatchProto.erase(chartId, markId));
+    }
+
+    /** Pin a map to the board in front of us, or pass {@code 0} to take it back. */
+    public void sendPin(long chartId, long boardId) {
+        send(WatchProto.pin(chartId, boardId));
+    }
+
     // --- receiving ------------------------------------------------------------------
 
     /**
@@ -219,6 +247,7 @@ public final class WatchClient implements AutoCloseable {
                 view.grove().load(WatchJson.map(message, "grove"));
                 view.crops().load(WatchJson.map(message, "crops"));
                 view.structure().load(WatchJson.map(message, "built"));
+                view.maps().load(WatchJson.map(message, "maps"));
                 view.boats().load(WatchJson.map(message, "boats"));
                 view.loadTakenLitter(WatchJson.list(message, "taken"));
             }
