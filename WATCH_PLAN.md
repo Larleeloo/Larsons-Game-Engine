@@ -286,6 +286,10 @@ A placed feeder (`Lure`) has a radius, a strength and a decay; `WatchGame`
 resolves which species within its radius are drawn to it each tick and steers
 them in.
 
+> Foraging the *ground* — as opposed to a bush or a tree — was an invisible roll
+> when this was written and is a thing lying there to be walked to now. See
+> §7b, "Foraging happens to something you can see", and `watch/Litter`.
+
 ### 4.3 The spyglass (`watch/Spyglass`)
 
 A draw tube with three stops — **×4, ×8, ×15** — held up on the right mouse
@@ -607,7 +611,7 @@ animals now leave the area when walked at.
 | Asked for | Where |
 |---|---|
 | A player model, and hands in first person | `watch/render/WalkerModel` — one articulated figure with a gait, drawn for every player; `hands` builds the view model in the camera's basis |
-| Items with models, highlighted when picked up | `watch/render/ItemModel`; `WatchGame.pickTarget` → the ring and prompt in `WatchScene.drawReachHighlight` |
+| Items with models, highlighted when picked up | `watch/render/ItemModel`; `WatchGame.pickTarget` → the glow, ring and prompt in `WatchScene.drawReachHighlight`. Extended in the third round from one model per *kind* to one per *item*, and from a highlight to a highlight with something under it |
 | Weather events | `watch/Weather` — eight conditions, server-owned like the clock, in the snapshot's `sky` field |
 | Scroll through the entire inventory | `WatchScene.drawSatchel` — two scrolling columns with cursors, windows and bars |
 | Walk the sea floor, find underwater animals | `WatchScene.swim` (Space rises, Shift sinks); `WatchPlayer.breath`; `WatchGame.populate` samples a wet ring and a wet species table for a submerged player |
@@ -660,6 +664,141 @@ emptiest place in the game. Both swimming families now span the biomes that have
 water in them, which is all of them. This does not make fish common everywhere:
 `AnimalRegistry.biomesFor` gives each *species* a slice of its family's range, so
 what widened is which fish you find where.
+
+---
+
+## 7b. The third round
+
+> Four asks, from playing it again. They turn out to be one ask: **the things
+> in this game were words rather than objects.**
+
+### An item is a thing now, not a category
+
+`ItemModel` drew **one model per `Forage.Kind`**, tinted from the item's key's
+hash. That was a fair trade while the only place an item appeared was on a
+feeder twenty metres away — and it stopped being fair the moment items started
+lying at your feet, sitting in your hand and appearing as a picture beside their
+own row. Forty berries drawn as the same three spheres in forty shades is a
+placeholder, and the hash made it worse than that: it guarantees only that two
+keys *differ*, which is how a blueberry came out plum-red and a snowberry came
+out maroon.
+
+Every key in `Forage` now has a solid of its own — an acorn in its cap, a cone
+of stepped scales, a beetle with six legs, a bottle with a neck and a stopper, a
+trowel with a blade — still built from `Shapes`' five primitives and still
+inside a **150-triangle budget** per item, which `ItemModelTest` holds them to.
+The colours are a table with the hash as a fallback, so an item added tomorrow
+draws in a sensible colour without anybody coming back here.
+
+Three things had to be fixed underneath it:
+
+* **`Shapes.blob` could not face anywhere.** Every other primitive takes a yaw
+  and the octahedron did not, so a fish that placed its head, tail and eyes
+  along its facing direction and used a blob for the body in between got a body
+  lying across all three: a snout coming out of a flank. There is now a yaw
+  overload, turned to match `box`'s convention.
+* **`Shapes.blade` spreads its base along the direction it is given and puts its
+  tip wherever the lean says** — so a caller passing the same direction for both
+  gets three collinear points and draws *nothing*. Every leaf, spine, reed and
+  wing wants the base across the lean; `ItemModel.spike` expresses the quarter
+  turn once.
+* **A fish is not an octahedron.** A blob's plan view is a rhombus, and a
+  satchel portrait looks down at about twenty-five degrees, so every fish was a
+  kite with a fin on it. The body is boxes now, which is what every other animal
+  in this world is made of.
+
+### Foraging happens to something you can see (`watch/Litter`)
+
+`WatchGame.pick` used to find nothing in front of you, wait out a cooldown, roll
+against `Forage.underfoot` and announce that you had picked up a fallen branch —
+from a patch of grass with nothing on it. There was no branch. There was no
+reason to walk toward anything, and no way to tell a shingle bank with quartz in
+it from one without except by standing on both and pressing <kbd>E</kbd> for a
+minute.
+
+The roll moved from the key press to the world generation. `Litter` is `Flora`'s
+arrangement applied to the floor: each five-metre cell hashes out one candidate,
+and what is lying there is chosen from **the same table foraging always used** —
+the region's materials, the surface actually underfoot, and the biome's seeds.
+Same odds, same catalogue; what changed is that you can see it, walk to it, and
+pick up the particular thing you were looking at. About one thing per hundred
+square metres, which `LitterTest` pins from both ends.
+
+Generated, never stored, for `Flora`'s reasons — so the floor of a world costs
+nothing on the wire and two players a week apart find the same stone. The one
+thing that *cannot* be derived is whether somebody has already picked a piece
+up, so that travels: `WatchGame.takenLitter` rides on the world sync, which is
+where a pulled crop and a moved boat already ride. The scene takes a piece off
+the ground the instant it asks for it rather than a round trip later, and the
+next sync corrects it if the host disagreed.
+
+It is drawn in the **moving** mesh rather than in a chunk's static flora, and
+that is not laziness: a picked-up branch has to be gone this frame, and a chunk
+is re-meshed when its level of detail changes and not when somebody stoops. The
+sweep that finds what is nearby costs a few hundred generator samples, so it is
+redone every four metres of travel rather than every frame, and its radius is 40
+m on a card and 22 m through the painter — the same trade, for the same reason,
+as the six-chunk view radius.
+
+`picked` is also **saved** now. It never was, which was invisible while
+everything it held was a bare bush; coming back to a camp you had cleared to
+find every branch lying there again is the world contradicting itself.
+
+### The highlight glows
+
+A ring was enough while everything you could pick up was a bush or a tree — a
+metre across and hard to miss. A quartz pebble in the shingle is eight
+centimetres and the colour of the shingle, and an outline round it is an outline
+round nothing anybody has spotted yet. Four filled discs of decreasing alpha
+under the ring cost four draws and make the *thing* light up. The ring's
+minimum size came down with it: the floor was 0.25 m, wider than the acorn
+inside it.
+
+### The cooking screen takes a mouse
+
+Two scrolling columns, cursors, windows, bars — and the only things that moved
+any of them were the four arrow keys, in a game whose every other verb is on the
+mouse. Hovering a row now selects it, clicking does what <kbd>Enter</kbd> does,
+the wheel scrolls whichever column the pointer is over (independently of the
+cursor, because reading a list is not walking it), the bars drag, and there is a
+✕. The build screen took the same treatment.
+
+Two details carry the whole feature:
+
+* **Hovering only counts when the pointer has moved.** A mouse resting on the
+  desk otherwise re-selects the row under it every frame, so ↓ moves the cursor
+  for one frame and it springs back.
+* **One layout, computed once.** `WatchScene.SatchelBox` is what draws the rows
+  *and* what hit-tests them. A panel whose hit boxes are worked out separately
+  from its drawing is a panel that selects the row above the one you clicked, on
+  some window sizes and not others.
+
+And the walk discards the pointer travel spent in a panel, because the walk
+steers on the pointer's *motion*: without that, the distance covered choosing a
+recipe is banked and spent all at once on the frame the panel closes.
+
+### And a picture in the satchel (`watch/render/ItemPortrait`)
+
+`AnimalPortrait` for things rather than for creatures, and deliberately the same
+shape of class — same offscreen render, same noon light, same bounded cache —
+because the two answer the same question and a player should not be able to tell
+they are two pieces of code. The model is built once at unit scale, its bounding
+box read off the mesh, and rebuilt at whatever scale frames it, so a coconut and
+a beetle are framed identically without anybody saying how big either is.
+
+Two numbers were measured rather than chosen. The camera sits a third of the way
+up rather than at the eleven degrees that framed an animal nicely: half this
+catalogue is flat — a feather, a plank, a chip of bark — and at eleven degrees
+they are seen edge-on and read as a scratch. And the view yaw is set against the
+camera's bearing: at the angle it started at, every elongated model in the game
+ran within twelve degrees of the line of sight, so a trout was a thumbnail of a
+trout's nose.
+
+The one item that does not fit is the fishing rod: 1.35 m long and 4 cm thick,
+which framed whole in a 22-pixel row is a shaft a third of a pixel across. An
+item taller than four times its width is framed on its width and anchored on its
+foot, so what the row shows is a butt, a cork grip and a tapering shaft. Nothing
+else in the catalogue reaches the cap.
 
 ---
 
@@ -726,6 +865,25 @@ what widened is which fish you find where.
   plays — hold the key and the camera narrows, the streamer is pointed and the
   host is told; let go and all three go back; hold it with an empty satchel and
   nothing happens at all.
+* `ItemModelTest` — every key in `Forage` builds geometry, no two items of one
+  kind are the same model (which is what stops the per-kind placeholder quietly
+  coming back), nothing is over the triangle budget, every model stands on the
+  point it is given and is about the size of a hand, a blueberry is blue and a
+  snowberry is white, an unknown key still draws something, and every item has a
+  picture that is neither blank nor identical to another item's.
+* `LitterTest` — the floor is a function of the seed and nothing else, two
+  different worlds have different floors, everything lying about is a real item,
+  there is enough of it to be worth walking for and not so much that the wood is
+  a jumble sale, nothing floats, ids are stable and distinct and recognisable —
+  and then through the game: what goes in the satchel is the piece you were
+  standing over, it is gone afterwards, pressing <kbd>E</kbd> over bare ground
+  gives nothing, and two people cannot pick up the same branch.
+* `SatchelMouseTest` — the cooking screen through a synthetic `InputManager`:
+  sweeping the pointer down a column walks its rows *in the list's own order*
+  (which is what says the hit boxes are the rows that were drawn), the wheel
+  scrolls the column it is over without moving the cursor and stops at the top,
+  clicking a recipe does what Enter does, the ✕ closes it, the arrow keys still
+  drive both columns, and a resting pointer does not undo them.
 * `DebugModeTest` — the code (it lands, it toggles, a stray keypress in front
   of it is harmless, a half-typed one is forgotten, and random digits do not
   find it), what it grants, and who may have it: a guest on somebody else's

@@ -256,7 +256,7 @@ public final class WatchServer implements WatchGame.Sink {
 
     private void sendWorld() {
         toAll(WatchProto.world(game.grove().toMap(), game.crops().toMap(),
-                game.structure().toMap(), game.boats().toMap()));
+                game.structure().toMap(), game.boats().toMap(), game.takenLitter()));
     }
 
     // --- requests -------------------------------------------------------------------
@@ -298,8 +298,18 @@ public final class WatchServer implements WatchGame.Sink {
             }
 
             case "pick" -> {
+                WatchGame.Pickable target = game.pickTarget(id);
                 String got = game.pick(id);
-                if (got != null) bagChanged(id, "Picked " + nameOf(got));
+                if (got != null) {
+                    bagChanged(id, "Picked " + nameOf(got));
+                    // `pick` falls through to the floor when nothing is growing
+                    // in reach, so a plain pick takes litter too — and every
+                    // client is drawing that piece until it is told otherwise.
+                    if (target == null
+                            || target.kind() == WatchGame.Pickable.Kind.GROUND) {
+                        sendWorld();
+                    }
+                }
             }
 
             case "use" -> {
@@ -314,7 +324,11 @@ public final class WatchServer implements WatchGame.Sink {
                 if (line != null) {
                     bagChanged(id, line);
                     if (target != null && (target.kind() == WatchGame.Pickable.Kind.CROP
-                            || target.kind() == WatchGame.Pickable.Kind.BOAT)) {
+                            || target.kind() == WatchGame.Pickable.Kind.BOAT
+                            // Something taken off the floor has to go out too:
+                            // every client is drawing it, and none of them can
+                            // work out on its own that it is gone.
+                            || target.kind() == WatchGame.Pickable.Kind.GROUND)) {
                         sendWorld();
                     }
                 }

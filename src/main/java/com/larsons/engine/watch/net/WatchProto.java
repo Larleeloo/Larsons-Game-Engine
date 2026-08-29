@@ -279,10 +279,21 @@ public final class WatchProto {
         return m;
     }
 
+    /**
+     * The slow half of the world.
+     *
+     * @param taken the pieces of ground litter somebody has already picked up.
+     *              Like the boats, everything else about the litter is a
+     *              function of the seed and never travels; unlike the boats,
+     *              what has been taken cannot be derived from anything, and a
+     *              client that did not know would keep drawing a branch that is
+     *              no longer there. See {@code WatchGame.takenLitter}.
+     */
     public static Map<String, Object> world(Map<String, Object> grove,
                                             Map<String, Object> crops,
                                             Map<String, Object> built,
-                                            Map<String, Object> boats) {
+                                            Map<String, Object> boats,
+                                            List<Long> taken) {
         Map<String, Object> m = msg("world");
         m.put("grove", grove);
         m.put("crops", crops);
@@ -290,6 +301,7 @@ public final class WatchProto {
         // Only the boats somebody has moved: every other boat in the world is a
         // function of the seed, which both ends already have.
         if (boats != null) m.put("boats", boats);
+        if (taken != null && !taken.isEmpty()) m.put("taken", new ArrayList<Object>(taken));
         return m;
     }
 
