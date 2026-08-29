@@ -4,12 +4,13 @@ package com.larsons.engine.watch.render;
  * The handful of solids everything in this world is built out of, emitted as
  * flat-shaded triangles.
  *
- * <p><b>Five primitives, and no more.</b> A trunk is a tapered prism, a crown
- * is an octahedron or a stack of cones, a boulder is a squashed octahedron, an
- * animal is a pile of boxes, and a blade of grass is a tapered quad. Every one
- * of them is a few triangles with one colour each, which is what keeps a forest
- * inside a polygon budget a software rasteriser can still draw — and what makes
- * the whole world look like it was made by the same hand.
+ * <p><b>A handful of primitives, and no more.</b> A trunk is a tapered prism, a
+ * crown is an octahedron or a stack of cones, a boulder is a squashed
+ * octahedron, an animal is a pile of boxes, a limb or an oar is a box between
+ * two points, and a blade of grass is a tapered quad. Every one of them is a
+ * few triangles with one colour each, which is what keeps a forest inside a
+ * polygon budget a software rasteriser can still draw — and what makes the
+ * whole world look like it was made by the same hand.
  *
  * <p>Each face is shaded here, against the same fixed key direction
  * {@link TerrainMesher} uses, so a tree and the ground it stands on catch the
@@ -182,27 +183,114 @@ public final class Shapes {
                            double hx, double hy, double hz, double yaw,
                            float[] uv, int albedo) {
         double cos = Math.cos(yaw), sin = Math.sin(yaw);
+        // The box's own axes, as half-extent vectors: local +x turned by the
+        // yaw, local +y turned with it, and up left alone. Right-handed, which
+        // is what lets `solid` use one winding table for every box in the game.
+        solid(mesh, cx, cy, cz,
+                cos * hx, sin * hx, 0,
+                -sin * hy, cos * hy, 0,
+                0, 0, hz, uv, albedo);
+    }
+
+    /**
+     * A box between two points — <b>a limb, an oar, a rafter: anything whose
+     * length points somewhere other than straight up.</b>
+     *
+     * <p>{@link #box} turns about the vertical only, which is all a standing
+     * animal needs and is exactly what a swinging one does not have. A leg
+     * built out of yawed boxes cannot rotate about the hip, so the old walk
+     * cycle slid an upright box forward and back along the arc a thigh would
+     * have swept and left the boot to catch up on its own: at any part of the
+     * stride but the middle, the figure read as a stack of parts drifting past
+     * each other rather than as a person walking. This is the primitive that
+     * fixes that, and the one an oar needs for the same reason — an oar spends
+     * its whole stroke at an angle to all three axes.
+     *
+     * <p>The cross-section is squared to the shallowest world axis, so a limb
+     * is not twisted about its own length by the choice of basis: {@code up}
+     * unless the strut is within a few degrees of vertical, in which case
+     * world north, which no limb is ever parallel to for long enough to see the
+     * changeover.
+     *
+     * @param halfWidth half the cross-section across the strut
+     * @param halfThick half the cross-section the other way
+     */
+    public static void strut(Mesh.Builder mesh,
+                             double x0, double y0, double z0,
+                             double x1, double y1, double z1,
+                             double halfWidth, double halfThick,
+                             float[] uv, int albedo) {
+        double dx = x1 - x0, dy = y1 - y0, dz = z1 - z0;
+        double length = Math.sqrt(dx * dx + dy * dy + dz * dz);
+        // A strut of no length is a degenerate solid with no normals: skip it
+        // rather than emitting twelve triangles the shader cannot light.
+        if (length < 1e-7) return;
+        dx /= length;
+        dy /= length;
+        dz /= length;
+
+        // A reference the strut is not parallel to; see the note above.
+        double rx = 0, ry = 0, rz = 1;
+        if (Math.abs(dz) > 0.995) {
+            rx = 0;
+            ry = 1;
+            rz = 0;
+        }
+        // side = along × reference, and up = along × side. In that order the
+        // triple (side, up, along) is right-handed, which is what `solid`'s
+        // winding assumes.
+        double sx = dy * rz - dz * ry;
+        double sy = dz * rx - dx * rz;
+        double sz = dx * ry - dy * rx;
+        double slen = Math.sqrt(sx * sx + sy * sy + sz * sz);
+        if (slen < 1e-9) return;
+        sx /= slen;
+        sy /= slen;
+        sz /= slen;
+        double ux = dy * sz - dz * sy;
+        double uy = dz * sx - dx * sz;
+        double uz = dx * sy - dy * sx;
+
+        double half = length / 2;
+        solid(mesh, (x0 + x1) / 2, (y0 + y1) / 2, (z0 + z1) / 2,
+                sx * halfWidth, sy * halfWidth, sz * halfWidth,
+                ux * halfThick, uy * halfThick, uz * halfThick,
+                dx * half, dy * half, dz * half, uv, albedo);
+    }
+
+    /**
+     * Six quads about a centre, from three half-axis vectors — what both
+     * {@link #box} and {@link #strut} are.
+     *
+     * <p>The three axes must be right-handed ({@code a × b = c} in direction),
+     * or every face comes out wound inward and the whole solid is lit as though
+     * the sun were inside it.
+     */
+    private static void solid(Mesh.Builder mesh, double cx, double cy, double cz,
+                              double ax, double ay, double az,
+                              double bx, double by, double bz,
+                              double dx, double dy, double dz,
+                              float[] uv, int albedo) {
         double[][] corner = new double[8][3];
         int at = 0;
-        for (int sz = -1; sz <= 1; sz += 2) {
-            for (int sy = -1; sy <= 1; sy += 2) {
-                for (int sx = -1; sx <= 1; sx += 2) {
-                    double lx = sx * hx, ly = sy * hy;
-                    corner[at][0] = cx + lx * cos - ly * sin;
-                    corner[at][1] = cy + lx * sin + ly * cos;
-                    corner[at][2] = cz + sz * hz;
+        for (int sc = -1; sc <= 1; sc += 2) {
+            for (int sb = -1; sb <= 1; sb += 2) {
+                for (int sa = -1; sa <= 1; sa += 2) {
+                    corner[at][0] = cx + sa * ax + sb * bx + sc * dx;
+                    corner[at][1] = cy + sa * ay + sb * by + sc * dy;
+                    corner[at][2] = cz + sa * az + sb * bz + sc * dz;
                     at++;
                 }
             }
         }
-        // Indices into the corner table: (sz, sy, sx) in that nesting order.
+        // Indices into the corner table: (c, b, a) in that nesting order.
         // 0:(-,-,-) 1:(-,-,+) 2:(-,+,-) 3:(-,+,+) 4:(+,-,-) 5:(+,-,+) 6:(+,+,-) 7:(+,+,+)
-        quadOf(mesh, corner, 4, 5, 7, 6, uv, albedo); // top
-        quadOf(mesh, corner, 0, 2, 3, 1, uv, albedo); // bottom
-        quadOf(mesh, corner, 0, 1, 5, 4, uv, albedo); // north (−y)
-        quadOf(mesh, corner, 3, 2, 6, 7, uv, albedo); // south (+y)
-        quadOf(mesh, corner, 1, 3, 7, 5, uv, albedo); // east (+x)
-        quadOf(mesh, corner, 2, 0, 4, 6, uv, albedo); // west (−x)
+        quadOf(mesh, corner, 4, 5, 7, 6, uv, albedo); // +c
+        quadOf(mesh, corner, 0, 2, 3, 1, uv, albedo); // −c
+        quadOf(mesh, corner, 0, 1, 5, 4, uv, albedo); // −b
+        quadOf(mesh, corner, 3, 2, 6, 7, uv, albedo); // +b
+        quadOf(mesh, corner, 1, 3, 7, 5, uv, albedo); // +a
+        quadOf(mesh, corner, 2, 0, 4, 6, uv, albedo); // −a
     }
 
     private static void quadOf(Mesh.Builder mesh, double[][] c, int a, int b, int d, int e,

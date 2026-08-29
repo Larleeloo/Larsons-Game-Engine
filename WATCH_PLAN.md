@@ -802,6 +802,117 @@ else in the catalogue reaches the cap.
 
 ---
 
+## 7c. The fourth round — the walk and the row
+
+> One ask: *the walking and rowing look choppy and a bit glitchy.* It turned
+> out to be five separate faults that happened to land on the same two verbs,
+> and only one of them was in an animation.
+
+### The clock was the frame counter
+
+Everything that animated on its own was phased off `frame`, the count of frames
+*drawn*: a boat bobbed at `frame * 0.006`, another player's legs ran at
+`frame * 0.02`, a feeder turned at `frame * 0.004`. A cycle counted in frames
+runs at half speed on a sixty-hertz screen and at double on a
+hundred-and-forty-four, changes rate whenever the view gets cheaper or dearer,
+and hitches with every dropped frame — which is exactly the "choppy" that
+cannot be pointed at, because each animation is perfectly smooth and it is the
+clock beneath them that is not.
+
+There is now one clock, `WatchScene.animClock`, in seconds, advanced by the
+fixed simulation step and read at draw time with the frame's own `alpha` added
+back (see `FrameCadence`, which exists to make that fraction available). Every
+self-running cycle is a rate against it.
+
+### Everybody else moved in fifty-millisecond hops
+
+Positions arrive at `WatchProto.TICK_RATE`, twenty a second. Drawn straight
+from the last one, another player advances in forty-centimetre jumps five times
+a second, for ever. `watch/render/Gait` eases a drawn position toward the last
+one that arrived — smoothing rather than extrapolating, because the lag it
+costs (a third of a metre, less than the snapshot's own age) is invisible and
+the correction that guessing costs is not. A walker further than six metres
+from where they were has teleported and is placed rather than skated.
+
+**And your own body was on the same twenty-hertz path.** In third person the
+walker drawn for you came from the view — that is, from the last position sent
+to the host — while the camera following it moved every step, so the two
+disagreed five times a second for as long as you walked. Your own row is now
+taken from the live position, which is where the boat under you was already
+being taken from.
+
+### The gait was a wheel driven by a step function
+
+The phase advanced at `speed * 0.55` cycles a metre and the swing was scaled by
+the raw speed measured over one step. That figure goes from nothing to full
+walking pace in a single step when a key goes down, and drops to zero for one
+step whenever a move is refused — rowing into a bank does it every step — so
+the limbs snapped between standing still and full swing several times a second.
+The speed the animation reads is now eased over about a tenth of a second, and
+the cadence comes from `Gait.cadence`, which lengthens the stride as the speed
+rises the way a person does: a sprint is no longer a walk cycle played at four
+times the rate.
+
+### The legs never turned
+
+`WalkerModel`'s limbs were upright boxes *slid* along the arc a thigh sweeps,
+never rotated, so at any part of the stride but the middle a leg was a rectangle
+floating beside a boot with a hip somewhere above neither. `Shapes.strut` — a
+box between two arbitrary points, the sixth primitive — is what was missing;
+legs and arms are now a thigh and a shin, an upper arm and a forearm, pivoting
+about a hip and a shoulder with a knee that folds through the swing.
+
+The hips are no longer given a height, either: the legs are posed first, the
+lower boot is put on the ground, and the body is hung from that. A leg at an
+angle does not reach as far down as one hanging straight, so a figure swung
+about a fixed hip sinks into the ground at mid-stride and floats at the ends of
+it — and solving it the other way round produces the rise and fall of a real
+walk for nothing, in step with the stride by construction, fading to zero as the
+walker slows because the swing it comes from does.
+
+### Nobody was rowing
+
+The largest fault, and not an animation at all: **there was no rowing.** A
+player in a boat was drawn as a standing figure whose legs were driven by the
+boat's speed, and `Boats.ROW_SPEED` is faster than a sprint — so what third
+person showed was somebody sprinting on the spot inside a hull, at five paces a
+second, with the oars stowed tidily along the rail beside them. In first person
+the same speed drove the head bob and the hand sway, which shook the camera.
+
+Now:
+
+* `watch/render/RowStroke` is one description of a stroke — where the hands
+  are, how far the blade is out of the water, how hard the boat is being driven
+  — as three curves that meet with matching slopes, so nothing ticks once a
+  stroke at the joins.
+* `BoatModel` swings the oars about their locks from it, blades buried through
+  the drive and lifted clear through the recovery, and noses the hull down on
+  the drive. A boat nobody is in keeps its oars shipped, which is still how you
+  tell one is free.
+* `WalkerModel.rower` sits the figure on the thwart with its legs on the
+  floorboards and solves its arms onto the handles — `BoatModel.handle` is the
+  single source of where those are, so the grip cannot drift off the oar.
+* In first person both hands work **together**, out on the drive and back on
+  the recovery, on the same clock as the oars swinging in the water in front of
+  you — rather than swinging against each other at a walk driven by nine and a
+  half metres a second.
+
+They were built on the real handles first, in world space, and that had to be
+undone: `EyeCamera.NEAR` is eight tenths of a metre and the handles a seated
+rower actually holds are about that far from the eye, so the elbows landed
+*inside* the near plane and the painter path sliced the arms in half. What
+carries a stroke from inside it is the rhythm rather than the millimetres, so
+the view model keeps the camera's basis — the same reason `HAND_FORWARD` is
+derived from the near plane rather than chosen.
+
+Because the rower faces the way the boat is going — this game moves you where
+you look, everywhere — the stroke is a push rather than a pull. That is a real
+technique, and it is the only version that agrees with the direction of travel:
+the handles are inboard of the locks, so hands going forward swing the blades
+aft, and blades sweeping aft are what push a boat along.
+
+---
+
 ## 8. Tests
 
 `src/test/java/com/larsons/engine/watch/`
@@ -895,3 +1006,22 @@ else in the catalogue reaches the cap.
   screen on both the solo and the wire paths, that it survives a save, and that
   typing the code into a running `WatchScene` turns it on, draws the readout,
   and turns it off again.
+* `WalkCycleTest` — that "choppy" is a set of numbers with properties, and each
+  of them holds. A second of walking sampled at twelve frames and at four
+  hundred leaves the cycle in the same place (which is what says the clock is
+  seconds and not frames); a walker fed twenty-hertz positions is drawn moving
+  every frame in steps under a fraction of the ones that arrive, never
+  backwards, and their legs settle on the speed they are seen to move at; a
+  teleport is placed rather than skated to and a heading turns the short way
+  round; every curve in a stroke is continuous *and* so is its slope, across
+  the joins and across the wrap; the blade is in the water for exactly the
+  drive; the lower boot is on the ground at all sixty-four points of the
+  stride, a standing walker is identical at every phase, and the body's rise
+  and fall is real but under twenty centimetres; the rower's fists are within
+  nine centimetres of the handles at every point of the stroke — checked
+  against the mesh's own vertices, because the hands and the oars are drawn by
+  two different classes and the only interesting question is whether the
+  triangles agree — and the rower rides the hull's swell exactly. Then the
+  primitive underneath it all: a strut is a closed box with every face wound
+  outward, at three orientations including the degenerate vertical one, and a
+  strut of no length is skipped rather than emitted with no normals.
