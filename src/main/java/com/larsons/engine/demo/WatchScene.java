@@ -32,9 +32,11 @@ import com.larsons.engine.watch.life.AnimalModels;
 import com.larsons.engine.watch.net.WatchSession;
 import com.larsons.engine.watch.render.BoatModel;
 import com.larsons.engine.watch.render.FloraMesher;
+import com.larsons.engine.watch.render.Gait;
 import com.larsons.engine.watch.render.ItemModel;
 import com.larsons.engine.watch.render.ItemPortrait;
 import com.larsons.engine.watch.render.Mesh;
+import com.larsons.engine.watch.render.RowStroke;
 import com.larsons.engine.watch.render.Shapes;
 import com.larsons.engine.watch.render.WalkerModel;
 import com.larsons.engine.watch.render.WatchRenderer;
@@ -50,6 +52,7 @@ import com.larsons.engine.watch.world.WatchMaterials;
 import java.awt.Color;
 import java.awt.Font;
 import java.util.ArrayList;
+import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 
@@ -281,8 +284,79 @@ public class WatchScene extends AbstractScene {
     /** The gait clock, in turns — what drives the walk cycle and the head bob. */
     private double gait;
 
+    /**
+     * The rowing clock, in turns — one turn is one stroke of the oars.
+     *
+     * <p>Its own clock rather than the gait's, because it is its own cycle: a
+     * stroke covers five or six metres and a stride covers two, so driving both
+     * off one phase makes whichever is not being used run at the wrong rate.
+     */
+    private double stroke;
+
+    /**
+     * A clock in seconds that only ever goes forward — what everything that
+     * animates on its own is timed against.
+     *
+     * <p><b>Not the frame count, which is what these used to be.</b> A boat
+     * bobbing at {@code frame * 0.006} bobs half as fast on a sixty-hertz
+     * screen as on a hundred-and-twenty, speeds up when the view is cheap,
+     * slows down when a storm rolls in, and stutters with every hitch — which
+     * is precisely the "choppy" nobody can point at, because the animation
+     * itself is smooth and it is the clock underneath that is not. Advanced by
+     * the fixed simulation step, so it is the same on every machine.
+     */
+    private double animClock;
+
+    /** How long the last simulation step was, so the draw can put back {@code alpha}. */
+    private double lastStep = 1 / 120.0;
+
+    /** {@link #animClock} as of this frame's draw, including {@code alpha}. */
+    private double drawClock;
+
+    /** How long ago the last frame was drawn, in seconds; {@code -1} before the first. */
+    private double drawnAt = -1;
+
+    /**
+     * Seconds between this draw and the last one.
+     *
+     * <p>The smoothing of everybody else's position runs on this rather than on
+     * the simulation step, because it is a property of the picture rather than
+     * of the world: a walker has to be eased between snapshots once per frame
+     * drawn, however many or few of them a machine manages.
+     */
+    private double frameSeconds;
+
     /** How fast the local player moved on the last frame, in metres per second. */
     private double lastSpeed;
+
+    /**
+     * …and that speed with the frame-to-frame jitter taken out, which is what
+     * the animation is driven from.
+     *
+     * <p>The raw figure is a position difference over a step, so it goes from
+     * nothing to full walking pace in one step when a key goes down, drops to
+     * zero for a single step whenever a move is refused (rowing into a bank
+     * does exactly that), and jumps about while the ground under a walker
+     * changes. Driven straight, the limbs snap between standing still and full
+     * swing several times a second. Eased over about a tenth of a second, they
+     * set off and settle.
+     */
+    private double animSpeed;
+
+    /** How fast {@link #animSpeed} settles onto the real speed, per second. */
+    private static final double SPEED_SETTLE = 9;
+
+    /** Where the other walkers are being drawn, between two snapshots. */
+    private final Gait gaits = new Gait();
+
+    /** …and the answer for everybody this frame, self included. See {@link #posePlayers}. */
+    private final Map<Integer, Gait.Step> posed = new LinkedHashMap<>();
+
+    /** How fast a hull bobs on the swell, in cycles a second. */
+    private static final double BOAT_BOB = 0.36;
+
+    /** How fast a full feeder turns what is on it, in radians a second. */
+    private static final double LURE_SPIN = 0.24;
 
     /** How far through a reach-out gesture the hands are, {@code 0}–{@code 1}. */
     private double reach;
@@ -351,6 +425,14 @@ public class WatchScene extends AbstractScene {
         panel = Panel.NONE;
         prompt = "";
         frame = 0;
+        // Every clock the animation runs on, back to a standstill: a walk
+        // re-entered is a walk begun, and a gait left halfway through a stride
+        // by the last one would open on a figure mid-step.
+        gait = 0;
+        stroke = 0;
+        animSpeed = 0;
+        lastSpeed = 0;
+        drawnAt = -1;
         if (session == null) return;
 
         // Solo: join our own game. Joining is what resumes a save — a walker a
@@ -448,6 +530,13 @@ public class WatchScene extends AbstractScene {
             return;
         }
 
+        // Before the panel branch, and before the early return under it: the
+        // world does not stop bobbing because somebody opened their satchel,
+        // and a clock that stopped with the panel would jump the moment it
+        // closed.
+        animClock += dt;
+        lastStep = dt;
+
         // Before the panel branch, so the code can be typed anywhere in the
         // walk — including on the satchel screen, which is exactly where
         // somebody testing a recipe is standing when they want it.
@@ -464,6 +553,7 @@ public class WatchScene extends AbstractScene {
             // telescope, and coming back to a screen still zoomed to ×15 with
             // no memory of having raised it is disorienting.
             glass.tick(dt, false, 1);
+            driveGait(dt, 0, boatId != 0);
             applySway();
             announceGlass();
             aimGlass();
@@ -853,9 +943,7 @@ public class WatchScene extends AbstractScene {
             py = startY;
         }
 
-        lastSpeed = Math.hypot(px - startX, py - startY) / Math.max(1e-6, dt);
-        gait += lastSpeed * dt * 0.55;
-        gait -= Math.floor(gait);
+        driveGait(dt, Math.hypot(px - startX, py - startY) / Math.max(1e-6, dt), rowing);
 
         if (rowing) {
             // Sitting in the boat: the body rides on the waterline whatever the
@@ -882,6 +970,27 @@ public class WatchScene extends AbstractScene {
         // tracked it exactly would jolt with every one of them.
         smoothedGround += (ground - smoothedGround) * Math.min(1, dt * STEP_SMOOTHING);
         pz = smoothedGround;
+    }
+
+    /**
+     * Advance the local player's animation clocks by one step.
+     *
+     * <p>Two clocks, and only the one being used advances: a walker's legs must
+     * not be halfway through a stride when they step out of a boat, and a
+     * stroke must not have run on while its rower was ashore.
+     *
+     * <p>Called from the panel branch as well, at a speed of nothing, so that
+     * opening the satchel at a run winds the gait down over its usual tenth of
+     * a second rather than freezing it mid-stride until the panel closes.
+     */
+    private void driveGait(double dt, double speed, boolean rowing) {
+        lastSpeed = speed;
+        animSpeed += (speed - animSpeed) * Math.min(1, dt * SPEED_SETTLE);
+        if (rowing) {
+            stroke = RowStroke.wrap(stroke + Gait.strokeRate(animSpeed) * dt);
+        } else {
+            gait = RowStroke.wrap(gait + Gait.cadence(animSpeed) * dt);
+        }
     }
 
     /**
@@ -1676,6 +1785,16 @@ public class WatchScene extends AbstractScene {
             return;
         }
         frame++;
+        // Where the animation clock has got to at the moment of drawing, which
+        // is a fraction of a step past the last one the simulation ran. That
+        // fraction is exactly what `alpha` is for: without it a frame drawn
+        // between two steps shows the clock the earlier one left behind, and a
+        // display running faster than the simulation draws the same instant
+        // twice and then skips one. See FrameCadence.
+        double now = animClock + alpha * lastStep;
+        frameSeconds = drawnAt < 0 ? 0 : Math.max(0, now - drawnAt);
+        drawnAt = now;
+        drawClock = now;
         placeCamera();
 
         WatchBiome biome = streamer.biomeAt(px, py);
@@ -1811,9 +1930,16 @@ public class WatchScene extends AbstractScene {
         // A head bob, at a fifth of the amplitude a shooter would use. Enough
         // that walking feels like walking; little enough that nobody watching a
         // bird through it notices.
-        if (!thirdPerson) {
+        //
+        // Twice a stride, because both feet land in one — and driven by the
+        // eased speed, so it fades in and out over a tenth of a second instead
+        // of switching on and off with the movement key. Not in a boat: an
+        // oarsman's head does not bounce, and at nine and a half metres a
+        // second this term used to shake the camera hard enough to be the first
+        // thing anybody said about rowing.
+        if (!thirdPerson && boatId == 0) {
             eyeHeight += Math.sin(gait * Math.PI * 4) * 0.028
-                    * Math.min(1, lastSpeed / WatchPlayer.WALK_SPEED);
+                    * Math.min(1, animSpeed / WatchPlayer.WALK_SPEED);
         }
         if (thirdPerson && !glass.up()) {
             // Behind and a little above, and pulled up out of the ground if the
@@ -1861,12 +1987,18 @@ public class WatchScene extends AbstractScene {
                     creature.state(), creature.phase(), 1, model.poses());
         }
 
+        // Where everybody is this frame, worked out before anything is drawn:
+        // a rower and the boat under them are drawn in two different passes and
+        // have to be given the same answer, and the easing that produces it may
+        // only be advanced once a frame.
+        posePlayers(view);
+
         // Every walker, including this one: in third person you are looking at
         // yourself, and in first person your own body is still what casts the
         // shadow, sits in the boat, and shows above the water.
         for (WatchView.Walker walker : view.walkers()) {
             if (walker.id() == view.selfId() && !thirdPerson) continue;
-            drawWalker(mesh, walker, ox, oy);
+            drawWalker(mesh, walker, posed.get(walker.id()), ox, oy);
         }
         if (thirdPerson && view.self() == null) {
             // Before the first snapshot there is no walker record for us, and
@@ -1886,15 +2018,20 @@ public class WatchScene extends AbstractScene {
         double boatReach = streamer.viewRadius() * WatchChunk.SIZE;
         for (Boats.Boat boat
                 : view.boats().near(streamer.field(), px, py, boatReach)) {
-            WatchView.Walker rower = rowerOf(view, boat.id());
+            Gait.Step rower = rowerOf(view, boat.id());
             double bx = boat.x(), by = boat.y(), byaw = boat.yaw();
+            // A boat with nobody in it keeps its oars shipped along the rail;
+            // one being rowed swings them, at whatever point of the stroke its
+            // rower has reached. Same stroke, same clock, one description.
+            double swing = BoatModel.SHIPPED;
             if (rower != null) {
                 bx = rower.x();
                 by = rower.y();
                 byaw = rower.yaw();
+                swing = rower.phase();
             }
             BoatModel.boat(mesh, bx - ox, by - oy, boat.z(), byaw,
-                    (frame * 0.006 + boat.id() * 0.13) % 1);
+                    bobOf(boat.id()), swing);
         }
         // …and our own, which is in the party list but may not have reached the
         // view yet, and whose position we know better than the last snapshot.
@@ -1902,7 +2039,7 @@ public class WatchScene extends AbstractScene {
             Boats.Boat mine = view.boats().byId(streamer.field(), boatId);
             if (mine != null) {
                 BoatModel.boat(mesh, px - ox, py - oy, mine.z(), yaw,
-                        (frame * 0.006 + boatId * 0.13) % 1);
+                        bobOf(boatId), stroke);
             }
         }
 
@@ -1921,7 +2058,7 @@ public class WatchScene extends AbstractScene {
                 // contents somebody else needs to be able to read from twenty
                 // metres away, because it decides what turns up at it.
                 ItemModel.item(mesh, lure.food(), lure.x() - ox, lure.y() - oy,
-                        lure.z() + 1.20, 1.1, frame * 0.004);
+                        lure.z() + 1.20, 1.1, drawClock * LURE_SPIN);
             }
         }
 
@@ -1975,30 +2112,72 @@ public class WatchScene extends AbstractScene {
     }
 
     /**
-     * One player, as a walking figure.
+     * Work out where every walker is to be drawn this frame, and how far
+     * through their cycle.
      *
-     * <p>Was three boxes and a hat brim; is now {@link WalkerModel}, which has
-     * legs that swing and arms that swing against them. The gait phase is
-     * derived from the position rather than sent: a walker's own hash gives
-     * each person a different footfall, and the clock runs at the frame rate so
-     * nobody's legs step at twenty hertz because that is the snapshot rate.
+     * <p><b>Once a frame, before anything is drawn, for everybody — including
+     * the walker holding the mouse.</b> Two passes need the answer (the party,
+     * and the boats a rower may be sitting in), the easing behind it may only
+     * be advanced once per frame, and a rower drawn from one answer in a boat
+     * drawn from another is a person sliding about on their own thwart.
+     *
+     * <p>This player is not eased and is not taken from the view at all. Their
+     * own position is simulated here, every step, and the row in the view is
+     * whatever was last sent to the host — which is twenty times a second. Read
+     * from there, your own body in third person stepped along at the send rate
+     * while the camera following it moved smoothly, so the two disagreed five
+     * times a second for as long as you walked.
      */
-    private void drawWalker(Mesh.Builder mesh, WatchView.Walker walker,
+    private void posePlayers(WatchView view) {
+        posed.clear();
+        for (WatchView.Walker walker : view.walkers()) {
+            if (walker.id() == view.selfId()) {
+                posed.put(walker.id(), new Gait.Step(px, py, pz, yaw, animSpeed,
+                        walker.inBoat() ? stroke : gait));
+            } else {
+                posed.put(walker.id(), gaits.follow(walker.id(), walker.x(), walker.y(),
+                        walker.z(), walker.yaw(), walker.inBoat(), frameSeconds));
+            }
+        }
+    }
+
+    /**
+     * One player, as a walking figure — or, in a boat, as a seated one working
+     * a pair of oars.
+     *
+     * <p>Was three boxes and a hat brim; is now {@link WalkerModel}, whose
+     * limbs pivot about a hip and a shoulder. The phase and the speed come from
+     * {@link Gait} rather than from the wire: nobody's cadence is sent, it is
+     * derived from how fast they are actually seen to be moving, so their legs
+     * are in step with their body by construction and nobody's stride runs at
+     * the frame rate or at the snapshot rate.
+     */
+    private void drawWalker(Mesh.Builder mesh, WatchView.Walker walker, Gait.Step step,
                             double ox, double oy) {
-        double x = walker.x() - ox, y = walker.y() - oy;
-        boolean me = walker.id() == view().selfId();
-        double speed = me ? lastSpeed : 1 - walker.stillness();
-        double phase = me ? gait : (frame * 0.02 + walker.id() * 0.37) % 1;
-        // <b>Nothing is subtracted for swimming.</b> A walker's z is where their
-        // feet are, and a diver's feet are already below the waterline — the
-        // dive is in that number, not on top of it. Passing the dive depth here
-        // as well drew a diver a second dive-depth down, through the lake bed,
-        // and buried a remote one a metre and a half into it. The one genuine
-        // offset is the boat, which lifts a rower onto the thwart.
-        double sunk = walker.inBoat() ? -Boats.DECK * 0.4 : 0;
-        WalkerModel.walker(mesh, x, y, walker.z(), walker.yaw(), walker.crouching(),
-                phase, speed * WatchPlayer.WALK_SPEED,
-                WalkerModel.coatFor(walker.id()), sunk);
+        if (step == null) return;
+        double x = step.x() - ox, y = step.y() - oy;
+        int coat = WalkerModel.coatFor(walker.id());
+
+        // Where the eye of the figure just drawn is, so a raised glass can be
+        // put at it. A rower's is over the thwart they are sitting on, which is
+        // aft of the boat's own centre and lower than a standing head.
+        double eyeAlong = 0.18, eyeZ;
+        if (walker.inBoat()) {
+            // The hull's own waterline, recovered from the rower rather than
+            // looked up: a player in a boat stands on its deck, which is
+            // exactly Boats.DECK below the water they are floating on. That
+            // keeps the rower on the same swell as the boat without either of
+            // them having to find the other.
+            double waterZ = step.z() + Boats.DECK;
+            double bob = bobOf(walker.boatId());
+            WalkerModel.rower(mesh, x, y, waterZ, step.yaw(), bob, step.phase(), coat);
+            eyeAlong += BoatModel.SEAT_ALONG;
+            eyeZ = BoatModel.thwartZ(waterZ, bob) + WalkerModel.ROWER_EYE;
+        } else {
+            WalkerModel.walker(mesh, x, y, step.z(), step.yaw(), walker.crouching(),
+                    step.phase(), step.speed(), coat);
+            eyeZ = step.z() + (walker.crouching() ? 1.10 : 1.68);
+        }
 
         // Somebody with a glass up, seen from outside: a tube at their eye,
         // pointing where they are pointing. This is the only way in the game to
@@ -2006,39 +2185,35 @@ public class WatchScene extends AbstractScene {
         // something and which way to look — the party's own gesture, before
         // anybody clicks anything.
         if (walker.glassing()) {
-            double head = (walker.crouching() ? 1.10 : 1.68) + sunk;
-            double lean = 0.18;
             ItemModel.item(mesh, Spyglass.ITEM,
-                    x + Math.sin(walker.yaw()) * lean,
-                    y - Math.cos(walker.yaw()) * lean,
-                    walker.z() + head, 1.0, walker.yaw());
+                    x + Math.sin(step.yaw()) * eyeAlong,
+                    y - Math.cos(step.yaw()) * eyeAlong,
+                    eyeZ, 1.0, step.yaw());
         }
     }
 
-    /** Whoever is rowing a boat, or {@code null} if it is moored. */
-    private WatchView.Walker rowerOf(WatchView view, long boat) {
+    /** Where whoever is rowing a boat is being drawn, or {@code null} if it is moored. */
+    private Gait.Step rowerOf(WatchView view, long boat) {
         for (WatchView.Walker walker : view.walkers()) {
-            if (walker.boatId() == boat) {
-                // Our own position is a frame old in the view and current here;
-                // prefer the live one, which is what stops the boat we are
-                // rowing lagging a snapshot behind us.
-                if (walker.id() == view.selfId()) {
-                    return new WatchView.Walker(walker.id(), walker.name(), px, py, pz,
-                            yaw, pitch, walker.stillness(), walker.crouching(),
-                            walker.submerged(), walker.breath(), walker.boatId(),
-                            walker.glass(), walker.debug());
-                }
-                return walker;
-            }
+            if (walker.boatId() == boat) return posed.get(walker.id());
         }
         return null;
     }
 
+    /** How far through its bobbing cycle a hull is, in turns. */
+    private double bobOf(long boat) {
+        return RowStroke.wrap(drawClock * BOAT_BOB + boat * 0.13);
+    }
+
     /** This player, before the first snapshot has told us where we are. */
     private void drawSelf(Mesh.Builder mesh, double ox, double oy) {
+        if (boatId != 0) {
+            WalkerModel.rower(mesh, px - ox, py - oy, pz + Boats.DECK, yaw,
+                    bobOf(boatId), stroke, WalkerModel.coatFor(session.selfId()));
+            return;
+        }
         WalkerModel.walker(mesh, px - ox, py - oy, pz, yaw, crouching, gait,
-                lastSpeed, WalkerModel.coatFor(session.selfId()),
-                boatId != 0 ? -Boats.DECK * 0.4 : 0);
+                animSpeed, WalkerModel.coatFor(session.selfId()));
     }
 
     /**
@@ -2052,17 +2227,28 @@ public class WatchScene extends AbstractScene {
      */
     private Mesh buildViewMesh() {
         Mesh.Builder mesh = Mesh.builder(eye.x(), eye.y(), eye.z(), false, frame);
-        double sway = Math.min(1, lastSpeed / WatchPlayer.WALK_SPEED);
-        // Underwater the hands sweep rather than swing, which is a slower clock
-        // and a wider one; on land they follow the gait.
-        double bob = submerged ? (gait * 0.6) % 1 : gait;
-        WalkerModel.hands(mesh, 0, 0, 0, eye.dirX(), eye.dirY(), eye.dirZ(),
-                eye.rightX(), eye.rightY(), bob, submerged ? 0.6 : sway,
-                reach, WalkerModel.coatFor(session.selfId()));
-
+        int sleeve = WalkerModel.coatFor(session.selfId());
         // What is being carried, in the right hand, when there is something
         // worth showing: a rod that is out, or the last thing picked up.
         String held = heldItem();
+        if (boatId != 0 && held == null) {
+            // Rowing, with both hands free: they work together on the stroke's
+            // own clock — the one the oars in the water in front of you are
+            // swinging on — rather than swinging against each other at a walk
+            // driven by nine and a half metres a second, which is what a boat
+            // used to look like from inside it.
+            WalkerModel.rowingHands(mesh, 0, 0, 0, eye.dirX(), eye.dirY(), eye.dirZ(),
+                    eye.rightX(), eye.rightY(), stroke, sleeve);
+            return mesh.build();
+        }
+        double sway = Math.min(1, animSpeed / WatchPlayer.WALK_SPEED);
+        // Underwater the hands sweep rather than swing, which is a slower clock
+        // and a wider one; on land they follow the gait.
+        double bob = submerged ? RowStroke.wrap(gait * 0.6) : gait;
+        WalkerModel.hands(mesh, 0, 0, 0, eye.dirX(), eye.dirY(), eye.dirZ(),
+                eye.rightX(), eye.rightY(), bob, submerged ? 0.6 : sway,
+                reach, sleeve);
+
         if (held != null) {
             double forward = WalkerModel.HAND_FORWARD + reach * 0.42 + 0.10;
             double out = WalkerModel.HAND_SIDE;
