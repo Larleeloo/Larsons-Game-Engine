@@ -87,6 +87,7 @@ public final class WatchView {
     private final Structure structure = new Structure();
     private Weather weather = new Weather(0);
     private Boats boats = new Boats(0);
+    private Shops shops = new Shops(0);
 
     /** How many lines of party chatter are kept. */
     private static final int LOG_LIMIT = 40;
@@ -106,11 +107,16 @@ public final class WatchView {
      * it is looking at can work out where they all are without being sent one —
      * which is the whole reason they are generated rather than placed. Only the
      * handful somebody has rowed elsewhere arrive over the wire.
+     *
+     * <p>The trading posts are the same, and more completely so: not one byte
+     * about a shop ever travels, because nothing about one can be changed. See
+     * {@link Shops}.
      */
     public void setSeed(long seed) {
         if (this.seed != seed) {
             this.boats = new Boats(seed);
             this.weather = new Weather(seed);
+            this.shops = new Shops(seed);
         }
         this.seed = seed;
     }
@@ -120,6 +126,9 @@ public final class WatchView {
 
     /** Where the boats are. */
     public Boats boats() { return boats; }
+
+    /** Where the trading posts are, who keeps them, and what they sell. */
+    public Shops shops() { return shops; }
 
     public String worldName() { return worldName; }
 
@@ -237,6 +246,7 @@ public final class WatchView {
         spotlights.addAll(game.spotlights());
         weather = game.weather();
         boats = game.boats();
+        shops = game.shops();
 
         WatchPlayer me = game.player(selfId);
         if (me != null) {

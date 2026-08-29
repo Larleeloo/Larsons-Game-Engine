@@ -376,17 +376,18 @@ controls screen is for the game's verbs, and putting ten digits on it would put
 the answer on it too) or a menu item (which invites a first-time player to press
 it and skip the game).
 
-`Debug.Power` is the whole of what it grants, and it is two rows rather than
-twelve:
+`Debug.Power` is the whole of what it grants, and it is a short list rather than
+twelve rows:
 
 | | |
 |---|---|
 | **Unlimited items** | Every recipe, every build piece, every feeder, every seed, every tool. |
-| **Readout** | Position, chunk and LOD, biome and material underfoot, streaming, triangles, what is alive, the glass, the guide. |
+| **Unlimited points** | Anything on any keeper's shelf, at any price. *(Added in §7f — see below for why it had to be.)* |
+| **Readout** | Position, chunk and LOD, biome and material underfoot, streaming, triangles, what is alive, the glass, the guide, the nearest trading post. |
 
-**Two rows because the first one is structural.** Debug mode does not hand out
-a list of items — it makes the player's satchel `bottomless`, and *every* cost
-in this game is a `has` and a `take`
+**A short list because the first row is structural.** Debug mode does not hand
+out a list of items — it makes the player's satchel `bottomless`, and *almost
+every* cost in this game is a `has` and a `take`
 against a `Satchel`. One lens over one class covers crafting, building,
 feeders, planting, fishing and the spyglass, and it covers whatever is added
 next **without being edited**: an item added to `Forage` is already unlimited, a
@@ -409,6 +410,14 @@ Three properties worth keeping:
 The extension point, stated once so it does not have to be guessed: a future
 power is **a row in `Debug.Power`** — which is what puts it on the readout —
 **and one `if (player.debugging())` where it acts.**
+
+**Unlimited points** is the first row that had to be added, and it cost exactly
+that: one row and one `if`. It exists because §7f broke the invariant the first
+row rests on — a trading post's prices are paid out of the `FieldGuide`'s
+balance rather than out of a satchel, so the lens does not reach them and no
+amount of cleverness would make it. Which is the honest version of "the list is
+short": it is short because the structural row covers so much, not because
+nothing will ever fall outside it.
 
 ### 4.5 Building (`watch/build`)
 
@@ -1062,6 +1071,207 @@ parallel to.
 
 ---
 
+## 7f. Trading posts, and the page they turn
+
+> Asked for: shops in the wild that trade in points and reset the seen-animals
+> list; points spendable on materials; an intricate prebuilt structure with a
+> detailed NPC keeping it; and the guide to keep every animal you have ever
+> seen while paying you for them again. The last clause is the whole feature —
+> the rest is the shop that delivers it.
+
+### The record and the page were one thing, and had to be two
+
+`FieldGuide.points()` was a **function of the record**: the sum of every entry's
+rarity, recomputed on every call. That is the natural thing to write and it has
+two consequences that only show up the moment anything can be bought.
+
+A total derived from a list **cannot be spent**. Spending it would mean deleting
+entries, and a guide that deletes entries is not a guide — the first sentence of
+that class has always been that nothing is ever removed from it. And a species
+already in the book is worth nothing for ever, so the four hundredth hour of a
+walk is one where almost everything on the ground is worth looking at for its own
+sake and for nothing else. The completeness of the record was what made the game
+stop paying.
+
+So the book keeps two things where it kept one:
+
+| | |
+|---|---|
+| the **record** | `FieldGuide.first` — every species ever seen, permanent, and what every page of the book is drawn from |
+| the **page** | `FieldGuide.tally` — the species already *scored* since the last time a page was turned, which is what decides whether a sighting earns anything |
+
+A keeper at a trading post **stamps a new page**: the tally is emptied, the old
+page is closed and filed in `volumes()` with its date, its count and the keeper's
+name on it, and every animal in the world is worth its rarity again — while the
+record of having seen them is untouched. Points are a **balance** now,
+`earned − spent`, because a shop takes them.
+
+Three small consequences worth stating, because each of them is where the feature
+would otherwise have been invisible:
+
+* **The crosshair has three states, not two.** "Something new", "worth 8 points",
+  and "click to point it out". Without the middle one a stamped page is a number
+  on a panel that nothing in the world reflects.
+* **A `Spotlight` carries what it paid.** One integer beside a species name the
+  message already contained, which is the whole of what a client needs to keep
+  the party's balance in step — instead of the tally coming back down the wire on
+  every sighting.
+* **A keeper will not stamp a blank page.** That one rule is the economy's floor.
+  Without it, walking up to a post with an animal in front of you is spot, stamp,
+  spot, stamp, for as long as you can be bothered to press two keys. With it, a
+  stamp is only worth asking for once you have filled a page — so the loop is
+  "go and find things, then come back", which is the loop the game already is.
+
+### The posts are generated, not placed (`watch/Shops`)
+
+The boats' argument, and the same answer. A shop a player builds is a menu; a
+shop a *server* places cannot exist in a world with no edge. So a trading post is
+a pure function of position and seed, which makes it genuinely findable, identical
+for every player, and free on the wire — **nothing about a post ever travels**,
+because nothing about one can be changed. The two verbs on the wire carry an
+intention (`buy`, `stamp`) and what comes back is the two things that actually
+changed: a satchel and a ledger.
+
+The plane is cut into 430 m cells; each offers a post, and that offer only becomes
+one where the ground will take it. A post wants what a post has always wanted:
+
+* **a road** — the siting probe walks a line across the cell until it stands on a
+  `TrailNetwork` path, because a shop nobody walks past is a shop nobody finds;
+* **flat, dry ground** — a rigid box of timber cannot be pitched on a cliff;
+* **to be beside the path rather than across it** — set 5.6 m off the centre line
+  on whichever side is clearer and turned to face back at the trail, which is why
+  you come over a rise and see the sign side-on with the counter facing the road.
+
+Measured over twelve worlds: **one post per 1.31 km²**, 526 m on average from
+spawn to the nearest, and the closest two anywhere 177 m apart. That last number
+is `CELL_INSET` doing its job — the probe walks far enough to leave its own cell,
+so a post is confined to the middle of it and two neighbours can never be built
+through each other.
+
+**Nothing wild grows in the yard.** `Flora` and `Litter` both ask
+`Shops.clearingAt` before they put anything down — the same rule they already
+apply to trails, with a bigger footprint, because somebody cleared this ground
+before they built on it. That query runs once per candidate plant, hundreds of
+thousands of times as a wood is meshed, so the generated post for a cell is cached
+the way `TrailNetwork` caches its edges. It costs **80 ns warm**, and it checks
+*one* cell rather than the ring of nine: the inset guarantees no clearing can
+reach over a boundary, so the ring would be nine times the work and would generate
+eight cells' worth of siting probes the first time a worker touched new ground.
+
+### What points buy (`watch/Trading`)
+
+Materials, mostly, and that is the design: points come from looking at animals and
+what they buy is what you would otherwise have had to walk for, so watching and
+gathering are two currencies for one economy. An afternoon spent creeping up on
+waders pays for the planks a hide is built out of, and a hide is what gets you
+nearer the next wader.
+
+Nothing here is a shortcut *past* the game. A post sells the raw material and
+never the thing made from it: quartz, sand and a ground lens are on the shelf and
+a **spyglass is not**, so the deepest crafting chain in the book is still the only
+way anybody gets a glass. `ShopsTest` asserts that, over every shelf in eight
+worlds.
+
+Each keeper carries six to nine lines out of the catalogue, chosen by the post's
+own hash and weighted by the country it stands in — a post on a shingle spit has
+sand and quartz, one in a rainforest has vine, one in the crystal highlands has a
+lens — with a markup of its own on top. Three staples are always there
+(branches, rope, a feeder), because somebody who walked two kilometres should
+never arrive to find nothing they can use.
+
+### The building (`watch/render/ShopModel`)
+
+Everything else standing in this world is either something a player placed one
+piece at a time or something the generator scattered, and a shop is neither. It
+has to read as **prebuilt** — as a thing somebody else made, on purpose, before
+you got here, and made properly. A hut assembled from four of the player's own
+wall pieces would read as a player's hut, which is exactly the wrong impression:
+the point of the post is that there is somebody in this wood who is not you.
+
+So it is a carpentry drawing rather than a box: stone footings, a raised deck of
+individually laid boards with a step up to it, corner posts carrying plate beams,
+diagonal braces, a pitched roof on real rafters laid in overlapping courses with
+the eaves oversailing the counter, a boarded back wall of shelves, a counter with
+a ledger, an inkwell, a set of scales and a lantern on it, and a yard with a
+woodpile, crates, a barrel, a hitching rail and a lantern post. Around 1,670
+triangles — more than any other single object in the game and about a fifth of one
+chunk of hillside.
+
+**The wares on the shelves are the post's actual stock**, drawn through
+`ItemModel` — the same models the satchel, the ground and a feeder's tray use.
+That is not decoration: a player can read what a keeper sells off the shelf before
+opening anything, two posts a valley apart visibly differ, and the shelf and the
+panel cannot drift apart because both read one list.
+
+It is drawn in the **moving** mesh rather than in a chunk's static flora, which is
+`Litter`'s reasoning turned the other way up: a chunk is re-meshed when its level
+of detail changes and not when a sign swings, and splitting one building between
+two meshes to save a few hundred triangles would let the shed and the person in it
+disagree about where they were. Four ranges rather than one, because a post is not
+one object — the shed carries 220 m, the keeper 90, the wares 34, and the keeper
+stops turning to look at you at 22, which is about where a person stops noticing.
+
+### The keeper (`watch/render/KeeperModel`)
+
+Every other figure in this game is a `WalkerModel`: a coat, a head, four limbs and
+a hat, tinted per player, and exactly right for somebody two hundred metres away
+whom you will mostly see running. The keeper is the one person in the world you
+stand a metre from and *look at* while you decide what to buy, and at a metre a
+tinted walker is a mannequin.
+
+So it is the same skeleton with about three times the parts on it — a coat with a
+skirt and facings over a shirt, an apron, a belt with pouches, a scarf whose end
+swings with the weight shift, a face with a jaw and a nose, hair, an optional
+beard, optional spectacles with arms back to the ear, one of three hats, and a
+pencil behind the ear — and every one of those is chosen once from the post's own
+id, so a keeper looks the way they looked last week. So does their name, their
+trade, what they say when you walk up, and the small tame animal from their own
+biome sitting on the counter beside them, drawn through `AnimalModels` because it
+*is* one.
+
+**They are alive without going anywhere.** Breathing, a weight shift every seven
+seconds, and once every thirteen a lean in to write in the ledger — a smooth pulse
+rather than a switch, for the reason every other cycle in this game is eased. And
+they **look at you**: the head turns toward whoever is nearest, limited to what a
+neck actually does. That one thing does more work than the other three together.
+
+### Debug mode had to gain a row, and that is the interesting part
+
+`Debug`'s whole design is that **every cost in this game is a `has` and a `take`
+against a `Satchel`**, so one lens over that one class covers the costs that do
+not exist yet. A trading post's prices are the first cost that breaks it: they
+come out of the guide's balance. So `Debug.Power.POINTS` exists, and adding it
+cost exactly what §4.4 said a new power should — one row in the enum, which is
+what puts it on the readout, and one `if (player.debugging())` in
+`WatchGame.buy`, which is the feature. It buys rather than granting: the goods
+still go in the satchel and the line still appears in the log, so a host
+checking what a shelf hands over sees what a player would.
+
+What it deliberately does **not** do is stamp a page. Debug mode is a lens over
+what a player can afford; turning the page is a thing the guide *records*, and a
+lens does not write.
+
+### Three bugs, and the one that was already there
+
+* **The keeper's animal was placed from the wrong origin.** The counter is
+  measured from the building's centre and from the ground; the keeper stands
+  behind it and on the deck. Using the counter's own two numbers as offsets from
+  the *keeper* put the jackdaw a metre and a half out over the yard at a height
+  nothing was standing at. `BEHIND_COUNTER` is one number now, read by the scene
+  that places the figure and by the model that puts the ledger and the bird on
+  the counter. A test measured it: the keeper came out 2.67 m wide.
+* **The roof was a lid.** A metre of rise over the three and a half the front
+  slope covers is sixteen degrees, which from anywhere but directly in front
+  reads as a flat plane on four posts.
+* **`aim` resolved what was in reach only when nothing was under the crosshair.**
+  That was fine while the reach was a berry bush and the priority was about which
+  *label* to print — and it was quietly false about everything else, because
+  `inReach` is also what E acts on. Standing at a trading post with a chaffinch in
+  view, the crosshair said "Banded Finch" and the reach key did nothing at all.
+  What is in reach is now always worked out and only the line of text gives way.
+
+---
+
 ## 8. Tests
 
 `src/test/java/com/larsons/engine/watch/`
@@ -1204,3 +1414,32 @@ parallel to.
   rather than chosen: the first player joins at the world origin and a third of
   this world is under water, so a fixed seed is a coin toss over whether the
   test is about jumping or about swimming.
+* `ShopsTest` — three claims, in order, and the third is the one the whole
+  feature exists to make. **They are in the world**: a walk finds posts, every
+  one of them stands beside a trail on flat dry ground, no two are within a
+  clearing of each other, nothing wild grows in a yard, and two players on one
+  seed find the same posts with the same keepers and the same shelves down to
+  the price of rope. **They trade**: points buy materials at the counter off the
+  shelf that post actually has, out of the shared book's balance — and the whole
+  thing is refused, without taking anything, to somebody in the next valley,
+  somebody short of the price, somebody naming a post they are not standing at,
+  and somebody asking for a thing this keeper does not carry. **They turn the
+  page**: a species scores once, scores nothing the second time, and scores
+  again after a stamp — *and it never leaves the guide*, which is the assertion
+  the ask comes down to. Then a keeper who will not stamp a blank page, a closed
+  page kept as a numbered volume, the ledger and the pages through a save, and a
+  single-entry announce that leaves the ledger exactly as it found it. Then the
+  building and the person in it: the post is a building rather than a shed and
+  fits in its own clearing, its shelves carry its own stock and drop it at
+  distance, the sign swings and nothing else on it moves, the keeper is
+  person-sized with their boots on the deck, every hat in the table is worn by
+  somebody, their own animal is on the counter rather than out over the yard
+  (which is the bug that measured 2.67 m wide), their head turns toward you and
+  no further than a neck goes, and their idle has no cut in it across thirty
+  seconds sampled nine hundred times. Finally through the real `WatchScene`,
+  because the shop is the first thing in this game whose verb is a *screen*
+  rather than a message: the highlight names the post, E opens it, a click buys,
+  and E closes it again without reopening on the way out. And over a socket,
+  where the point is what does *not* travel — no message names a shop's
+  position, its keeper or its shelf, and a buy and a stamp still move both
+  players' satchels and both players' books.

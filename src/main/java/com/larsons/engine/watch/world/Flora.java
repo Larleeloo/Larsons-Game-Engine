@@ -69,9 +69,21 @@ public final class Flora {
     private final long seed;
     private final TerrainField field;
 
+    /**
+     * Where the trading posts are, so that nothing grows through one.
+     *
+     * <p>Built here rather than handed in, because a post is a pure function of
+     * the seed exactly as a tree is: a {@link Flora} that had to be given one
+     * would be a {@link Flora} that could be given the <em>wrong</em> one, and
+     * then a client would mesh an oak where the host had a shop. Two objects
+     * built from one seed cannot disagree.
+     */
+    private final com.larsons.engine.watch.Shops shops;
+
     public Flora(long seed, TerrainField field) {
         this.seed = seed;
         this.field = field;
+        this.shops = new com.larsons.engine.watch.Shops(seed);
     }
 
     /**
@@ -181,6 +193,10 @@ public final class Flora {
         if (ground.slopeAt(px, py) > MAX_SLOPE) return null;
         // A trail with a tree in the middle of it is not a trail.
         if (field.trailAt(px, py) > 0.35) return null;
+        // …and neither is a trading post with one through its roof. The same
+        // rule as the trail's, with a larger footprint: somebody cleared this
+        // ground before they built on it. See Shops.CLEARING.
+        if (shops.clearingAt(field, px, py)) return null;
         return TreeInstance.wild(species, px, py, z, h);
     }
 
@@ -199,6 +215,7 @@ public final class Flora {
         if (field.waterDepth(z) > 0) return null;
         if (ground.slopeAt(px, py) > MAX_SLOPE) return null;
         if (field.trailAt(px, py) > 0.5) return null;
+        if (shops.clearingAt(field, px, py)) return null;
 
         String berry = berries.get((int) ((h >>> 45) % berries.size()));
         // Two bushes in three are carrying; the rest are picked over or out of
@@ -221,6 +238,7 @@ public final class Flora {
 
         double z = ground.heightAt(px, py);
         if (field.waterDepth(z) > 1.2) return null;
+        if (shops.clearingAt(field, px, py)) return null;
         double radius = 0.5 + roll(h, 41) * 1.9;
         double yaw = roll(h, 20) * Math.PI * 2;
         return new Rock(px, py, z, radius, yaw, biome.cliff());

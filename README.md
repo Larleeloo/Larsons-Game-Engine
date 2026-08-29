@@ -2998,8 +2998,11 @@ seven friends, and you write down what you find.
 The whole game is one verb repeated — *hold still, and something comes closer*
 — wrapped in the reasons to keep walking: **1323 species** to catalog, twenty
 biomes to find them in, food to grow and cook so that the shy ones come to you,
-trees that take real days to grow and cross into varieties nobody has seen, and
-a house you build out of what you picked up on the way.
+trees that take real days to grow and cross into varieties nobody has seen, a
+house you build out of what you picked up on the way, and trading posts out
+along the trails where a keeper will sell you materials for points and stamp a
+fresh page in your book — so that everything you have already seen is worth
+finding again, without ever leaving the guide.
 
 ```
 ┌──────────────────────────────────────────────────────────────────────┐
@@ -3263,6 +3266,59 @@ amount of information that sends somebody out of the door. Three bars along the
 bottom say how much of that family, that rarity tier and that biome is still
 blank.
 
+### Trading posts, and the page a keeper stamps
+
+Points used to be a sum over the entries in your book — which meant they could
+never be *spent* (spending would mean deleting entries, and a guide does not
+delete entries) and a species already in the book was worth nothing for ever.
+Both halves are now fixed by keeping two things where the book kept one: the
+**record**, which is permanent, and the **page**, which is the set of species
+already scored *since the last time a page was turned*.
+
+**Trading posts** are where a page gets turned
+([`Shops`](src/main/java/com/larsons/engine/watch/Shops.java)). They are
+generated the way the trails and the boats are — a pure function of position and
+seed — so they are genuinely *found*: about one every 1.3 km², always beside a
+trail on flat dry ground, with the counter facing the road. Nothing about one
+ever crosses the wire, because nothing about one can be changed.
+
+Walk up to a counter and <kbd>E</kbd> opens the shop:
+
+- **Buy materials with points.** Branches, bark, reeds, stone, vine, clay, sap,
+  planks, thatch, rope, sand, quartz, a ground lens — plus a feeder, a trowel or
+  a rod, and something to put on the feeder. Each keeper carries six to nine
+  lines chosen by their own hash and weighted by the country they stand in, at
+  their own markup, so two posts a valley apart are worth comparing. Nobody
+  sells a **spyglass**: the two-step grind at a bench is still the only way to
+  get one.
+- **Have a fresh page stamped.** The tally empties, the old page is filed as a
+  numbered volume with its date and the keeper's name on it, and **every animal
+  you have ever seen is worth its rarity again** — while every one of them stays
+  in the guide. A keeper will not stamp a blank page, which is what keeps the
+  loop "go and find things, then come back" rather than "spot, stamp, spot,
+  stamp" at one chaffinch.
+
+The crosshair is where you find out: over an animal it now says *"Something
+new"*, *"worth 8 points"*, or *"click to point it out"* — and the middle one is
+what a stamped page buys you.
+
+The keeper is a **character**, not a shop front
+([`KeeperModel`](src/main/java/com/larsons/engine/watch/render/KeeperModel.java)):
+a name, a trade, a line they say when you walk up, a coat with facings and an
+apron, one of three hats, sometimes a beard and sometimes spectacles, and often
+a small tame animal from their own biome sitting on the counter — all derived
+from the post's id, so they look and sound the same next week. They breathe,
+shift their weight, lean in to write in the ledger every thirteen seconds or so,
+and **turn their head to look at whoever walks up**. The post itself is a
+carpentry drawing rather than a box
+([`ShopModel`](src/main/java/com/larsons/engine/watch/render/ShopModel.java)):
+stone footings, a plank deck with a step, corner posts and plate beams, a
+pitched roof on real rafters, a swinging sign, a counter with a ledger and a set
+of scales on it, and a yard with a woodpile, crates, a barrel and a hitching
+rail. **The wares on the back shelves are that post's actual stock**, drawn with
+the same models the satchel uses, so you can read what a keeper sells before
+opening anything.
+
 ### One seed, no terrain on the wire
 
 The server owns one
@@ -3417,6 +3473,10 @@ control and a menu item is an invitation to press it
 
 It grants:
 
+- **Unlimited points.** Anything on any keeper's shelf, at any price, without
+  spending what the guide earned. The one row that had to be added by hand: a
+  trading post's prices come out of the book's balance rather than out of a
+  satchel, so the bottomless-satchel lens below does not reach them.
 - **Unlimited items.** Every recipe, every build piece, every feeder, every
   seed and every tool, in any number, for ever.
 - **A readout** down the left: position, chunk and level of detail, the biome

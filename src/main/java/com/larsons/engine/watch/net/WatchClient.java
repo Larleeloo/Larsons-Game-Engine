@@ -138,6 +138,12 @@ public final class WatchClient implements AutoCloseable {
         send(WatchProto.craft(output, station));
     }
 
+    /** Buy a line off the shelf of the post we are standing at. */
+    public void sendBuy(long shopId, String item) { send(WatchProto.buy(shopId, item)); }
+
+    /** Ask the keeper we are standing at to stamp a fresh page. */
+    public void sendStamp(long shopId) { send(WatchProto.stamp(shopId)); }
+
     /** Tell the host the glass went up, changed power, or came down. */
     public void sendGlass(double power) { send(WatchProto.glass(power)); }
 
@@ -200,6 +206,11 @@ public final class WatchClient implements AutoCloseable {
                 if (light != null) {
                     view.spotlights().add(light);
                     view.say(light.label());
+                    // What it paid comes with it, so the party's balance moves
+                    // on the frame the outline goes up rather than on the next
+                    // ledger. The host has already decided the number; this only
+                    // adds it up. See Spotlight.points.
+                    view.guide().credit(light.species(), light.points());
                 }
             }
             case "bag" -> view.satchel().load(WatchJson.map(message, "items"));

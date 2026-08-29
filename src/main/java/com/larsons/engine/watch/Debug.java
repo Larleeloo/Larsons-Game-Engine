@@ -23,16 +23,23 @@ import java.util.List;
  *
  * <h2>What it grants, and why the list is short</h2>
  *
- * <p>{@link Power} is the whole of it, and it is two rows rather than twelve
- * because the first row is <b>structural</b>: debug mode does not hand out a
- * list of items, it makes the satchel {@linkplain Satchel#bottomless()
- * bottomless}. Every cost in this game — every recipe, every build piece, a
- * feeder's serving, a seed going into the ground, the rod, the spyglass — is
+ * <p>{@link Power} is the whole of it, and it is a short list rather than twelve
+ * rows because the first row is <b>structural</b>: debug mode does not hand out
+ * a list of items, it makes the satchel {@linkplain Satchel#bottomless()
+ * bottomless}. Almost every cost in this game — every recipe, every build piece,
+ * a feeder's serving, a seed going into the ground, the rod, the spyglass — is
  * paid by asking a {@link Satchel} whether it {@code has} something and then
  * {@code take}-ing it. One lens over that one class covers all of them, and it
  * covers whatever is added next <em>without being edited</em>: an item added
  * to {@link Forage} is already unlimited, a recipe added to {@link Recipes} is
  * already affordable, a piece added to {@code BuildPiece} is already free.
+ *
+ * <p>"Almost" is {@link Power#POINTS}, and it is worth reading as the exception
+ * that proves the rule. A trading post's prices are paid out of the
+ * {@link FieldGuide}'s balance rather than out of a satchel, so the lens does
+ * not reach them and no amount of cleverness would make it. Covering that cost
+ * took exactly what the note below says it should: one row, and one
+ * {@code if (player.debugging())}.
  *
  * <p>That is the answer to "make it grow as more features are added". A debug
  * mode built as a list of grants goes stale the week after it is written,
@@ -86,6 +93,28 @@ public final class Debug {
         ITEMS("Unlimited items",
                 "Every recipe, every build piece, every feeder and every tool — "
                         + "anything paid for out of the satchel."),
+
+        /**
+         * A keeper's whole shelf, for nothing.
+         *
+         * <p><b>The first row that had to be added</b>, and the class note above
+         * predicted its shape exactly: a row here and one
+         * {@code if (player.debugging())} where it acts — in {@code WatchGame.buy}.
+         * It exists because {@link Trading} broke the invariant the first row
+         * rests on. Every cost in this game <em>was</em> a {@code has} and a
+         * {@code take} against a {@link Satchel}; a purchase at a trading post is
+         * paid out of the {@link FieldGuide}'s balance instead, so a bottomless
+         * satchel does not reach it and never could.
+         *
+         * <p>It buys, rather than granting: the goods still go in the satchel and
+         * the line still appears in the log, so a host testing what a shelf hands
+         * over sees exactly what a player would. What it does not do is turn the
+         * page — a stamp is a thing the guide records and debug mode is a lens,
+         * not an edit.
+         */
+        POINTS("Unlimited points",
+                "Anything on any keeper's shelf, at any price, without spending "
+                        + "what the guide earned."),
 
         /**
          * The readout: what the world is doing, in numbers, over the top left.
