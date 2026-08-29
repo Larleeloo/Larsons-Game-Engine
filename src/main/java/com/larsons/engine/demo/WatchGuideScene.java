@@ -195,14 +195,22 @@ public class WatchGuideScene extends AbstractScene {
 
         target.drawText("Field Guide", 28, 40, TITLE, INK);
         String progress = guide.discovered() + " of " + guide.total() + " species  ·  "
-                + guide.points() + " points  ·  "
+                + guide.points() + " points to spend  ·  "
                 + Math.round(guide.completion() * 1000) / 10.0 + "%";
         target.drawText(progress, 28, 64, BODY, ACCENT);
+        // The cover's second line: which volume is open, and what the closed
+        // ones came to. The record above it never goes down and this never
+        // goes up by itself, and having both on the cover is the shortest
+        // possible statement of what a stamped page does.
+        String volumes = "Volume " + guide.volume() + "  ·  " + guide.tallied()
+                + " scored on this page  ·  " + guide.earned() + " earned, "
+                + guide.spent() + " spent";
+        target.drawText(volumes, 28, 82, SMALL, DIM);
         String sorts = "◀ " + sort.label + " ▶";
         target.drawText(sorts, viewportWidth - 28 - target.textWidth(sorts, HEAD), 40,
                 HEAD, INK);
 
-        int listX = 28, listY = 92;
+        int listX = 28, listY = 104;
         int listW = Math.max(280, viewportWidth / 2 - 48);
         int listH = viewportHeight - listY - 48;
         drawList(target, guide, listX, listY, listW, listH);
@@ -318,6 +326,14 @@ public class WatchGuideScene extends AbstractScene {
                             (times == 1 ? "Seen once" : "Seen " + times + " times")
                                     + " · " + points + (points == 1 ? " point" : " points"),
                             x + 16, row, width, floor, SMALL, DIM);
+                    // Whether it would pay <em>now</em>, which is a different
+                    // question from whether it is in the book and is the one a
+                    // player standing in a wood is actually asking.
+                    row = wrappedTo(target, guide.scored(def.key())
+                                    ? "Already on this page — worth nothing until it is stamped"
+                                    : "Not on this page yet — worth " + points + " again",
+                            x + 16, row, width, floor, SMALL,
+                            guide.scored(def.key()) ? DIM : ACCENT);
                 }
                 if (guide.tamed(def.key())) {
                     wrappedTo(target, "One of these is a pet.", x + 16, row, width, floor,

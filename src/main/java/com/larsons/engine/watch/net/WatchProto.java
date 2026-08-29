@@ -41,12 +41,20 @@ import java.util.Map;
  *   client → server   {"t":"cast"} {"t":"strike"}
  *   client → server   {"t":"glass","m":8}            (1 = put it away)
  *   client → server   {"t":"debug","c":"7799"}       (the host's walk only)
+ *   client → server   {"t":"buy","s":shopId,"k":"plank"}   {"t":"stamp","s":shopId}
  *
  *   server → client   {"t":"bag","items":{…}}          (private, after any change)
  *   server → all      {"t":"world","grove":{…},"crops":{…},"built":{…}}
- *   server → all      {"t":"guide","entries":[…],"pets":[…]}
+ *   server → all      {"t":"guide","entries":[…],"pets":[…],"earned":…,"tally":[…]}
  *   both              info / error / ping / pong
  * </pre>
+ *
+ * <p><b>Nothing about a trading post travels.</b> Where one stands, who keeps
+ * it, what is on its shelves and what they charge are all functions of the seed
+ * — see {@link com.larsons.engine.watch.Shops} — so a client works all of that
+ * out for itself the way it works out the trails and the boats. The two verbs
+ * above carry an <em>intention</em>, and the answer comes back as the two things
+ * that genuinely changed: a satchel and a ledger.
  *
  * <p><b>The server is authoritative about everything.</b> A client sends where
  * it thinks it is and what it would like to do; the server decides. That is
@@ -268,6 +276,29 @@ public final class WatchProto {
     public static Map<String, Object> glass(double power) {
         Map<String, Object> m = msg("glass");
         m.put("m", round(power));
+        return m;
+    }
+
+    /**
+     * Buy one line off a keeper's shelf.
+     *
+     * <p>The shop's id goes with it, and the host checks it against the post the
+     * sender is <em>standing at</em> rather than trusting it — see
+     * {@code WatchGame.buy}. It is here to disambiguate, not to address: without
+     * it a client whose idea of which counter it was at differed from the
+     * host's would buy the right thing at the wrong prices.
+     */
+    public static Map<String, Object> buy(long shopId, String item) {
+        Map<String, Object> m = msg("buy");
+        m.put("s", shopId);
+        m.put("k", item);
+        return m;
+    }
+
+    /** Ask the keeper to stamp a fresh page in the guide. */
+    public static Map<String, Object> stamp(long shopId) {
+        Map<String, Object> m = msg("stamp");
+        m.put("s", shopId);
         return m;
     }
 

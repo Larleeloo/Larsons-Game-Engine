@@ -12,14 +12,17 @@ import com.larsons.engine.scene.AbstractScene;
 import com.larsons.engine.watch.Boats;
 import com.larsons.engine.watch.Cultivation;
 import com.larsons.engine.watch.Debug;
+import com.larsons.engine.watch.FieldGuide;
 import com.larsons.engine.watch.Fishing;
 import com.larsons.engine.watch.Forage;
 import com.larsons.engine.watch.Litter;
 import com.larsons.engine.watch.Lure;
 import com.larsons.engine.watch.Recipes;
 import com.larsons.engine.watch.Satchel;
+import com.larsons.engine.watch.Shops;
 import com.larsons.engine.watch.Spotlight;
 import com.larsons.engine.watch.Spyglass;
+import com.larsons.engine.watch.Trading;
 import com.larsons.engine.watch.WatchClock;
 import com.larsons.engine.watch.WatchGame;
 import com.larsons.engine.watch.WatchPlayer;
@@ -35,9 +38,11 @@ import com.larsons.engine.watch.render.FloraMesher;
 import com.larsons.engine.watch.render.Gait;
 import com.larsons.engine.watch.render.ItemModel;
 import com.larsons.engine.watch.render.ItemPortrait;
+import com.larsons.engine.watch.render.KeeperModel;
 import com.larsons.engine.watch.render.Mesh;
 import com.larsons.engine.watch.render.RowStroke;
 import com.larsons.engine.watch.render.Shapes;
+import com.larsons.engine.watch.render.ShopModel;
 import com.larsons.engine.watch.render.WalkerModel;
 import com.larsons.engine.watch.render.WatchRenderer;
 import com.larsons.engine.watch.world.ChunkStreamer;
@@ -177,6 +182,27 @@ public class WatchScene extends AbstractScene {
     /** How far the player walks before the litter sweep is redone, in metres. */
     private static final double LITTER_RESTEP = 4;
 
+    /**
+     * How far off a trading post is drawn at all, and the three ranges inside
+     * that at which it gains its detail, in metres.
+     *
+     * <p>Four numbers rather than one, because a post is not one object: it is a
+     * building worth about twelve hundred triangles, nine item models on its
+     * shelves worth about nine hundred more, and a person worth five hundred.
+     * The building is what you want to see from across a valley — that is the
+     * whole point of the sign — and the wares on the shelf are unreadable at
+     * thirty metres whatever they cost. So the shed carries a long way, the
+     * shelf and the keeper do not, and the keeper stops turning to look at you
+     * at about the distance a person would stop noticing.
+     */
+    private static final double SHOP_RANGE = 220;
+
+    private static final double KEEPER_RANGE = 90;
+
+    private static final double WARES_RANGE = 34;
+
+    private static final double NOTICE_RANGE = 22;
+
     // --- palette --------------------------------------------------------------------
 
     private static final Color HUD_INK = new Color(238, 244, 236);
@@ -206,7 +232,7 @@ public class WatchScene extends AbstractScene {
     private static final long VIEW_MODEL_KEY = Long.MIN_VALUE + 1;
 
     /** Which overlay is up, if any. */
-    private enum Panel { NONE, SATCHEL, BUILD, PAUSED }
+    private enum Panel { NONE, SATCHEL, BUILD, SHOP, PAUSED }
 
     private final GameContext ctx;
 
@@ -428,6 +454,27 @@ public class WatchScene extends AbstractScene {
     private int pieceIndex;
     private int pieceTurn;
     private boolean pieceInTree;
+
+    /**
+     * The post the shop panel is open on, and where the cursor is on its shelf.
+     *
+     * <p>The shop itself is not kept — it is a function of the seed and of where
+     * we are standing, so it is looked up again whenever it is needed rather
+     * than held and allowed to go stale while the player walks away from the
+     * counter with the panel up. Only the id is remembered, so a request names
+     * the post the panel was opened on.
+     */
+    private long shopId;
+
+    private int shopIndex;
+
+    /** The last thing the keeper said, and how long it stays on the panel. */
+    private String keeperLine = "";
+
+    private double keeperFor;
+
+    /** How long a keeper's line stays up, in seconds. */
+    private static final double KEEPER_SECONDS = 6;
 
     /** Which of a panel's two columns the keys are driving. */
     private boolean recipeColumn;
@@ -1237,10 +1284,19 @@ public class WatchScene extends AbstractScene {
     private void aim() {
         lookingAtId = 0;
         prompt = "";
-        // Cleared here and not only in reachPrompt: an animal under the
-        // crosshair returns early, and without this the ring stayed pulsing
-        // round a bush the player had walked away from ten seconds ago.
+        // <b>What is in reach is worked out whether or not there is a bird in
+        // front of you.</b> It used to be worked out only in the branch below
+        // where nothing was under the crosshair, on the reasoning that an animal
+        // is the more interesting of the two things to name — which is true of
+        // the <em>prompt</em> and was quietly false of everything else, because
+        // {@code inReach} is also what E acts on. Standing at a trading post
+        // with a chaffinch in view, the crosshair said "Banded Finch" and the
+        // reach key silently did nothing at all. So the answer is always
+        // computed and only the line of text gives way.
         inReach = null;
+        reachPrompt();
+        String reaching = prompt;
+        prompt = "";
         // The aim, not the heading: what the crosshair covers is where the
         // glass is actually wandering. See `useGlass`.
         double cp = Math.cos(aimPitch);
@@ -1272,14 +1328,22 @@ public class WatchScene extends AbstractScene {
             // Nothing under the crosshair, but there may well be something at
             // your feet. The reach prompt is the quieter of the two and loses
             // to an animal, which is the right order for a game about animals.
-            reachPrompt();
+            prompt = reaching;
             return;
         }
         lookingAtId = found.id();
-        boolean known = view().guide().seen(found.def().key());
-        prompt = known
-                ? found.def().name() + "  —  click to point it out"
-                : "Something new  —  click to record it";
+        FieldGuide guide = view().guide();
+        // Three states, not two, and the middle one is the whole reason a page
+        // gets stamped: something you have seen before but have not seen *since*
+        // is worth its rarity again, and the crosshair is where a player finds
+        // that out. Without this the feature is a number on a panel.
+        int worth = guide.award(found.def().key());
+        prompt = !guide.seen(found.def().key())
+                ? "Something new  —  click to record it"
+                : worth > 0
+                        ? found.def().name() + "  —  worth " + worth
+                                + (worth == 1 ? " point" : " points")
+                        : found.def().name() + "  —  click to point it out";
         // How far off it is, but only through the glass: unaided, everything is
         // within a hundred metres and the number is noise. Glassing, it is the
         // whole reason you raised it — "there is something four hundred metres
@@ -1350,6 +1414,12 @@ public class WatchScene extends AbstractScene {
                         "Rowing boat", boat.x(), boat.y(), boat.z() + 0.4, 1.6);
             }
         }
+        Shops.Shop shop = shopInReach();
+        if (shop != null) {
+            return new WatchGame.Pickable(WatchGame.Pickable.Kind.SHOP,
+                    String.valueOf(shop.id()), shop.title(), shop.counterX(),
+                    shop.counterY(), shop.z() + Shops.COUNTER_TOP + 0.25, 0.5);
+        }
         Litter.Piece piece = litterInReach();
         if (piece != null) {
             return new WatchGame.Pickable(WatchGame.Pickable.Kind.GROUND, piece.key(),
@@ -1392,6 +1462,17 @@ public class WatchScene extends AbstractScene {
                 else session.client().sendSpot(lookingAtId);
             }
             case "use" -> {
+                // A counter is the one thing in reach whose verb is a screen
+                // rather than a message. Handled here rather than in the host's
+                // `use` because trading is a conversation — you look at what is
+                // on the shelf, then decide — and a key that bought whatever was
+                // nearest would be a key nobody dared press. Everything the
+                // panel then does *is* a request, on the same two paths as every
+                // other verb.
+                if (inReach != null && inReach.kind() == WatchGame.Pickable.Kind.SHOP) {
+                    openShop();
+                    return;
+                }
                 // The reach gesture plays whether or not anything came of it:
                 // reaching out and finding nothing is information too.
                 reach = 1;
@@ -1630,12 +1711,143 @@ public class WatchScene extends AbstractScene {
             panel = Panel.NONE;
             return;
         }
+        keeperFor = Math.max(0, keeperFor - dt);
         switch (panel) {
             case SATCHEL -> updateSatchel(input);
             case BUILD -> updateBuild(input);
+            case SHOP -> updateShop(input);
             case PAUSED -> updatePaused(input);
             case NONE -> { }
         }
+    }
+
+    // --- trading ----------------------------------------------------------------------
+
+    /**
+     * The post whose counter we are standing at, or {@code null}.
+     *
+     * <p>Worked out on this side from the seed, exactly as the boats and the
+     * litter are, and for the same reason: a shop is a pure function of the
+     * world and asking the host where one is would be asking a question this
+     * machine can already answer. What the host is for is deciding whether the
+     * points were actually there. See {@link Shops}.
+     */
+    private Shops.Shop shopInReach() {
+        if (streamer == null) return null;
+        return view().shops().atCounter(streamer.field(), px, py);
+    }
+
+    /** Walk up to a counter. */
+    private void openShop() {
+        Shops.Shop shop = shopInReach();
+        if (shop == null) return;
+        panel = Panel.SHOP;
+        shopId = shop.id();
+        shopIndex = 0;
+        dragBar = 0;
+        keeperLine = shop.keeper().greeting();
+        keeperFor = KEEPER_SECONDS;
+    }
+
+    /**
+     * The shop screen: a shelf to buy from, and a keeper to have a page stamped
+     * by.
+     *
+     * <p>Driven by the same two hands as the satchel and the build screens, off
+     * the same {@link SatchelBox}, because a third way of working a list would
+     * be a third chance to select the row above the one that was clicked.
+     *
+     * <p>The panel closes itself when the counter is no longer there, and that
+     * is a guard rather than a gesture: <b>a panel holds the walk still</b> —
+     * {@code update} returns before {@link #walk} while one is up — so nobody
+     * can currently stroll away from an open shop. What it defends against is
+     * everything else that could take the post away underneath the screen, and
+     * the reason it matters is that every button on this panel is refused by the
+     * host unless the buyer is standing at the counter. A panel that outlived
+     * its shop would be a screen whose every button silently did nothing.
+     */
+    private void updateShop(InputManager input) {
+        Shops.Shop shop = shopInReach();
+        if (shop == null || shop.id() != shopId) {
+            panel = Panel.NONE;
+            return;
+        }
+        List<Trading.Offer> stock = shop.stock();
+        SatchelBox box = shopBox();
+
+        int step = 0;
+        if (KeyBinds.pressed(input, GameAction.MENU_DOWN)) step = 1;
+        if (KeyBinds.pressed(input, GameAction.MENU_UP)) step = -1;
+        if (step != 0 && !stock.isEmpty()) {
+            shopIndex = Math.floorMod(shopIndex + step, stock.size());
+        }
+
+        boolean moved = pointerMoved(input);
+        int row = box.columnAt(pointerX, pointerY) == 0 ? box.rowAt(pointerY) : -1;
+        if (row >= stock.size()) row = -1;
+        if (row >= 0 && moved) shopIndex = row;
+
+        boolean take = KeyBinds.pressed(input, GameAction.MENU_SELECT);
+        if (input.isMouseJustPressed()) {
+            if (box.overClose(pointerX, pointerY)) {
+                panel = Panel.NONE;
+                return;
+            }
+            if (overStamp(box)) {
+                stampPage(shop);
+                return;
+            }
+            if (row >= 0) {
+                shopIndex = row;
+                take = true;
+            }
+        }
+        // The other key the walk uses for "do the thing in front of you", which
+        // here is the only thing on the panel that is not on the list.
+        if (KeyBinds.pressed(input, GameAction.WATCH_CROSS)) {
+            stampPage(shop);
+            return;
+        }
+        if (take && !stock.isEmpty()) {
+            buy(shop, stock.get(Math.min(shopIndex, stock.size() - 1)));
+        }
+        if (KeyBinds.pressed(input, GameAction.WATCH_PICK)) panel = Panel.NONE;
+    }
+
+    /** Hand over the points for one line, on whichever path this session is. */
+    private void buy(Shops.Shop shop, Trading.Offer offer) {
+        WatchGame local = session.local();
+        if (local != null) {
+            String line = local.buy(session.selfId(), shop.id(), offer.item());
+            keeperSays(line != null ? line
+                    : "Not enough points for " + offer.label());
+        } else {
+            session.client().sendBuy(shop.id(), offer.item());
+            // Nothing is assumed here, unlike a picked-up branch: the satchel
+            // and the ledger both come back from the host within a frame or
+            // two, and a purchase drawn optimistically and then refused would
+            // show the player points they never had.
+            keeperSays("…");
+        }
+    }
+
+    /** Ask for a fresh page. */
+    private void stampPage(Shops.Shop shop) {
+        WatchGame local = session.local();
+        if (local != null) {
+            String line = local.stamp(session.selfId(), shop.id());
+            keeperSays(line == null ? "" : line);
+        } else {
+            session.client().sendStamp(shop.id());
+            keeperSays("…");
+        }
+    }
+
+    private void keeperSays(String line) {
+        if (line == null || line.isBlank()) return;
+        keeperLine = line;
+        keeperFor = KEEPER_SECONDS;
+        say(line);
     }
 
     /**
@@ -2038,6 +2250,7 @@ public class WatchScene extends AbstractScene {
         switch (panel) {
             case SATCHEL -> drawSatchel(target);
             case BUILD -> drawBuild(target);
+            case SHOP -> drawShop(target);
             case PAUSED -> drawPaused(target);
             case NONE -> { }
         }
@@ -2268,6 +2481,35 @@ public class WatchScene extends AbstractScene {
             ItemModel.item(mesh, piece.key(), piece.x() - ox, piece.y() - oy,
                     streamer.groundAt(piece.x(), piece.y()), piece.scale(),
                     piece.yaw());
+        }
+
+        // The trading posts within sight, and whoever is keeping them.
+        //
+        // In the <b>moving</b> mesh rather than in a chunk's static flora, for
+        // {@link Litter}'s reason turned the other way up: a chunk is re-meshed
+        // when its level of detail changes and not when a sign swings or a
+        // keeper breathes, and splitting one building between a static mesh and
+        // a moving one to save a few hundred triangles would mean the shed and
+        // the person in it could disagree about where they were. There is at
+        // most one post in a view — Shops.CELL is 540 m — so the cost is a
+        // building, once, and only when there is one to draw.
+        for (Shops.Shop shop : view.shops().near(streamer.field(), px, py, SHOP_RANGE)) {
+            double away = Math.hypot(shop.x() - px, shop.y() - py);
+            ShopModel.post(mesh, shop, ox, oy, drawClock, away < WARES_RANGE);
+            if (away > KEEPER_RANGE) continue;
+            // Behind the counter, facing out of it — and turning to look at
+            // whoever is nearest. That the head follows you is worth more than
+            // everything else in this block put together. How far back they
+            // stand is the model's own number, because the model puts their
+            // ledger and their jackdaw on the counter from it.
+            double back = Shops.COUNTER_OUT - KeeperModel.BEHIND_COUNTER;
+            double kx = shop.x() + Math.sin(shop.yaw()) * back;
+            double ky = shop.y() - Math.cos(shop.yaw()) * back;
+            double look = Math.atan2(px - kx, -(py - ky));
+            KeeperModel.keeper(mesh, shop.keeper(), kx - ox, ky - oy,
+                    shop.z() + ShopModel.DECK, shop.yaw(),
+                    away < NOTICE_RANGE ? look : shop.yaw(), drawClock,
+                    Math.floorMod(shop.id(), 97) * 0.11);
         }
 
         for (Cultivation.Crop crop : view.crops().all()) {
@@ -2599,7 +2841,14 @@ public class WatchScene extends AbstractScene {
         label(target, view.guide().discovered() + " / " + view.guide().total()
                         + " species · " + points + (points == 1 ? " pt" : " pts"),
                 pad, pad + 74, HUD_SMALL, HUD_ACCENT);
-        drawCompass(target, pad, pad + 96);
+        // Which volume is open and how full it is. Two numbers, and they are the
+        // ones that answer "why is this wren suddenly worth something": a page
+        // that has just been stamped is an empty one, and an empty page is a
+        // wood full of animals that all count again.
+        label(target, "Vol. " + view.guide().volume() + " · "
+                        + view.guide().tallied() + " on this page",
+                pad, pad + 90, HUD_SMALL, HUD_DIM);
+        drawCompass(target, pad, pad + 112);
 
         // Top right: the party.
         int right = viewportWidth - pad;
@@ -2716,12 +2965,20 @@ public class WatchScene extends AbstractScene {
                 ? "×" + Math.round(glass.power()) + " · " + Math.round(glass.range()) + " m"
                 : "down"));
         lines.add("guide  " + view.guide().discovered() + " / " + view.guide().total()
-                + " · " + view.guide().points() + " pts");
+                + " · " + view.guide().points() + " pts · vol " + view.guide().volume()
+                + " (" + view.guide().tallied() + " scored)");
+        // Where the nearest trading post is, which is the one thing in this
+        // world that is worth walking a long way to and cannot be seen from
+        // anywhere near it.
+        Shops.Shop post = view.shops().nearest(streamer.field(), px, py, Shops.CELL * 2);
+        lines.add("post  " + (post == null ? "none within " + Math.round(Shops.CELL * 2) + " m"
+                : Math.round(Math.hypot(post.x() - px, post.y() - py)) + " m · "
+                        + post.sign() + " · " + post.stock().size() + " lines"));
 
         int pad = 16;
         // Clear of the compass strip, which is the last thing the ordinary HUD
         // puts down the left.
-        int top = pad + 128;
+        int top = pad + 144;
         int width = 268;
         int height = 28 + lines.size() * 15;
         target.fillRect(pad - 6, top - 16, width, height, new Color(10, 14, 20, 205));
@@ -3440,6 +3697,153 @@ public class WatchScene extends AbstractScene {
                 HUD_SMALL, HUD_DIM);
     }
 
+    /**
+     * Where the shop screen's parts are.
+     *
+     * <p>{@link SatchelBox} again, with the shelf in its left column and the
+     * keeper in the space its right one would occupy — so the row the pointer
+     * is over is decided by the same arithmetic that decides it on the two
+     * screens either side of this one.
+     */
+    private SatchelBox shopBox() {
+        int w = Math.min(860, Math.max(360, viewportWidth - 80));
+        int h = Math.min(540, Math.max(280, viewportHeight - 80));
+        int x = (viewportWidth - w) / 2, y = (viewportHeight - h) / 2;
+        int listTop = y + 92;
+        int rows = Math.max(1, (y + h - 30 - listTop) / ROW_HEIGHT);
+        return new SatchelBox(x, y, w, h, listTop, rows, w / 2 - 34);
+    }
+
+    /** The "ask for a fresh page" button: {@code x, y, w, h}. */
+    private int[] stampButton(SatchelBox box) {
+        return new int[]{box.rightX(), box.y() + box.h() - 104, box.colWidth(), 44};
+    }
+
+    private boolean overStamp(SatchelBox box) {
+        int[] b = stampButton(box);
+        return pointerX >= b[0] && pointerX < b[0] + b[2]
+                && pointerY >= b[1] && pointerY < b[1] + b[3];
+    }
+
+    /**
+     * The shop screen.
+     *
+     * <p>Two halves, and they are the two things a trading post is for: a shelf
+     * of materials on the left, and on the right the keeper, the balance, and
+     * the offer to stamp a fresh page. The right half is deliberately the larger
+     * piece of furniture even though it is one button, because turning the page
+     * is the part a player has to be told about — buying things off a list needs
+     * no explanation and a mechanic that hands you back a thousand animals does.
+     */
+    private void drawShop(DrawTarget target) {
+        Shops.Shop shop = shopInReach();
+        if (shop == null) return;
+        SatchelBox box = shopBox();
+        int x = box.x(), y = box.y(), w = box.w(), h = box.h();
+        target.fillRect(x, y, w, h, HUD_PANEL);
+        target.drawRect(x, y, w, h, HUD_ACCENT);
+        target.drawText(shop.sign(), x + 20, y + 32, TITLE_FONT, HUD_INK);
+        target.drawText(shop.keeper().fullName(), x + 20, y + 54, HUD_SMALL, HUD_DIM);
+        drawCloseButton(target, box);
+
+        FieldGuide guide = view().guide();
+        int purse = guide.points();
+        String balance = purse + (purse == 1 ? " point" : " points") + " to spend";
+        target.drawText(balance, x + w - target.textWidth(balance, HUD_BOLD) - 46, y + 54,
+                HUD_BOLD, HUD_ACCENT);
+
+        // --- the shelf ------------------------------------------------------
+        List<Trading.Offer> stock = shop.stock();
+        target.drawText("On the shelf", box.leftX(), y + 80, HUD_BOLD, HUD_ACCENT);
+        for (int i = 0; i < stock.size() && i < box.rows(); i++) {
+            Trading.Offer offer = stock.get(i);
+            boolean can = guide.affords(offer.price());
+            int top = box.rowTop(i);
+            int text = top + ROW_HEIGHT - 9;
+            if (i == shopIndex) {
+                target.fillRect(box.leftX() - 8, top, box.colWidth(), ROW_HEIGHT - 2,
+                        new Color(60, 110, 70, 160));
+            }
+            // The same picture the satchel draws, because it is the same thing:
+            // a player should recognise on the shelf what they will be carrying.
+            target.drawImage(ItemPortrait.of(offer.item(), ICON, ICON_BACKDROP),
+                    box.leftX(), top + 3, ICON, ICON);
+            target.drawText(offer.label(), box.leftX() + ICON + 10, text, HUD_FONT,
+                    can ? HUD_INK : new Color(130, 140, 132));
+            String price = offer.priceLine();
+            target.drawText(price,
+                    box.leftX() + box.colWidth() - target.textWidth(price, HUD_FONT) - 12,
+                    text, HUD_FONT, can ? HUD_ACCENT : HUD_WARN);
+        }
+
+        // --- the keeper -----------------------------------------------------
+        int rx = box.rightX();
+        int width = box.colWidth();
+        target.drawText("The counter", rx, y + 80, HUD_BOLD, HUD_ACCENT);
+        int line = box.listTop() + 14;
+        String said = keeperFor > 0 ? keeperLine : shop.keeper().greeting();
+        for (String part : wrapped(target, "“" + said + "”", width)) {
+            target.drawText(part, rx, line, HUD_FONT, HUD_INK);
+            line += 20;
+        }
+        line += 12;
+        Trading.Offer chosen = stock.isEmpty() ? null
+                : stock.get(Math.min(shopIndex, stock.size() - 1));
+        if (chosen != null) {
+            target.drawText(fitted(target, chosen.note(), width), rx, line, HUD_SMALL,
+                    HUD_DIM);
+        }
+
+        // The page, which is the other half of what this counter does.
+        int tallied = guide.tallied();
+        int pageTop = y + h - 176;
+        target.drawText("Volume " + guide.volume(), rx, pageTop, HUD_BOLD, HUD_INK);
+        target.drawText(tallied + " species on this page", rx, pageTop + 20, HUD_SMALL,
+                HUD_DIM);
+        int keeps = view().guide().discovered();
+        target.drawText(keeps + " stay in the book whatever you do", rx, pageTop + 56,
+                HUD_SMALL, HUD_DIM);
+        target.drawText(tallied == 0
+                        ? "Nothing to stamp yet — go and find something"
+                        : "A fresh page makes every one of them worth points again",
+                rx, pageTop + 38, HUD_SMALL, tallied == 0 ? HUD_WARN : HUD_ACCENT);
+
+        int[] button = stampButton(box);
+        boolean over = overStamp(box);
+        boolean can = tallied > 0;
+        target.fillRect(button[0], button[1], button[2], button[3],
+                !can ? new Color(30, 40, 34, 180)
+                        : over ? new Color(70, 130, 84, 220) : new Color(44, 78, 54, 200));
+        target.drawRect(button[0], button[1], button[2], button[3],
+                can ? HUD_ACCENT : new Color(80, 92, 82));
+        String stamp = "Stamp a fresh page";
+        target.drawText(stamp,
+                button[0] + (button[2] - target.textWidth(stamp, HUD_BOLD)) / 2,
+                button[1] + 28, HUD_BOLD, can ? HUD_INK : new Color(120, 132, 122));
+
+        String keys = "Click to buy · ↑↓ · Enter · C stamp · E close";
+        target.drawText(keys, x + w - target.textWidth(keys, HUD_SMALL) - 46, y + 32,
+                HUD_SMALL, HUD_DIM);
+    }
+
+    /** A line broken onto as many rows as it needs, at the panel's own width. */
+    private static List<String> wrapped(DrawTarget target, String text, int width) {
+        List<String> out = new ArrayList<>();
+        if (text == null || text.isBlank() || width <= 0) return out;
+        StringBuilder row = new StringBuilder();
+        for (String word : text.split(" ")) {
+            String candidate = row.length() == 0 ? word : row + " " + word;
+            if (target.textWidth(candidate, HUD_FONT) > width && row.length() > 0) {
+                out.add(row.toString());
+                row = new StringBuilder(word);
+            } else {
+                row = new StringBuilder(candidate);
+            }
+        }
+        if (row.length() > 0) out.add(row.toString());
+        return out;
+    }
+
     private void drawPaused(DrawTarget target) {
         int w = Math.min(460, viewportWidth - 80);
         int h = 220;
@@ -3475,6 +3879,11 @@ public class WatchScene extends AbstractScene {
      * empty list. For tests.
      */
     public String panelCursor() {
+        if (panel == Panel.SHOP) {
+            Shops.Shop shop = shopInReach();
+            if (shop == null || shop.stock().isEmpty()) return null;
+            return shop.stock().get(Math.min(shopIndex, shop.stock().size() - 1)).item();
+        }
         if (recipeColumn) {
             List<Recipes.Recipe> recipes = Recipes.all();
             return recipes.isEmpty() ? null

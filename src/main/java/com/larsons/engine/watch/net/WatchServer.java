@@ -429,6 +429,34 @@ public final class WatchServer implements WatchGame.Sink {
                 if (fish != null) {
                     bagChanged(id, "Landed a " + fish.name());
                     announceEntry(fish.key());
+                    // A fish is a sighting, so it may have paid — and unlike a
+                    // spot there is no `seen` message carrying the award for a
+                    // client to add up from. The ledger goes out instead.
+                    sendLedger();
+                }
+            }
+
+            case "buy" -> {
+                String line = game.buy(id, WatchJson.big(message, "s", 0),
+                        WatchJson.str(message, "k", ""));
+                if (line != null) {
+                    bagChanged(id, line);
+                    // The balance is the party's, so everybody is told — a
+                    // friend across the valley should see the points go down
+                    // when somebody spends them out of the shared book.
+                    sendLedger();
+                }
+            }
+
+            case "stamp" -> {
+                String line = game.stamp(id, WatchJson.big(message, "s", 0));
+                if (line != null) {
+                    conn.send(Protocol.encode(WatchProto.info(line)));
+                    // The one message a client cannot derive: a page has been
+                    // turned, and the tally that says what still scores is now
+                    // empty. FieldGuide.load replaces rather than merges it for
+                    // exactly this.
+                    sendLedger();
                 }
             }
 
@@ -465,6 +493,18 @@ public final class WatchServer implements WatchGame.Sink {
         Map<String, Object> entries = new java.util.LinkedHashMap<>();
         entries.put("entries", java.util.List.of(sighting.toMap()));
         toAll(WatchProto.guide(entries));
+    }
+
+    /**
+     * Tell everybody what the book's ledger now says.
+     *
+     * <p>Three numbers and the open page, and no entries at all — which is the
+     * whole reason {@code FieldGuide.ledger} exists separately from
+     * {@code toMap}. A party four hundred species into a walk should not be sent
+     * four hundred rows to be told that somebody bought a plank.
+     */
+    private void sendLedger() {
+        toAll(WatchProto.guide(game.guide().ledger()));
     }
 
     /** Push a player's satchel back to them, and optionally say what changed. */

@@ -78,9 +78,13 @@ public final class Litter {
     private final long seed;
     private final TerrainField field;
 
+    /** Where the trading posts are, for {@link Flora}'s reason and its comment. */
+    private final Shops shops;
+
     public Litter(long seed, TerrainField field) {
         this.seed = seed;
         this.field = field;
+        this.shops = new Shops(seed);
     }
 
     /**
@@ -100,6 +104,8 @@ public final class Litter {
         if (field.waterDepth(z) > 0) return null;
         double slope = ground.slopeAt(px, py);
         if (slope > MAX_SLOPE) return null;
+        // A trading post's yard is swept. Somebody lives here.
+        if (shops.clearingAt(field, px, py)) return null;
 
         WatchBiome biome = ground.biomeAt(px, py);
         String key = keyFor(h, biome, px, py, z, slope);

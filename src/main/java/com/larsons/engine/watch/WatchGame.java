@@ -191,6 +191,18 @@ public final class WatchGame implements Animal.Surroundings {
     private final Weather weather;
     private final Boats boats;
 
+    /**
+     * The trading posts.
+     *
+     * <p>Held so that the rules can be checked against them — where a post is,
+     * what it sells and for how much are all functions of the seed, so this
+     * object holds no state and nothing about it is ever saved or sent. It
+     * exists here for the same reason {@link Boats} does: a client asks its own
+     * copy the same questions and gets the same answers, and the host is the one
+     * that decides whether the money actually changed hands.
+     */
+    private final Shops shops;
+
     private Sink sink;
     private long nextAnimalId = 1;
     private long nextLureId = 1;
@@ -212,6 +224,7 @@ public final class WatchGame implements Animal.Surroundings {
         this.rng = new Random(config.seed() ^ 0x5EED);
         this.weather = new Weather(config.seed());
         this.boats = new Boats(config.seed());
+        this.shops = new Shops(config.seed());
     }
 
     /** Where messages go; may be replaced when a solo game becomes a hosted one. */
@@ -256,6 +269,9 @@ public final class WatchGame implements Animal.Surroundings {
 
     /** The boats — where they were found, and where they have been left. */
     public Boats boats() { return boats; }
+
+    /** The trading posts, so a client can ask the same questions. */
+    public Shops shops() { return shops; }
 
     /** The party. */
     public synchronized List<WatchPlayer> players() { return List.copyOf(players.values()); }
@@ -533,13 +549,21 @@ public final class WatchGame implements Animal.Surroundings {
         Sighting sighting = new Sighting(def.key(), System.currentTimeMillis(),
                 clock.timeOfDay(), biome.key(), player.name(), animal.x(), animal.y(),
                 !guide.seen(def.key()));
+        // Asked before recording, because recording is what spends it: this is
+        // what the sighting is worth on the page that is currently open, which
+        // is the rarity for anything not yet on it and nothing for anything
+        // that is. See FieldGuide.
+        int worth = guide.award(def.key());
         boolean discovery = guide.record(sighting);
 
         Spotlight light = Spotlight.of(animal.id(), def.key(), player.name(),
-                animal.x(), animal.y(), animal.z(), discovery);
+                animal.x(), animal.y(), animal.z(), discovery, worth);
         spotlights.add(light);
         if (discovery) {
             say(player.name() + " found a " + def.name() + " — new for the guide!");
+        } else if (worth > 0) {
+            say(player.name() + " logged a " + def.name() + " — " + worth
+                    + (worth == 1 ? " point" : " points"));
         }
         return light;
     }
@@ -613,6 +637,16 @@ public final class WatchGame implements Animal.Surroundings {
                     boat.x(), boat.y(), boat.z() + 0.4, 1.6);
         }
 
+        // A counter somebody is standing at. Above the litter for the same
+        // reason the oars are: a pebble at your feet must not stop you talking
+        // to the person in front of you.
+        Shops.Shop shop = shops.atCounter(field, player.x(), player.y());
+        if (shop != null) {
+            return new Pickable(Pickable.Kind.SHOP, String.valueOf(shop.id()),
+                    shop.title(), shop.counterX(), shop.counterY(),
+                    shop.z() + Shops.COUNTER_TOP + 0.25, 0.5);
+        }
+
         // Last, because everything above it is something somebody put there or
         // grew, and a stone on the shingle must not stop you taking the oars.
         Litter.Piece piece = nearestLitter(player.x(), player.y());
@@ -669,6 +703,17 @@ public final class WatchGame implements Animal.Surroundings {
             FEEDER("Top up"),
             /** A boat, drawn up on the shore. */
             BOAT("Take the oars"),
+            /**
+             * A trading post's counter. See {@link Shops}.
+             *
+             * <p>The one kind whose verb is not a thing the <em>host</em> does:
+             * pressing the key opens a panel, and what the host is asked for
+             * comes afterwards, one purchase at a time. It is in this list all
+             * the same, because being in this list is what puts a ring round it
+             * and a line under the crosshair, and a shop you cannot tell you are
+             * standing at is a shop nobody finds twice.
+             */
+            SHOP("Trade at"),
             /** Something lying on the ground. See {@link Litter}. */
             GROUND("Pick up");
 
@@ -884,7 +929,92 @@ public final class WatchGame implements Animal.Surroundings {
                         : "Nothing left to put in it";
             }
             case BOAT -> useBoat(playerId);
+            case SHOP -> {
+                // Trading is a panel, and a panel is the client's business — see
+                // the note on Kind.SHOP. What the host can usefully answer is
+                // who is standing there, so a press that reaches it at all is
+                // the keeper saying hello rather than silence.
+                Shops.Shop shop = shopAt(playerId);
+                yield shop == null ? null
+                        : shop.keeper().name() + ": " + shop.keeper().greeting();
+            }
         };
+    }
+
+    // --- trading ---------------------------------------------------------------------
+
+    /**
+     * The post whose counter a player is standing at, or {@code null}.
+     *
+     * <p>Every trading rule goes through this, and that is deliberate: a
+     * purchase is only a purchase if the buyer is at the counter, and taking the
+     * shop's id from the request without checking would let a client three
+     * kilometres away buy a lens off a shop it had merely heard of. The id in
+     * the message is a <em>disambiguator</em>, not an address.
+     */
+    public synchronized Shops.Shop shopAt(int playerId) {
+        WatchPlayer player = players.get(playerId);
+        return player == null ? null : shops.atCounter(field, player.x(), player.y());
+    }
+
+    /**
+     * Buy something with points.
+     *
+     * <p><b>The guide pays, not the player</b>, because the guide is what
+     * earned it. Eight people keeping one book keep one balance out of it, in a
+     * game whose whole social mechanic is that a species one of them finds is
+     * filled in for everybody — a per-player purse would be the one thing in
+     * this game that was not shared, and it would make pointing a bird out to a
+     * friend cost you something.
+     *
+     * @param shopId which post, as the client understood it; a request naming a
+     *               post the player is not standing at is refused outright
+     * @return a line for the HUD, or {@code null} when nothing was bought
+     */
+    public synchronized String buy(int playerId, long shopId, String item) {
+        WatchPlayer player = players.get(playerId);
+        Shops.Shop shop = shopAt(playerId);
+        if (player == null || shop == null) return null;
+        if (shopId != 0 && shop.id() != shopId) return null;
+        Trading.Offer offer = shop.offer(item);
+        if (offer == null) return null;
+        // The one cost in this game that a bottomless satchel cannot reach,
+        // because it is not paid out of a satchel. See Debug.Power.POINTS —
+        // this `if` is the whole of that feature, exactly as Debug's class note
+        // says a new power should be.
+        if (!player.debugging() && !guide.spend(offer.price())) {
+            return "Not enough points — " + offer.priceLine() + ", and the book has "
+                    + guide.points();
+        }
+        player.satchel().add(offer.item(), offer.quantity());
+        say(player.name() + " bought " + offer.label() + " at " + shop.sign());
+        return "Bought " + offer.label() + " for " + offer.priceLine();
+    }
+
+    /**
+     * Have a keeper stamp a fresh page: everything already seen counts again.
+     *
+     * <p>The other half of what a trading post is for, and the half the shelves
+     * exist to give a reason to. See {@link FieldGuide#stamp} for why a keeper
+     * will not stamp a blank one.
+     *
+     * @return a line for the HUD, or {@code null} when there is no keeper there
+     */
+    public synchronized String stamp(int playerId, long shopId) {
+        WatchPlayer player = players.get(playerId);
+        Shops.Shop shop = shopAt(playerId);
+        if (player == null || shop == null) return null;
+        if (shopId != 0 && shop.id() != shopId) return null;
+        FieldGuide.Page page = guide.stamp(shop.keeper().name(),
+                field.biomeAt(shop.x(), shop.y()).displayName(),
+                System.currentTimeMillis());
+        if (page == null) {
+            return shop.keeper().name() + ": \"Nothing on it yet. Come back with a "
+                    + "page worth stamping.\"";
+        }
+        say(shop.keeper().name() + " stamped " + player.name() + "'s guide — "
+                + page.describe());
+        return shop.keeper().stampLine();
     }
 
     private Lure nearestLureTo(int playerId) {
@@ -1135,11 +1265,15 @@ public final class WatchGame implements Animal.Surroundings {
         String item = Fishing.itemFor(fish);
         if (item != null) player.satchel().add(item, 1);
         WatchBiome biome = field.biomeAt(player.x(), player.y());
+        int worth = guide.award(fish.key());
         boolean discovery = guide.record(new Sighting(fish.key(),
                 System.currentTimeMillis(), clock.timeOfDay(), biome.key(),
                 player.name(), player.x(), player.y(), !guide.seen(fish.key())));
         if (discovery) {
             say(player.name() + " landed a " + fish.name() + " — new for the guide!");
+        } else if (worth > 0) {
+            say(player.name() + " landed a " + fish.name() + " — " + worth
+                    + (worth == 1 ? " point" : " points"));
         }
         return fish;
     }
