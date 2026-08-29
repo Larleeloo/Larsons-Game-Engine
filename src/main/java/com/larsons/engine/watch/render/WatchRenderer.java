@@ -191,15 +191,16 @@ public final class WatchRenderer {
         float[] verts = mesh.vertices();
         int[] colours = mesh.colours();
         int count = mesh.vertexCount();
+        double bias = mesh.sortBias();
         submitted += count / 3;
         for (int v = 0; v + 2 < count; v += 3) {
-            triangle(verts, colours, v, ox, oy, oz);
+            triangle(verts, colours, v, ox, oy, oz, bias);
         }
     }
 
     /** Project, cull, shade and queue one triangle. */
     private void triangle(float[] verts, int[] colours, int v,
-                          double ox, double oy, double oz) {
+                          double ox, double oy, double oz, double bias) {
         int at = v * Mesh.FLOATS_PER_VERTEX;
         double near = 0;
         for (int i = 0; i < 3; i++) {
@@ -261,8 +262,12 @@ public final class WatchRenderer {
 
         corners[queued] = (byte) n;
         colour[queued] = fogged(colours[v], depth);
-        long key = ((long) Math.min((1L << 40) - 1, (long) (depth * DEPTH_UNITS)) << INDEX_BITS)
-                | (queued & INDEX_MASK);
+        // The true depth decides the colour, the fog and the culling above; only
+        // the order this is painted in is biased, and only for a mesh that asked
+        // to be. See Mesh.sortBias.
+        double sortDepth = bias <= 0 ? depth : Math.max(EyeCamera.NEAR, depth - bias);
+        long key = ((long) Math.min((1L << 40) - 1, (long) (sortDepth * DEPTH_UNITS))
+                << INDEX_BITS) | (queued & INDEX_MASK);
         order[queued] = key;
         queued++;
     }

@@ -39,6 +39,7 @@ public final class Mesh {
     private final boolean translucent;
     private final float minX, minY, minZ, maxX, maxY, maxZ;
     private final int revision;
+    private final double sortBias;
 
     private Mesh(Builder b) {
         this.vertexCount = b.count;
@@ -51,6 +52,7 @@ public final class Mesh {
         this.minX = b.minX; this.minY = b.minY; this.minZ = b.minZ;
         this.maxX = b.maxX; this.maxY = b.maxY; this.maxZ = b.maxZ;
         this.revision = b.revision;
+        this.sortBias = b.sortBias;
     }
 
     /** A mesh with nothing in it, at an origin. Never uploaded, never drawn. */
@@ -85,6 +87,33 @@ public final class Mesh {
 
     /** Whether this has to be drawn after everything opaque, back to front. */
     public boolean translucent() { return translucent; }
+
+    /**
+     * How far toward the eye this mesh's triangles are <em>sorted</em>, in
+     * metres — <b>a decal bias, and it moves nothing.</b>
+     *
+     * <p>Only the painter path reads it, and only for the depth key it sorts
+     * on: the geometry, the fog and the culling all use the true depth. It
+     * exists because a painter's algorithm has no way to say "this lies on
+     * that". A track quad a hand's breadth above the ground is inside a terrain
+     * triangle two metres across, and the triangle is sorted by the depth of
+     * its <em>middle</em> — so a decal on the far half of one sorts behind it
+     * and is painted over, and a trail across open ground comes out as dashes
+     * on the grid the ground happens to be meshed at.
+     *
+     * <p>The bias is therefore about half a ground quad, which is what it takes
+     * to put a decal reliably in front of whatever it is lying on. The cost is
+     * paid in the same currency: something standing on the ground <em>nearer</em>
+     * than the decal by less than the bias — a blade of grass beside the path —
+     * is painted under it rather than over it. At the alpha a track is drawn
+     * with that is a faint tint on a few blades, which is a much smaller lie
+     * than half the trail being missing.
+     *
+     * <p>A card needs none of this: the depth buffer compares fragments rather
+     * than centroids, and {@code GlMeshPass} draws the translucent layer after
+     * the opaque one with depth writes off. See {@code WatchRenderer.triangle}.
+     */
+    public double sortBias() { return sortBias; }
 
     /**
      * Which build of its source this mesh is. A backend that has uploaded a
@@ -136,6 +165,7 @@ public final class Mesh {
         private final double originX, originY, originZ;
         private final boolean translucent;
         private final int revision;
+        private double sortBias;
         private float minX = Float.MAX_VALUE, minY = Float.MAX_VALUE, minZ = Float.MAX_VALUE;
         private float maxX = -Float.MAX_VALUE, maxY = -Float.MAX_VALUE, maxZ = -Float.MAX_VALUE;
 
@@ -145,6 +175,12 @@ public final class Mesh {
             this.originZ = oz;
             this.translucent = translucent;
             this.revision = revision;
+        }
+
+        /** Sort this mesh's triangles as if they were nearer. See {@link #sortBias()}. */
+        public Builder sortBias(double metres) {
+            this.sortBias = Math.max(0, metres);
+            return this;
         }
 
         /** How many triangles have been added so far. */

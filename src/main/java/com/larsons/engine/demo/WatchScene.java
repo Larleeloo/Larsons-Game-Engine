@@ -43,11 +43,13 @@ import com.larsons.engine.watch.render.Mesh;
 import com.larsons.engine.watch.render.RowStroke;
 import com.larsons.engine.watch.render.Shapes;
 import com.larsons.engine.watch.render.ShopModel;
+import com.larsons.engine.watch.render.TrackMesher;
 import com.larsons.engine.watch.render.WalkerModel;
 import com.larsons.engine.watch.render.WatchRenderer;
 import com.larsons.engine.watch.world.ChunkStreamer;
 import com.larsons.engine.watch.world.Flora;
 import com.larsons.engine.watch.world.TerrainField;
+import com.larsons.engine.watch.world.TrackField;
 import com.larsons.engine.watch.world.TreeInstance;
 import com.larsons.engine.watch.world.WatchBiome;
 import com.larsons.engine.watch.world.WatchChunk;
@@ -183,6 +185,46 @@ public class WatchScene extends AbstractScene {
     private static final double LITTER_RESTEP = 4;
 
     /**
+     * How far off the party's own trodden tracks are still drawn, in metres —
+     * on a card, and on a machine drawing through Java2D.
+     *
+     * <p>A track is two triangles per stride and the party lays a stride every
+     * {@link TrackField#STRIDE} metres, so what this range costs is not a
+     * property of the world but of how much walking has been done inside it.
+     * The pathological case is a party that has spent the last ten minutes
+     * circling one clearing, which at eight walkers is a few thousand quads —
+     * trivial on a card and most of a painter's frame, so the painter is given
+     * a ring it cannot be surprised inside.
+     *
+     * <p>The painter's ring is also inside the one chunk it meshes at full
+     * detail, which is not a coincidence: a decal is sorted in front of the
+     * ground it lies on by {@link TrackMesher#SORT_BIAS}, and that number was
+     * chosen against a two-metre ground quad. Out where the ground is meshed
+     * coarser the bias would be too small to work, so the painter simply does
+     * not draw tracks out there.
+     */
+    private static final double TRACK_RANGE_GPU = 120;
+
+    private static final double TRACK_RANGE_PAINTER = 30;
+
+    /**
+     * How far the player walks, and how long they stand still, before the track
+     * sheet is rebuilt — metres, and seconds.
+     *
+     * <p><b>Not per frame</b>, on the same reasoning as the litter sweep. The
+     * sheet is thousands of quads whose corners each cost a bilinear read of
+     * the heightfield, and almost nothing about it changes between two frames a
+     * sixtieth of a second apart: a track fades over ten minutes, so four
+     * rebuilds a second is two and a half thousand steps of a fade nobody can
+     * see one step of. It also means a card re-uploads the buffer four times a
+     * second rather than sixty — see {@link Mesh#revision()}, which is what
+     * decides that.
+     */
+    private static final double TRACK_RESTEP = 3;
+
+    private static final double TRACK_REFRESH = 0.25;
+
+    /**
      * How far off a trading post is drawn at all, and the three ranges inside
      * that at which it gains its detail, in metres.
      *
@@ -231,6 +273,8 @@ public class WatchScene extends AbstractScene {
 
     private static final long VIEW_MODEL_KEY = Long.MIN_VALUE + 1;
 
+    private static final long TRACKS_KEY = Long.MIN_VALUE + 2;
+
     /** Which overlay is up, if any. */
     private enum Panel { NONE, SATCHEL, BUILD, SHOP, PAUSED }
 
@@ -272,6 +316,35 @@ public class WatchScene extends AbstractScene {
     private final List<Litter.Piece> litterNearby = new ArrayList<>();
 
     private double litterFromX = Double.NaN, litterFromY;
+
+    /**
+     * The last ten minutes of where the party put its feet.
+     *
+     * <p><b>The screen's, not the host's.</b> Nothing about a trodden track is
+     * on the wire and nothing needs to be: every walker's position is already
+     * in every snapshot, so this side watches the same feet the host does and
+     * reaches the same trail without being told it. See {@link TrackField},
+     * which is where that bargain and what it costs are written down.
+     */
+    private final TrackField tracks = new TrackField();
+
+    /**
+     * That record as triangles, and the state that decides when to rebuild it.
+     *
+     * <p>Held between rebuilds rather than rebuilt per frame, and the <em>same
+     * object</em> is resubmitted: a backend caches by {@link Mesh#revision()}
+     * and by origin, so handing it back an unchanged mesh is what makes this
+     * cost one upload every {@link #TRACK_REFRESH} seconds instead of one a
+     * frame. See {@link #trackMesh()}.
+     */
+    private Mesh trackMesh = Mesh.empty(0, 0, 0);
+
+    private int trackRevision;
+
+    private double trackFromX = Double.NaN, trackFromY, trackAge;
+
+    /** Whichever of the two track ranges the backend turned out to afford. */
+    private double trackRange = TRACK_RANGE_PAINTER;
 
     private final EyeCamera eye = new EyeCamera();
     private final WatchRenderer renderer = new WatchRenderer();
@@ -526,6 +599,9 @@ public class WatchScene extends AbstractScene {
     /** The streamer keeping the world loaded, or {@code null} before entry. */
     public ChunkStreamer streamer() { return streamer; }
 
+    /** Where the party has walked in the last ten minutes. */
+    public TrackField tracks() { return tracks; }
+
     @Override
     public void onEnter() {
         panel = Panel.NONE;
@@ -570,6 +646,14 @@ public class WatchScene extends AbstractScene {
         litterGround = Flora.ground(streamer.field());
         litterNearby.clear();
         litterFromX = Double.NaN;
+        // A walk starts with untrodden ground. Tracks are the one thing here
+        // that is neither generated from the seed nor sent by the host, so
+        // there is nowhere for the last world's to have come from and nowhere
+        // for them to go — they are cleared with the screen that owns them.
+        tracks.clear();
+        trackMesh = Mesh.empty(0, 0, 0);
+        trackFromX = Double.NaN;
+        trackAge = TRACK_REFRESH;
         applyDistanceSettings();
 
         WatchView.Walker me = session.view().self();
@@ -617,6 +701,8 @@ public class WatchScene extends AbstractScene {
         int radius = (int) Math.round((gpu ? 16 : 6) * scale);
         litterRange = gpu ? LITTER_RANGE_GPU : LITTER_RANGE_PAINTER;
         litterFromX = Double.NaN;
+        trackRange = gpu ? TRACK_RANGE_GPU : TRACK_RANGE_PAINTER;
+        trackFromX = Double.NaN;
         streamer.setViewRadius(gpu ? radius : Math.min(6, radius));
         streamer.setDetailRadius(gpu ? 4 : 1);
         streamer.setGrassRadius(gpu ? 3 : 1);
@@ -647,6 +733,13 @@ public class WatchScene extends AbstractScene {
         // closed.
         animClock += dt;
         lastStep = dt;
+        // Here for the same reason, and it is the half of tracks that has to be:
+        // the wood keeps taking a path back while somebody reads a recipe, so a
+        // satchel left open for a quarter of an hour is a satchel that closes on
+        // ground with nothing on it. Laying prints is in the walking half below,
+        // because nobody walks anywhere with a panel up.
+        tracks.advance(dt);
+        trackAge += dt;
 
         // Before the panel branch, so the code can be typed anywhere in the
         // walk — including on the satchel screen, which is exactly where
@@ -734,6 +827,7 @@ public class WatchScene extends AbstractScene {
         aimGlass();
         streamer.update(px, py, dt);
         sweepLitter();
+        treadTracks();
         saveTimer += dt;
         if (saveTimer >= AUTOSAVE_INTERVAL) {
             saveTimer = 0;
@@ -758,6 +852,71 @@ public class WatchScene extends AbstractScene {
         // sweeps was already in the list rather than popping into existence.
         litterNearby.addAll(litter.near(litterGround, px, py,
                 litterRange + LITTER_RESTEP));
+    }
+
+    /**
+     * Put the party's feet on the ground — one print per walker per frame, and
+     * the field decides which of them are strides.
+     *
+     * <p><b>Everybody, and not only this player.</b> A trail somebody else left
+     * is worth more than your own: it is how a party that split up at the lake
+     * finds each other again, and it is the answer to "which way did they go"
+     * without anybody having to type it. The positions are already in the
+     * snapshot, so drawing them costs nothing but this loop.
+     *
+     * <p>Three ways of being somewhere leave nothing behind, and all three are
+     * refused here rather than in {@link TrackField}: a boat, because oars do
+     * not tread; the water, because a footprint under a lake is not a thing;
+     * and the air, because a jump marks where it lands and not where it passed
+     * over. This player's own state is read from the walk rather than from the
+     * last snapshot of it, for the same reason their body is drawn from it —
+     * their own feet are the ones that must not lag.
+     */
+    private void treadTracks() {
+        WatchView view = view();
+        if (view == null || streamer == null) return;
+        WatchView.Walker self = view.self();
+        for (WatchView.Walker walker : view.walkers()) {
+            // Everybody but us, and — until the welcome has arrived and we know
+            // which of these rows is ours — everybody including us, from the
+            // snapshot. Which is right: before we know who we are, our own feet
+            // are just another walker's, and doing it twice is what would leave
+            // two trails down one path.
+            if (self != null && walker.id() == self.id()) continue;
+            if (walker.inBoat() || walker.submerged()) continue;
+            tread(walker.id(), walker.x(), walker.y());
+        }
+        if (self != null && !self.inBoat() && !airborne && dive <= SUBMERGED_MARGIN) {
+            tread(self.id(), px, py);
+        }
+    }
+
+    /** One walker, if the ground under them is ground rather than lake. */
+    private void tread(int walkerId, double x, double y) {
+        if (streamer.groundAt(x, y) <= TerrainField.WATER_LEVEL) return;
+        tracks.note(walkerId, x, y);
+    }
+
+    /**
+     * The party's tracks as triangles, rebuilt when they have gone stale.
+     *
+     * <p>Stale means one of two things, and both of them matter: the player has
+     * walked {@link #TRACK_RESTEP} metres, so there is ground in range that was
+     * not in range before — or {@link #TRACK_REFRESH} seconds have passed
+     * standing still, which is what advances the fade and adds the strides just
+     * taken. Between those the previous mesh is handed back unchanged, which is
+     * what a backend needs to see to leave its buffer alone.
+     */
+    private Mesh trackMesh() {
+        boolean moved = Double.isNaN(trackFromX)
+                || Math.hypot(px - trackFromX, py - trackFromY) >= TRACK_RESTEP;
+        if (!moved && trackAge < TRACK_REFRESH) return trackMesh;
+        trackFromX = px;
+        trackFromY = py;
+        trackAge = 0;
+        trackMesh = TrackMesher.tracks(tracks, streamer, px, py, trackRange,
+                ++trackRevision);
+        return trackMesh;
     }
 
     /**
@@ -2242,6 +2401,13 @@ public class WatchScene extends AbstractScene {
             renderer.submit(chunk.grassMesh(), key * 4 + 2);
             renderer.submit(chunk.waterMesh(), key * 4 + 3);
         }
+        // The party's own tracks, laid over whatever ground the chunks just put
+        // down — and drawn after it on both paths, by the sort bias on the
+        // painter and by the translucent layer on a card. Neither of those is
+        // about the order they are submitted in: a decal that sorts under the
+        // thing it is a decal on is not drawn at all, and half of one is worse
+        // than none. See TrackMesher.SORT_BIAS for what that costs.
+        renderer.submit(trackMesh(), TRACKS_KEY);
         renderer.flush(target);
 
         drawWeatherOverlay(target, weather);
@@ -2961,6 +3127,9 @@ public class WatchScene extends AbstractScene {
                 + renderer.culledTriangles() + " culled");
         lines.add("alive  " + view.creatures().size() + " animals · "
                 + view.lures().size() + " feeders · " + view.walkers().size() + " walking");
+        lines.add("tracks  " + tracks.prints() + " prints · " + tracks.trailCount()
+                + " trails · " + trackMesh.triangleCount() + " tri · "
+                + Math.round(tracks.strengthAt(px, py) * 100) + "% underfoot");
         lines.add("glass  " + (glass.up()
                 ? "×" + Math.round(glass.power()) + " · " + Math.round(glass.range()) + " m"
                 : "down"));
