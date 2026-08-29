@@ -171,6 +171,46 @@ this one number. In multiplayer the *server's* clock is authoritative and rides
 along in every snapshot, so a session spread over three time zones shares one
 sunset. A test asserts the mapping in both directions.
 
+### 2.7 Trodden tracks (`watch/world/TrackField`, `watch/render/TrackMesher`)
+
+The other kind of path, and deliberately not the same mechanism as §2.3. A
+trail is a fact about *position* and is generated; a **track** is a fact about
+*history* and cannot be. It is the only thing in this world that is neither
+derived from the seed nor sent over the wire.
+
+Walking lays a **print** every `STRIDE` (1.4 m) into a per-walker chain; two
+consecutive prints make a *segment* only if they are within `MAX_GAP` (6 m) of
+each other, which is the single rule that stops a line being drawn across a lake
+somebody rowed. A segment holds full strength for the first third of its life
+and then eases to nothing at **ten minutes**, so the path you are standing on
+reads as a path and the wood takes it back within the hour. Because the record
+is proportional to *distance walked* rather than to time spent, standing in a
+clearing costs nothing at all.
+
+**It is drawn on the ground and never cut into it.** The heightfield is what
+eight machines agree about without exchanging a byte, and a decoration is not
+allowed to be the thing that gives that up — nor to force a re-mesh of whatever
+chunk somebody is standing in every few strides. So `TrackMesher` lays a
+translucent sheet 9 cm over the ground in the biome's own trail material, meshed
+as one bending strip per walker (shared cross-sections, so a turn bends rather
+than leaving a wedge on the outside of it). Two walkers *do* overlap, and are
+meant to: alpha composites, so ground two people crossed comes out darker than
+ground one did, for free.
+
+**Nothing about it travels.** Every walker's position is already in every
+snapshot, twenty times a second, so both ends watch the same feet and each keeps
+its own copy of where they went — the same bargain the boats and the shops
+strike from the other direction. The cost is honest and bounded: somebody who
+joins halfway through sees the last ten minutes fill in rather than arrive.
+
+One renderer change came with it. A painter's algorithm has no way to say *this
+lies on that* — a decal on the far half of a two-metre ground triangle sorts
+behind the triangle's own midpoint and is painted over, so a trail across open
+country comes out as dashes on the grid the ground happens to be meshed at.
+`Mesh.sortBias()` pulls a mesh toward the eye **for the sort key only**; the
+geometry, the fog and the culling all keep the true depth. A card needs none of
+it, because a depth buffer compares fragments rather than centroids.
+
 ---
 
 ## 3. The animals
@@ -525,6 +565,7 @@ party spread across the map costs what it should.
 | Grass of varying length | `GrassField`, `WatchBiome.grassMin/grassMax` |
 | 3D animals from Blockbench + placeholders | `watch/life/Blockbench`, `AnimalModel`, `resources/watch/models/README.md` |
 | Trails | `watch/world/TrailNetwork` |
+| Temporary tracking trails that follow players | `watch/world/TrackField`, `watch/render/TrackMesher` |
 | 17+ biomes, incl. the seven named | `watch/world/WatchBiomes` (20) |
 | Luring: fishing, berries, seeds, cooking | `watch/Fishing`, `Forage`, `Cultivation`, `Recipes`, `Lure` |
 | Tree cross-pollination | `Grove.pollinate`, `TreeSpecies.hybrid` |
@@ -1272,6 +1313,98 @@ lens does not write.
 
 ---
 
+## 7g. Tracks you leave behind
+
+> Asked for: temporary tracking trails that follow players — a slight pathway
+> created by players walking over terrain, lasting ten minutes.
+
+### Why this could not be the trail system
+
+`TrailNetwork` already draws paths through the wood, and reusing it was the
+first idea and the wrong one. Everything that makes it work is that it is a
+**pure function of position and seed**: two players a kilometre apart agree
+about a path neither has mentioned, a chunk can be thrown away and rebuilt
+byte-identical an hour later, and the terrain field can afford to ask it a
+question at every vertex it generates. None of that survives contact with a
+path that depends on *where somebody has been*.
+
+So this is a second mechanism that shares nothing with the first but the word.
+`TrailNetwork` cuts the ground; `TrackField` only records feet, and
+`TrackMesher` only shades it.
+
+### The ground does not move
+
+The tempting implementation is to press the terrain down where somebody walked.
+It fails twice over, and both are structural rather than a matter of tuning:
+
+* **It is what makes the world shared.** `TerrainField.heightAt` has no memory
+  by construction — that is the sentence the whole generator is written under.
+  A height that depended on history would have to travel, and a world with no
+  edge cannot send its own shape.
+* **It costs the frame it would take.** A chunk is 289 height samples, its
+  materials, its slopes, its flora and its grass. Re-generating whichever one a
+  player is standing in every 1.4 m of walking is the most expensive thing this
+  game can be asked to do, and a party of eight would be asking for eight of
+  them at once.
+
+A decal has neither problem, and it is also the more honest picture: what a
+walker leaves on a hillside after ten minutes is a mark on it, not a trench.
+
+### The three numbers
+
+| | |
+|---|---|
+| **ten minutes** (`LIFETIME`) | the ask. Against this game's clock it is ten minutes of the world as well, because `WatchClock` *is* the wall clock — there is no scale factor to get wrong |
+| **a third of it at full** (`HOLD`) | a track that starts fading the instant it is laid is palest where you have most recently been, which is backwards, and reads as a rendering fault rather than as weather |
+| **40 % alpha** (`FRESH_ALPHA`) | "slight", as asked. Because two passes composite, the way to make a much-used route look much-used is to keep one pass faint and let the arithmetic do the rest: one crossing is something you notice when you look for it, four are unmistakable |
+
+### Three ways of being somewhere that leave nothing
+
+Refused by the scene rather than by the field, because they are facts about how
+somebody is moving rather than about the record: **a boat** (oars do not tread),
+**the water** (a footprint under a lake is not a thing), and **the air** (a jump
+marks where it lands, not what it passed over). Everything else is a stride, and
+the field decides which strides are far enough apart to be prints.
+
+The fourth case is not refused anywhere and does not need to be: two positions
+more than `MAX_GAP` apart are a *hole* in the record rather than a stride, so a
+boat crossing, a save reopened, a party member first appearing in the snapshot
+and a client that dropped a frame all read the same way — as a break in the
+chain, not as a kilometre of trail nobody made.
+
+### The painter needed something new, and it is one line
+
+Everything else in this game sorts by depth and comes out right. A decal does
+not: it is *inside* the triangle it is drawn on, and the painter sorts triangles
+by their middles. A track on the near half of a ground quad is drawn after it
+and shows; a track on the far half is drawn before it and does not — so half the
+trail is missing, in stripes, on the grid the ground happens to be meshed at.
+Counting the pixels one frame's trail actually reaches, over a walk through a
+bamboo thicket: **27 742** at no bias and broken into disconnected blocks,
+48 219 at 0.8 m and whole with notches in it, **53 674** at 1.6 m and whole.
+
+`Mesh.sortBias()` is the fix and is deliberately as small as it can be: a
+number of metres that the painter subtracts **from the sort key alone**. The
+colour, the fog and the culling all keep the true depth, and the GPU path
+ignores it entirely because a depth buffer already compares the right thing. The
+cost is stated where the field is: something standing on the same ground
+*nearer* than the decal by less than the bias — a blade of grass beside the path
+— is painted under it rather than over it. At 40 % alpha that is a faint tint on
+a few blades, against half the trail being invisible.
+
+### Rebuilt four times a second, not sixty
+
+The sheet is thousands of quads whose corners each cost a bilinear read of the
+heightfield, and almost nothing about it changes between two frames: it fades
+over ten minutes. So it is rebuilt when the player has walked `TRACK_RESTEP`
+metres or `TRACK_REFRESH` seconds have passed, and the *same mesh object* is
+handed back in between — which is what makes a card re-upload the buffer four
+times a second rather than sixty, since `Mesh.revision()` is what it keys that
+decision on. It is the same arrangement, and the same reasoning, as the litter
+sweep beside it.
+
+---
+
 ## 8. Tests
 
 `src/test/java/com/larsons/engine/watch/`
@@ -1443,3 +1576,21 @@ lens does not write.
   where the point is what does *not* travel — no message names a shop's
   position, its keeper or its shelf, and a buy and a stamp still move both
   players' satchels and both players' books.
+* `TrackFieldTest` — three claims, in order. **It is made by walking**: standing
+  in one place for a minute writes one print and draws nothing, sixty metres of
+  walking comes out as prints a stride apart, and the path is under the line
+  that was walked and not beside it. **It is temporary**: a fresh track is
+  strong, a nine-minute-old one is faint and still there, and at ten minutes
+  both the path and the prints behind it are gone — with the fade asserted to
+  hold at full first and to fall monotonically afterwards. **It is drawn on the
+  ground**: every corner of the meshed sheet sits `TrackMesher.LIFT` above the
+  ground under *that corner*, which is both what makes a path follow a hillside
+  and the proof the mesh's origin is being subtracted the way the renderer adds
+  it back; every triangle faces the sky, the mesh is translucent, and it carries
+  the sort bias without which the painter buries it. Then the cases that are not
+  footsteps — a nine-hundred-metre jump draws nothing between its ends and
+  walking resumes cleanly on the far side — the cap on one walker's record, and
+  ground two people crossed reading as more worn than ground one did. Finally
+  through the real `WatchScene`, because every remaining way this breaks is a
+  wiring fault: hold the forward key and the ground you started on is trodden
+  behind you, and start another walk and it is not.

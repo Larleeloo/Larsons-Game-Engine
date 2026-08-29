@@ -3061,6 +3061,18 @@ fit, which is what gives sharp biome borders over ground that never steps.
   under your feet without pretending to flatten a mountain. Measured, a tread
   is about a fifth less curvature and a few percent gentler than the country
   it crosses.
+- **Tracks you leave behind**
+  ([`TrackField`](src/main/java/com/larsons/engine/watch/world/TrackField.java)) —
+  the other kind of path. Walking wears a faint pathway into the ground behind
+  you, and behind everybody else in the party, and the wood takes it back after
+  **ten minutes**. It is what answers "have I already swept this hollow", "which
+  way did they go" and "how do I get back to the lake", without any of them
+  being a map. Ground two people crossed comes out darker than ground one did,
+  so a route the party keeps using looks like one. It is drawn *on* the terrain
+  and never cut into it — the heightfield is what every machine agrees about
+  without being told, and a decoration does not get to break that — and nothing
+  about it travels: everybody's feet are already in every snapshot, so both ends
+  work out the same trail from the same stream.
 - **Grass of varying lengths**
   ([`GrassField`](src/main/java/com/larsons/engine/watch/world/GrassField.java)) —
   every biome has its own band, from cropped tundra to waist-high prairie, and
