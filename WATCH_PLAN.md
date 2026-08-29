@@ -913,6 +913,155 @@ aft, and blades sweeping aft are what push a boat along.
 
 ---
 
+## 7d. …and the swim
+
+> The third of the three ways to get about, and it had the same fault the row
+> did, for the same reason: **there was no swimming.**
+
+A player in the water was drawn as a standing walker, upright, legs striding at
+whatever speed they were making. Crossing a lake was somebody marching along
+the bottom of it with their head in the air; a dive was the same figure
+marching downwards; and the first-person hands were the walking ones on a
+slower clock, so what you saw from inside was a person striding along in front
+of your face while your body swam.
+
+### One angle, and everything else follows
+
+A swimmer is `WalkerModel.swimmer`: **the same figure as the walker, hung from
+its hips and tipped over**. Every joint stays at the proportion of the height
+it occupies when standing — the hips at 0.47, the neck at 0.86, the head at
+0.94 — so `swimPitch` of a right angle draws the standing pose exactly, and
+somebody wading out of their depth *tips* into a swim rather than cutting to a
+different model. Treading water and swimming are not two poses; they are one
+pose at two speeds, interpolated by `swimDrive`.
+
+The hips are the pivot, and that is load-bearing rather than arbitrary. The
+game floats a swimmer with their feet `FLOAT_DEPTH` under the surface, which is
+chest-deep for somebody upright — so a body laid down about its hips puts the
+head at the waterline and everything below the shoulders under it, without the
+model being told where the water is. Turned about the neck instead (which was
+tried first, and is in the history) the same swimmer floats with their whole
+chest in the air, swimming through the sky.
+
+Under water the body lies along the way they are looking, because under water
+that is the way they are travelling — `WatchScene.walk` already steers a
+submerged player by their pitch. At the surface it settles thirty degrees off
+horizontal instead: head and shoulders out, body trailing down behind, which is
+both what a breaststroker looks like and the only arrangement that keeps the
+body in the water given where the eye is.
+
+### Breaststroke, and why
+
+`watch/render/SwimStroke` is one stroke as five curves, written like
+`RowStroke` and meeting at their joins with matching slopes. It is breaststroke
+because this game's swimmer has to **breathe**: a player at the surface is one
+whose head is out and whose air is coming back, and a stroke that buries the
+face and turns it aside once a cycle contradicts the breath meter. It also
+reads at distance — both arms doing the same thing is a wide sweep and a narrow
+glide, where a front crawl at a hundred metres is two pixels flickering.
+
+Arms pull while the legs trail; legs kick while the arms recover; the head
+lifts to breathe on the pull and only when the head is actually out of the
+water. Both halves at once is the commonest way to draw a swimmer wrong and it
+looks like somebody falling downstairs.
+
+### Three things underneath it
+
+* **The cycle is clocked on distance through the water, not ground covered.**
+  A diver going straight down covers no ground at all, and clocked on ground
+  would hang motionless all the way to the bottom. `Gait.Cycle.SWIM` measures
+  in three dimensions; the other two stay on the flat, so a walker downhill is
+  not sprinting.
+* **It never stops.** Every other cycle in the game is still at a standstill,
+  because a walker who stops walking stands there. A swimmer who stops swimming
+  sinks, so `Gait.swimRate` has a floor under it and somebody treading water
+  sculls, gently, about a stroke every three and a half seconds.
+* **Who is swimming is worked out from the ground, not from the wire.** A
+  walker is swimming when their feet are off the bed in water deep enough to be
+  out of their depth — which is the distinction the game already makes, and the
+  only one that is right at both ends: wading in the shallows is walking, and
+  the moment the bed drops away it is not. The client generates the same terrain
+  the host does, so it can see the bed under anybody in the party without a byte
+  being sent about it.
+
+Two smaller things had to be fixed to draw it. `Shapes.strut` now takes the
+direction its cross-section is squared to, because a chest is wider than it is
+deep and a strut left to choose its own reference flips it on the way through
+vertical — which is exactly what a swimmer diving does. And a hat sits *on* a
+head rather than above it in world terms; for everybody standing up those are
+the same sentence, and for a prone swimmer the brim floated off the side of
+their head and followed them across the lake like a small yellow raft.
+
+---
+
+## 7e. Jumping, and the key it was hiding under
+
+> Asked for outright: a jump on Space, animated, with crouching moved off it.
+> The second half turns out to be why the first half was missing.
+
+### The key
+
+`GameAction.JUMP` is Space, in this engine and in every game that has ever had
+one — and the Field Guide read its **crouch** off it. A player who pressed the
+one key that means "jump" everywhere got a squat, and there was no way to bind
+a jump because the action that meant jumping was already spoken for. Crouching
+now has `GameAction.CROUCH` of its own, on Control, which was free across the
+whole enum. Both keys now do what their labels say, and the controls menu picks
+the new one up for free because it is built from the enum.
+
+It also fixes a comment that had been wrong since it was written. Swimming down
+was on **Sprint**, under a note explaining that crouch "is the key a player's
+hand is already reaching for when they want to go lower" — which it could not
+be, because crouch *was* jump and jump was already how you swim up. Sinking is
+now on the crouch key and Sprint is free.
+
+### The arc
+
+`JUMP_SPEED` and `GRAVITY` are chosen from the other end: eighty centimetres is
+a boulder or a fallen trunk, which is what there is to get on top of in this
+world, and two thirds of a second in the air is long enough to read as a jump
+and short enough not to interrupt a walk. There is no air control and no fall
+damage — this is still a game about looking at things.
+
+Walking off a ledge is deliberately *not* a fall: the ground under a walker is
+followed by an eased height (`STEP_SMOOTHING`), which is what stops a
+two-metre heightfield grid from jolting the camera at every sample, and a
+threshold that turned a steep slope into free-fall would fight it. You go
+airborne by jumping, and a jump off a cliff falls the whole way down.
+
+### The pose
+
+`WalkerModel.Leap` is three numbers — how far off the ground, how fast rising,
+how much of a landing is still being absorbed — and every one of them *blends*
+rather than switches. Legs tuck under on the way up and reach for the ground on
+the way down; arms go up with the push and come down and out with the fall; and
+the landing folds both knees while the feet stay planted, so the dip comes out
+of the same geometry that plants a walker's boots rather than out of a separate
+number pushing the body down. The camera dips with it.
+
+The plant itself is switched off with the ground it needs: hanging the body
+from its own lowest foot is right when there is a floor and turns a tuck into a
+squat when there is not.
+
+Nothing about jumping goes on the wire. A remote jump arrives as a `z` that
+went up and came down, and the ground under it is something every client
+generates for itself — so `Gait` derives the whole pose, landing included, from
+the position alone, the same way it derives swimming.
+
+### One latent bug, found by a test
+
+`JumpTest` sweeps the pose across a whole leap and asserts that no single step
+moves the figure much further than its neighbours — a discontinuity is not a
+large step, it is a step far larger than the ones either side. It found one, and
+not in the jump: **every limb in the game flipped its cross-section** as it
+swung through vertical, because `Shapes.strut` chooses its own reference axis
+and swaps it near the pole. Square limbs made it invisible, so it had been there
+through the walk, the row and the swim. All of them now square their limbs to
+the body's own across axis, which a limb swinging fore-and-aft can never be
+parallel to.
+
+---
+
 ## 8. Tests
 
 `src/test/java/com/larsons/engine/watch/`
@@ -1025,3 +1174,33 @@ aft, and blades sweeping aft are what push a boat along.
   primitive underneath it all: a strut is a closed box with every face wound
   outward, at three orientations including the degenerate vertical one, and a
   strut of no length is skipped rather than emitted with no normals.
+* `SwimCycleTest` — the same treatment for the swim. That the body lies down as
+  a swimmer sets off and stands back up when they stop, continuously in speed
+  and with no step in it anywhere; that a diver lies along their own course and
+  a surface swimmer never can, because the body has to stay in the water; that
+  floating still **is** the standing figure, within the depth of a boot sole,
+  which is what makes wading out of your depth one movement rather than a cut;
+  that a swimmer at the surface has their head out of the water and their legs
+  under it at every point of a stroke, and one treading water is in it to the
+  chest — both of which follow from `WatchScene.FLOAT_DEPTH`, which the test
+  reads rather than restates; that `swimEye` agrees with where the mesh
+  actually put the head, at every body angle; that the stroke never stops,
+  unlike every other cycle in the game, and that a diver going straight down is
+  clocked as swimming while a walker downhill is not; that the arms and the
+  legs take turns and neither jumps nor changes direction instantly; and that
+  the first-person hands sweep together and stay clear of the near plane.
+* `JumpTest` — mostly through the real scene, because the interesting claims
+  are about what a keypress does: Space is the jump key and something else is
+  the crouch key, neither collides with anything that moves, pressing Space
+  leaves the ground and gravity brings it back, leaning on the key does not
+  fly, Space no longer crouches and the crouch key does, and a jump taken from
+  a crouch stands up first. Then the pose: a grounded leap is the walk to the
+  last decimal, the feet tuck on the way up and reach on the way down, a
+  landing is absorbed by the knees rather than by moving the floor, and no part
+  of a leap has a cliff in it — measured against the sweep's own average step,
+  since parts of a jumping figure honestly travel a long way and only a step
+  far larger than its neighbours is a cut. Finally that a jump nobody sent is
+  rebuilt from the position alone, landing and all. The seed is *searched* for
+  rather than chosen: the first player joins at the world origin and a third of
+  this world is under water, so a fixed seed is a coin toss over whether the
+  test is about jumping or about swimming.

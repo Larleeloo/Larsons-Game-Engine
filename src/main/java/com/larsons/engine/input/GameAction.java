@@ -35,6 +35,21 @@ public enum GameAction {
             InputBinding.key(KeyEvent.VK_S), InputBinding.key(KeyEvent.VK_DOWN)),
     JUMP("jump", "Jump", Category.MOVEMENT, InputBinding.key(KeyEvent.VK_SPACE)),
     SPRINT("sprint", "Sprint", Category.MOVEMENT, InputBinding.key(KeyEvent.VK_SHIFT)),
+    /*
+     * Crouching, on the key every 3D game puts it on.
+     *
+     * It had no action of its own: the Field Guide, the one game in this engine
+     * that crouches, read it off JUMP — so its Space key stanced rather than
+     * jumped, and a player who pressed the jump key got a squat. Control is
+     * free across the whole enum, which is what asking the enum rather than
+     * guessing is for, and it leaves the two keys doing what their labels say.
+     *
+     * Not a modifier here. InputManager records a chord's modifiers only for
+     * the key that is *not* the modifier itself (see the pressedKey test in
+     * `capture`), so Control pressed on its own arrives as an ordinary key and
+     * binds like one.
+     */
+    CROUCH("crouch", "Crouch", Category.MOVEMENT, InputBinding.key(KeyEvent.VK_CONTROL)),
 
     // --- combat ------------------------------------------------------------------
     ATTACK("attack", "Attack / Mine / Shoot", Category.COMBAT,
@@ -218,9 +233,9 @@ public enum GameAction {
 
     // --- the field guide ------------------------------------------------------------------
     //
-    // Movement, looking and crouching are the engine's own MOVEMENT and CAMERA
-    // actions — walking is walking — so only the verbs this game invents are
-    // here. The one that matters is WATCH_SPOT: pointing at an animal is the
+    // Movement, looking, jumping and crouching are the engine's own MOVEMENT and
+    // CAMERA actions — walking is walking — so only the verbs this game invents
+    // are here. The one that matters is WATCH_SPOT: pointing at an animal is the
     // whole game, and it is bound to the left mouse button because that is what
     // "point at that" means everywhere else.
     WATCH_SPOT("watch_spot", "Spot / Point At Animal", Category.WATCH,
