@@ -113,7 +113,7 @@ class WalkCycleTest {
         double speed = WatchPlayer.WALK_SPEED;
         double sent = 0;
         // Settle first: the very first snapshot is placed rather than eased.
-        gaits.follow(7, 0, 0, 0, 0, Gait.Cycle.STRIDE, frameDt);
+        gaits.follow(7, 0, 0, 0, 0, Gait.Cycle.STRIDE, false, frameDt);
 
         double previous = 0;
         double largest = 0;
@@ -121,7 +121,7 @@ class WalkCycleTest {
         for (int frame = 1; frame <= 240; frame++) {
             // A new position every third frame, which is twenty a second.
             if (frame % 3 == 0) sent += snapshotStep;
-            Gait.Step step = gaits.follow(7, sent, 0, 0, 0, Gait.Cycle.STRIDE, frameDt);
+            Gait.Step step = gaits.follow(7, sent, 0, 0, 0, Gait.Cycle.STRIDE, false, frameDt);
             if (frame > 60) {
                 largest = Math.max(largest, Math.abs(step.x() - previous));
                 assertTrue(step.x() >= previous - 1e-9,
@@ -144,10 +144,10 @@ class WalkCycleTest {
         double frameDt = 1 / 60.0;
         double speed = 3.0;
         double sent = 0;
-        Gait.Step step = gaits.follow(3, 0, 0, 0, 0, Gait.Cycle.STRIDE, frameDt);
+        Gait.Step step = gaits.follow(3, 0, 0, 0, 0, Gait.Cycle.STRIDE, false, frameDt);
         for (int frame = 0; frame < 600; frame++) {
             sent += speed * frameDt;
-            step = gaits.follow(3, sent, 0, 0, 0, Gait.Cycle.STRIDE, frameDt);
+            step = gaits.follow(3, sent, 0, 0, 0, Gait.Cycle.STRIDE, false, frameDt);
         }
         assertEquals(speed, step.speed(), 0.05,
                 "the drawn speed does not settle on the real one");
@@ -157,8 +157,8 @@ class WalkCycleTest {
     @Test
     void aTeleportIsPlacedRatherThanGlidedAcrossTheCounty() {
         Gait gaits = new Gait();
-        gaits.follow(2, 0, 0, 0, 0, Gait.Cycle.STRIDE, 1 / 60.0);
-        Gait.Step step = gaits.follow(2, 900, 400, 0, 0, Gait.Cycle.STRIDE, 1 / 60.0);
+        gaits.follow(2, 0, 0, 0, 0, Gait.Cycle.STRIDE, false, 1 / 60.0);
+        Gait.Step step = gaits.follow(2, 900, 400, 0, 0, Gait.Cycle.STRIDE, false, 1 / 60.0);
         assertEquals(900, step.x(), 1e-9);
         assertEquals(400, step.y(), 1e-9);
         assertEquals(0, step.speed(), 1e-9,
@@ -178,8 +178,8 @@ class WalkCycleTest {
     @Test
     void theBoatAndItsRowerAreGivenTheSameAnswer() {
         Gait gaits = new Gait();
-        gaits.follow(4, 10, 0, 0, 1, Gait.Cycle.STROKE, 1 / 60.0);
-        Gait.Step first = gaits.follow(4, 12, 0, 0, 1, Gait.Cycle.STROKE, 1 / 60.0);
+        gaits.follow(4, 10, 0, 0, 1, Gait.Cycle.STROKE, false, 1 / 60.0);
+        Gait.Step first = gaits.follow(4, 12, 0, 0, 1, Gait.Cycle.STROKE, false, 1 / 60.0);
         Gait.Step again = gaits.at(4);
         assertEquals(first.x(), again.x(), 1e-12);
         assertEquals(first.phase(), again.phase(), 1e-12,
@@ -323,7 +323,8 @@ class WalkCycleTest {
 
     private static Mesh walkerAt(double phase, double speed) {
         Mesh.Builder mesh = Mesh.builder(0, 0, 0, false, 1);
-        WalkerModel.walker(mesh, 0, 0, 0, 0.7, false, phase, speed, 0x4A6B33);
+        WalkerModel.walker(mesh, 0, 0, 0, 0.7, false, phase, speed,
+                WalkerModel.Leap.GROUNDED, 0x4A6B33);
         return mesh.build();
     }
 

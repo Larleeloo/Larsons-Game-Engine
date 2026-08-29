@@ -111,6 +111,24 @@ public class WatchScene extends AbstractScene {
     private static final double SWIM_SPEED = 2.4;
 
     /**
+     * How fast a walker leaves the ground, in metres per second.
+     *
+     * <p>With {@link #GRAVITY}, a jump peaks at {@code v²/2g} — about eighty
+     * centimetres — and is in the air for {@code 2v/g}, about two thirds of a
+     * second. Both numbers are chosen from the other end: eighty centimetres is
+     * a boulder or a fallen trunk, which is what there is to get on top of in
+     * this world, and two thirds of a second is long enough to read as a jump
+     * and short enough not to interrupt a walk.
+     */
+    private static final double JUMP_SPEED = 4.6;
+
+    /** …and what pulls them back, in metres per second per second. */
+    private static final double GRAVITY = 13.5;
+
+    /** How far the eye dips at the bottom of a full landing, in metres. */
+    private static final double LANDING_DIP = 0.20;
+
+    /**
      * How far under the surface a floating swimmer's feet sit, in metres.
      *
      * <p>Chest-deep: {@link WalkerModel#HEIGHT} is 1.78 and the eye is at 1.68,
@@ -281,6 +299,34 @@ public class WatchScene extends AbstractScene {
     /** Whether the eyes are under the surface this frame. */
     private boolean submerged;
 
+    /** Whether both feet are off the ground, and how fast they are rising. */
+    private boolean airborne;
+
+    private double climb;
+
+    /**
+     * …and how much of that the <em>pose</em> has caught up with, eased.
+     *
+     * <p>{@link #airborne} is a fact and switches in a frame; a figure that
+     * switched with it would cut from a walk to a jump on the frame its feet
+     * left, which is the one thing every part of this animation is written to
+     * avoid. A tenth of a second of blend is what makes a take-off a take-off.
+     * {@code Gait} does exactly the same for everybody else, from the same
+     * constant, so the party's jumps all read alike.
+     */
+    private double airPose;
+
+    /**
+     * How much of a landing is still being absorbed, {@code 1} on touchdown
+     * down to {@code 0} standing.
+     *
+     * <p>A jump that ends the instant the feet touch is a figure that snaps
+     * from mid-air to standing in one frame, which reads as a dropped frame
+     * rather than as a landing. This is the third of a second afterwards that
+     * makes it a landing — the knees take the drop and give it back.
+     */
+    private double settle;
+
     /** How much air is left locally, so the meter is smooth between snapshots. */
     private double breath = 1;
 
@@ -446,6 +492,10 @@ public class WatchScene extends AbstractScene {
         swimPhase = 0;
         animSpeed = 0;
         lastSpeed = 0;
+        airborne = false;
+        climb = 0;
+        airPose = 0;
+        settle = 0;
         drawnAt = -1;
         if (session == null) return;
 
@@ -859,19 +909,20 @@ public class WatchScene extends AbstractScene {
     }
 
     /**
-     * Walk, swim, dive, or row.
+     * Walk, jump, swim, dive, or row.
      *
-     * <p>No jumping and no fall damage: this is a game about looking at things,
-     * and the movement it needs is the movement a person out for a walk has.
-     * What it does have is <b>crouching</b>, because crouching is how you get
-     * near a wary animal — see {@link WatchPlayer#stillness()} — and three
-     * things that were promised and were not there:
+     * <p>No fall damage: this is a game about looking at things, and nothing in
+     * it should end with a player dead at the bottom of a slope they wanted a
+     * better view from. There <em>is</em> jumping — see {@link #JUMP_SPEED} —
+     * and there is <b>crouching</b>, because crouching is how you get near a
+     * wary animal (see {@link WatchPlayer#stillness()}), and three things that
+     * were promised and were not there:
      *
      * <ul>
      *   <li><b>Diving.</b> The old version pinned a swimmer to sixty
      *       centimetres under the surface and gave them no way down, so the sea
      *       floor and everything on it were places you could see and never
-     *       reach. Now the crouch key sinks and the sprint key rises, and the
+     *       reach. Now the crouch key sinks and the jump key rises, and the
      *       floor of a lake is somewhere you walk about on.</li>
      *   <li><b>Rowing.</b> A boat is nine and a half metres a second across
      *       water that is otherwise two and a half.</li>
@@ -886,9 +937,10 @@ public class WatchScene extends AbstractScene {
         boolean overWater = depth > 0.6;
         boolean rowing = boatId != 0 && overWater;
 
-        // Crouch on land is a stance; in the water it is "go down". The key
-        // does the thing the situation calls for rather than being two keys.
-        if (KeyBinds.pressed(input, GameAction.JUMP) && !overWater && !rowing) {
+        // A stance, and its own key. It used to be read off JUMP, so the one
+        // key in every 3D game that means "jump" made you squat instead; now
+        // Space does what it says and Control does the crouching.
+        if (KeyBinds.pressed(input, GameAction.CROUCH) && !overWater && !rowing) {
             crouching = !crouching;
         }
         if (overWater) crouching = false;
@@ -901,12 +953,17 @@ public class WatchScene extends AbstractScene {
 
         boolean sprinting = KeyBinds.down(input, GameAction.SPRINT);
         // In the water, up is up and crouch is down — the convention every
-        // game with swimming in it uses, and the opposite of what "jump" and
-        // "sprint" mean on land. Sprint is free while swimming (there is no
-        // sprinting in water) and crouch is the key a player's hand is already
-        // reaching for when they want to go lower.
+        // game with swimming in it uses. Now that crouching has a key of its
+        // own, sinking is on it, which is what the comment here always claimed
+        // and could not do while the crouch was on the jump key: it is the key
+        // a player's hand is already reaching for when they want to go lower.
         boolean rising = KeyBinds.down(input, GameAction.JUMP);
-        boolean sinking = KeyBinds.down(input, GameAction.SPRINT);
+        boolean sinking = KeyBinds.down(input, GameAction.CROUCH);
+        // Off the ground, on the key that has meant this in every other scene
+        // in this engine since there were scenes. Refused in a boat and in the
+        // water, where the same key is already how you go up.
+        boolean leaping = KeyBinds.pressed(input, GameAction.JUMP)
+                && !overWater && !rowing && !airborne;
 
         double speed;
         if (rowing) {
@@ -958,27 +1015,49 @@ public class WatchScene extends AbstractScene {
         }
 
         double startZ = pz;
+        // Still in the air over the water is still in the air: a jump that
+        // carries somebody off a bank falls until it reaches the surface and
+        // starts swimming there. Handing them to `swim` the moment the ground
+        // beneath them went deep would drop them onto the waterline from
+        // whatever height they were at, in one frame.
+        boolean overhead = airborne && pz > surface;
         if (rowing) {
             // Sitting in the boat: the body rides on the waterline whatever the
             // bed is doing under it.
+            land(surface - Boats.DECK);
             dive = 0;
-            smoothedGround = surface - Boats.DECK;
-            pz = smoothedGround;
             submerged = false;
             breath = Math.min(1, breath + dt * 4 / WatchPlayer.BREATH_SECONDS);
-        } else if (overWater) {
+        } else if (overWater && !overhead) {
+            land(pz);
             swim(dt, depth, sinking, rising, ground, surface);
         } else {
             // Back on dry land: shed whatever depth was left, and follow the ground.
             dive = 0;
             submerged = false;
             breath = Math.min(1, breath + dt * 4 / WatchPlayer.BREATH_SECONDS);
-            // Eased rather than snapped: on a two-metre grid the ground under a
-            // walker changes by tens of centimetres a step, and a camera that
-            // tracked it exactly would jolt with every one of them.
-            smoothedGround += (ground - smoothedGround) * Math.min(1, dt * STEP_SMOOTHING);
-            pz = smoothedGround;
+            if (leaping) {
+                airborne = true;
+                climb = JUMP_SPEED;
+                crouching = false;
+            }
+            if (airborne) {
+                // Over water, the water is the floor: a jump that ends in a lake
+                // ends at the surface, and the step after that is a swim.
+                fly(dt, overWater ? surface : ground, overWater);
+            } else {
+                // Eased rather than snapped: on a two-metre grid the ground under
+                // a walker changes by tens of centimetres a step, and a camera
+                // that tracked it exactly would jolt with every one of them.
+                smoothedGround += (ground - smoothedGround)
+                        * Math.min(1, dt * STEP_SMOOTHING);
+                pz = smoothedGround;
+            }
         }
+        // The landing settles on its own clock whatever happened above, so a
+        // player who jumps into a lake or steps into a boat mid-crouch is not
+        // left holding the dip for ever.
+        settle = Math.max(0, settle - dt / Gait.SETTLE_SECONDS);
 
         // Last, because which cycle this step belongs to depends on where the
         // step left them — a stride into deep water is the step that becomes a
@@ -991,6 +1070,44 @@ public class WatchScene extends AbstractScene {
         double covered = cycle == Gait.Cycle.SWIM
                 ? Math.hypot(over, pz - startZ) : over;
         driveGait(dt, covered / Math.max(1e-6, dt), cycle);
+    }
+
+    /**
+     * One step of a jump: gravity, and the ground when it arrives.
+     *
+     * <p>The whole of being off the ground. There is no air control worth the
+     * name — a jump goes where it was aimed, and the horizontal step above
+     * already happened at walking speed, which is the ordinary compromise and
+     * the one that stops a player steering themselves onto a ledge they could
+     * not have walked to.
+     *
+     * <p>The landing is a <em>hard</em> set of the eased ground rather than a
+     * blend into it. {@link #smoothedGround} exists to take the steps out of a
+     * heightfield, and a landing is not a step: the foot arrives where it
+     * arrives, and easing it would float the player down the last few
+     * centimetres after they had visibly touched.
+     */
+    private void fly(double dt, double floor, boolean water) {
+        climb -= GRAVITY * dt;
+        pz += climb * dt;
+        if (pz <= floor) {
+            // How hard, before the speed is thrown away: a hop off a kerb and a
+            // drop off a bluff should not land the same way. Water absorbs its
+            // own landings — a splash is not a pair of knees — so a jump into a
+            // lake arrives with nothing to stand up out of.
+            settle = water ? 0 : Math.min(1, -climb / Gait.LANDING_REFERENCE);
+            land(floor);
+        } else {
+            smoothedGround = pz;
+        }
+    }
+
+    /** Put both feet down at a height, wherever they were. */
+    private void land(double at) {
+        airborne = false;
+        climb = 0;
+        pz = at;
+        smoothedGround = at;
     }
 
     /**
@@ -1010,6 +1127,7 @@ public class WatchScene extends AbstractScene {
     private void driveGait(double dt, double speed, Gait.Cycle cycle) {
         lastSpeed = speed;
         animSpeed += (speed - animSpeed) * Math.min(1, dt * SPEED_SETTLE);
+        airPose += ((airborne ? 1 : 0) - airPose) * Math.min(1, dt * Gait.AIR_SETTLE);
         switch (cycle) {
             case STROKE ->
                     rowPhase = RowStroke.wrap(rowPhase + Gait.strokeRate(animSpeed) * dt);
@@ -1034,6 +1152,10 @@ public class WatchScene extends AbstractScene {
      */
     private Gait.Cycle cycleNow() {
         if (boatId != 0) return Gait.Cycle.STROKE;
+        // Airborne beats afloat: a jump that carries somebody out over a lake
+        // is a jump until they are in it, and the leap pose is a stride pose
+        // with its legs elsewhere.
+        if (airborne) return Gait.Cycle.STRIDE;
         return afloat(px, py, pz) ? Gait.Cycle.SWIM : Gait.Cycle.STRIDE;
     }
 
@@ -2002,10 +2124,15 @@ public class WatchScene extends AbstractScene {
         // oarsman's head does not bounce and a swimmer's does not either, and
         // at nine and a half metres a second this term used to shake the camera
         // hard enough to be the first thing anybody said about rowing.
-        if (!thirdPerson && cycleNow() == Gait.Cycle.STRIDE) {
+        if (!thirdPerson && !airborne && cycleNow() == Gait.Cycle.STRIDE) {
             eyeHeight += Math.sin(gait * Math.PI * 4) * 0.028
                     * Math.min(1, animSpeed / WatchPlayer.WALK_SPEED);
         }
+        // The landing, in the camera as well as in the body: the knees take the
+        // drop, so the eye goes with them and comes back up over the same third
+        // of a second. Without it a jump ends with the view stopping dead,
+        // which is what falling on concrete looks like rather than landing.
+        eyeHeight -= settle * LANDING_DIP;
         if (thirdPerson && !glass.up()) {
             // Behind and a little above, and pulled up out of the ground if the
             // slope behind is steeper than the camera arm.
@@ -2198,13 +2325,50 @@ public class WatchScene extends AbstractScene {
         for (WatchView.Walker walker : view.walkers()) {
             if (walker.id() == view.selfId()) {
                 posed.put(walker.id(), new Gait.Step(px, py, pz, yaw, animSpeed,
-                        phaseFor(cycleNow())));
+                        phaseFor(cycleNow()), leap()));
             } else {
                 posed.put(walker.id(), gaits.follow(walker.id(), walker.x(), walker.y(),
-                        walker.z(), walker.yaw(), cycleOf(walker), frameSeconds));
+                        walker.z(), walker.yaw(), cycleOf(walker), aloft(walker),
+                        frameSeconds));
             }
         }
     }
+
+    /**
+     * This player's own jump, as the model wants it.
+     *
+     * <p>Not eased and not derived: the physics that produced it is right here,
+     * so the pose can be told outright rather than inferred from a position the
+     * way everybody else's is.
+     */
+    private WalkerModel.Leap leap() {
+        WalkerModel.Leap now = new WalkerModel.Leap(airPose, climb, settle);
+        return now.still() ? WalkerModel.Leap.GROUNDED : now;
+    }
+
+    /**
+     * Whether somebody else is off the ground.
+     *
+     * <p>From the terrain, like {@link #afloat} and for the same reason: a jump
+     * reaches this client as a {@code z} that went up and came down, and the
+     * ground under it is something the client generates for itself. Nothing
+     * about jumping goes on the wire.
+     *
+     * <p>The margin is generous because the number it is compared against is
+     * not: a walker's drawn height is eased toward the last one that arrived,
+     * and the ground under them is a bilinear sample of a heightfield they may
+     * be walking across at four metres a second. Half a metre is above every
+     * disagreement those two can produce and below the top of any jump.
+     */
+    private boolean aloft(WatchView.Walker walker) {
+        if (walker.inBoat() || streamer == null) return false;
+        double ground = streamer.groundAt(walker.x(), walker.y());
+        if (TerrainField.WATER_LEVEL - ground > WADING) return false;
+        return walker.z() > ground + AIRBORNE_CLEARANCE;
+    }
+
+    /** How far above the ground somebody else has to be to be drawn jumping. */
+    private static final double AIRBORNE_CLEARANCE = 0.5;
 
     /** This player's own clock for a cycle. See {@link #driveGait}. */
     private double phaseFor(Gait.Cycle cycle) {
@@ -2226,6 +2390,7 @@ public class WatchScene extends AbstractScene {
      */
     private Gait.Cycle cycleOf(WatchView.Walker walker) {
         if (walker.inBoat()) return Gait.Cycle.STROKE;
+        if (aloft(walker)) return Gait.Cycle.STRIDE;
         return afloat(walker.x(), walker.y(), walker.z())
                 ? Gait.Cycle.SWIM : Gait.Cycle.STRIDE;
     }
@@ -2278,7 +2443,7 @@ public class WatchScene extends AbstractScene {
             }
             default -> {
                 WalkerModel.walker(mesh, x, y, step.z(), step.yaw(), walker.crouching(),
-                        step.phase(), step.speed(), coat);
+                        step.phase(), step.speed(), step.leap(), coat);
                 eyeZ = step.z() + (walker.crouching() ? 1.10 : 1.68);
             }
         }
@@ -2319,7 +2484,7 @@ public class WatchScene extends AbstractScene {
                     WalkerModel.swimPitch(animSpeed, pitch, submerged),
                     WalkerModel.swimDrive(animSpeed), swimPhase, !submerged, coat);
             case STRIDE -> WalkerModel.walker(mesh, px - ox, py - oy, pz, yaw,
-                    crouching, gait, animSpeed, coat);
+                    crouching, gait, animSpeed, leap(), coat);
         }
     }
 

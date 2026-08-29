@@ -206,13 +206,13 @@ class SwimCycleTest {
     void aDiverGoingStraightDownIsStillSwimming() {
         Gait gaits = new Gait();
         double dt = 1 / 60.0;
-        gaits.follow(5, 0, 0, 0, 0, Gait.Cycle.SWIM, dt);
+        gaits.follow(5, 0, 0, 0, 0, Gait.Cycle.SWIM, false, dt);
         double sank = 0;
         Gait.Step step = null;
         // Straight down, at swimming speed, with no ground covered at all.
         for (int frame = 0; frame < 300; frame++) {
             sank -= 2.0 * dt;
-            step = gaits.follow(5, 0, 0, sank, 0, Gait.Cycle.SWIM, dt);
+            step = gaits.follow(5, 0, 0, sank, 0, Gait.Cycle.SWIM, false, dt);
         }
         assertTrue(step.speed() > 1.5,
                 "a diver descending at two metres a second reads as moving at "
@@ -226,13 +226,13 @@ class SwimCycleTest {
     void aWalkerDownhillIsClockedOnTheGroundTheyCover() {
         Gait gaits = new Gait();
         double dt = 1 / 60.0;
-        gaits.follow(6, 0, 0, 0, 0, Gait.Cycle.STRIDE, dt);
+        gaits.follow(6, 0, 0, 0, 0, Gait.Cycle.STRIDE, false, dt);
         double along = 0, down = 0;
         Gait.Step step = null;
         for (int frame = 0; frame < 300; frame++) {
             along += 2.0 * dt;
             down -= 2.0 * dt;
-            step = gaits.follow(6, along, 0, down, 0, Gait.Cycle.STRIDE, dt);
+            step = gaits.follow(6, along, 0, down, 0, Gait.Cycle.STRIDE, false, dt);
         }
         assertEquals(2.0, step.speed(), 0.08,
                 "a walker on a slope is being clocked on the slope rather than "
@@ -363,7 +363,8 @@ class SwimCycleTest {
 
     private static Mesh walker() {
         Mesh.Builder mesh = Mesh.builder(0, 0, 0, false, 1);
-        WalkerModel.walker(mesh, 0, 0, 0, 0, false, 0, 0, 0x4A6B33);
+        WalkerModel.walker(mesh, 0, 0, 0, 0, false, 0, 0,
+                WalkerModel.Leap.GROUNDED, 0x4A6B33);
         return mesh.build();
     }
 

@@ -3063,7 +3063,7 @@ fit, which is what gives sharp biome borders over ground that never steps.
   every biome has its own band, from cropped tundra to waist-high prairie, and
   the blades sway on a wind field.
 - **Water** at height zero, with shallows, shores and fish in it — and a
-  **floor you can walk on**. Hold <kbd>Shift</kbd> in the water and you sink;
+  **floor you can walk on**. Hold <kbd>Ctrl</kbd> in the water and you sink;
   hold <kbd>Space</kbd> and you rise. Down there the world goes the colour of the
   water and the view closes to a few metres, and your breath spends itself over
   about forty seconds and then floats you back up. It does not kill you: this is
@@ -3391,10 +3391,12 @@ breath only appears when you are spending it.
 
 ### Controls
 
-<kbd>WASD</kbd> walks and the mouse looks. <kbd>Space</kbd> toggles the crouch on
-land and **rises** in water; <kbd>Shift</kbd> sprints on land and **sinks** in
-water — up is up and crouch is down, as in every game with swimming in it, and
-neither key means anything else while you are in the water.
+<kbd>WASD</kbd> walks and the mouse looks. <kbd>Space</kbd> **jumps** on land and
+**rises** in water; <kbd>Ctrl</kbd> toggles the crouch on land and **sinks** in
+water — up is up and crouch is down, as in every game with swimming in it.
+<kbd>Shift</kbd> sprints. A jump clears about eighty centimetres, which is a
+boulder or a fallen trunk, and there is no fall damage: this is still a game
+about looking at things.
 <kbd>F5</kbd> goes third person. <kbd>Mouse 1</kbd> spots what you are looking
 at, <kbd>Mouse 2</kbd> (or <kbd>Z</kbd>) holds the spyglass up — the wheel
 changes its stop while it is up — <kbd>E</kbd> does whatever is in reach,

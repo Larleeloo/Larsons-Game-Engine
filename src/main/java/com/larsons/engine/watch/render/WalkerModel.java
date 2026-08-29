@@ -97,10 +97,69 @@ public final class WalkerModel {
     /** How far an elbow stays folded, and how much more on the forward swing. */
     private static final double ELBOW_REST = 0.22, ELBOW_BEND = 0.45;
 
+    /** How fast a jump leaves the ground, for scaling the pose. See {@link Leap}. */
+    private static final double LEAP_REFERENCE = 4.6;
+
+    /** How far a thigh comes up at the top of a jump, and how far a knee folds. */
+    private static final double TUCK_LEAN = 0.34, TUCK_KNEE = 1.20;
+
+    /** …and how far they reach for the ground on the way down. */
+    private static final double REACH_LEAN = 0.12, REACH_KNEE = 0.30;
+
+    /** How far both knees fold to absorb a full-speed landing. */
+    private static final double ABSORB_KNEE = 0.85;
+
+    /**
+     * Where the arms go at the top of a jump and at the bottom of a fall, in
+     * radians from hanging straight down.
+     *
+     * <p>Up and forward on the way up, out and low on the way down. Larger than
+     * anything the walk uses, deliberately: from behind, a jumping figure's
+     * legs are under its own body and its arms are the only part with a
+     * silhouette of their own.
+     */
+    private static final double AIR_ARM_RISE = 2.55, AIR_ARM_FALL = 1.15;
+
     private WalkerModel() {}
 
     /**
-     * One walker, standing, crouching, walking, running or swimming.
+     * What a walker's legs are doing that is not walking.
+     *
+     * <p>Three numbers rather than a state, because the pose has to be
+     * <b>continuous</b> in all of them: a figure that switches from a walk pose
+     * to a jump pose on the frame its feet leave the ground shows a cut, and a
+     * cut is the thing every part of this animation is written to avoid. Each
+     * of these blends the walk out and the leap in.
+     *
+     * @param air    how far off the ground the pose is, {@code 0} standing to
+     *               {@code 1} clear of it
+     * @param climb  how fast they are rising, in metres per second; negative
+     *               falling. What decides whether the legs tuck under or reach
+     *               down, which is the whole difference between the top of a
+     *               jump and the bottom of one
+     * @param settle how much of a landing is still being absorbed, {@code 1} on
+     *               touchdown down to {@code 0} standing
+     */
+    public record Leap(double air, double climb, double settle) {
+
+        /** Both feet on the ground and nothing to absorb. */
+        public static final Leap GROUNDED = new Leap(0, 0, 0);
+
+        /**
+         * Whether any of it does anything.
+         *
+         * <p>Against a tolerance rather than against zero, because both numbers
+         * are eased and an eased number approaches zero without ever arriving:
+         * tested exactly, a walker who landed a minute ago is still officially
+         * mid-jump by a millimetre for the rest of the session.
+         */
+        public boolean still() {
+            return air < 1e-3 && settle < 1e-3;
+        }
+    }
+
+    /**
+     * One walker, standing, crouching, walking, running, jumping or swimming.
      *
      * <p>Not rowing: see {@link #rower}, which sits the same person down and
      * puts their hands on the oars. Passing a rower through here is what drew
@@ -119,11 +178,13 @@ public final class WalkerModel {
      *
      * @param phase   the gait clock, in turns — {@code 0}–{@code 1}
      * @param speed   how fast they are moving, in metres per second
+     * @param leap    what the legs are doing besides walking; {@link Leap#GROUNDED}
+     *                for somebody with both feet down
      * @param tint    a colour to shift the coat by, so a party is telling apart
      */
     public static void walker(Mesh.Builder mesh, double x, double y, double z,
                               double yaw, boolean crouching, double phase, double speed,
-                              int tint) {
+                              Leap leap, int tint) {
         float[] uv = new float[4];
         WatchMaterials.uv(WatchMaterial.PLANK, uv);
 
@@ -138,6 +199,17 @@ public final class WalkerModel {
         // caller's clock says — see Gait.cadence, which is where it comes from.
         double drive = Math.min(DRIVE_CAP, Math.max(0, speed) / SWING_REFERENCE);
         double turn = RowStroke.wrap(phase) * Math.PI * 2;
+
+        // Off the ground: how much of the pose is the jump's rather than the
+        // walk's, and which half of the jump it is. `tuck` runs from 1 at the
+        // top of the push-off to 0 at the fastest part of the fall, so the legs
+        // come up under the body on the way up and reach for the ground on the
+        // way down — which is what tells a player at a glance which way they
+        // are going.
+        double air = Math.max(0, Math.min(1, leap.air()));
+        double settle = Math.max(0, Math.min(1, leap.settle()));
+        double rise = Math.max(-1, Math.min(1, leap.climb() / LEAP_REFERENCE));
+        double tuck = 0.5 + 0.5 * rise;
 
         double cos = Math.cos(yaw), sin = Math.sin(yaw);
         // The body's own axes: "forward" is where they are looking, "side" is
@@ -164,23 +236,41 @@ public final class WalkerModel {
         for (int i = 0; i < 2; i++) {
             double side = i == 0 ? -1 : 1;
             double angle = turn + (side > 0 ? 0 : Math.PI);
-            double lean = Math.sin(angle) * SWING * drive;
+            double stride = Math.sin(angle) * SWING * drive;
             // The knee folds while the leg is swinging through, which is when
             // it is moving forward — squared so it eases in and out rather than
             // switching on at the crossing.
             double forward = Math.max(0, Math.cos(angle));
-            double bend = KNEE_BEND * drive * forward * forward;
+            double walkBend = KNEE_BEND * drive * forward * forward;
+
+            // In the air both legs do the same thing, plus a quarter of the
+            // stride they were mid-way through: exactly symmetric is a shop
+            // dummy falling over, and a trailing leg is what a person jumping
+            // actually has.
+            double lean = mix(stride, mix(REACH_LEAN, TUCK_LEAN, tuck) + stride * 0.25, air);
+            double bend = mix(walkBend, mix(REACH_KNEE, TUCK_KNEE, tuck), air);
+            // …and on the way back up out of a landing, both knees fold to take
+            // it. The feet are planted through all of this, so the fold is what
+            // drops the hips — the dip comes out of the geometry rather than
+            // being a separate number pushing the body down.
+            bend += ABSORB_KNEE * settle;
+
             kneeAlong[i] = Math.sin(lean) * thigh;
             kneeUp[i] = hipZ - Math.cos(lean) * thigh;
             ankleAlong[i] = kneeAlong[i] + Math.sin(lean - bend) * shin;
             ankleUp[i] = kneeUp[i] - Math.cos(lean - bend) * shin;
             lowest = Math.min(lowest, ankleUp[i]);
         }
-        double lift = ankleRest - lowest;
+        // <b>Only while there is ground to stand on.</b> The plant is what puts
+        // the lower boot on the floor; off the ground there is no floor, and
+        // applying it would hang the whole body from whichever foot was lowest
+        // and turn a tuck into a squat that never rises.
+        double lift = (1 - air) * (ankleRest - lowest);
 
-        // A walker leans into a run. Small, and derived from the same drive, so
-        // it arrives and leaves with the swing.
-        double leanIn = 0.11 * drive;
+        // A walker leans into a run, into a jump, and into the landing. Small,
+        // and derived from the same numbers, so each arrives and leaves with
+        // the thing that caused it.
+        double leanIn = 0.11 * drive + 0.16 * air * tuck + 0.22 * settle;
 
         for (int i = 0; i < 2; i++) {
             double side = i == 0 ? -1 : 1;
@@ -188,9 +278,9 @@ public final class WalkerModel {
             double kx = hx + fx * kneeAlong[i], ky = hy + fy * kneeAlong[i];
             double ax = hx + fx * ankleAlong[i], ay = hy + fy * ankleAlong[i];
             Shapes.strut(mesh, hx, hy, base + lift + hipZ, kx, ky, base + lift + kneeUp[i],
-                    0.082, 0.082, uv, coat);
+                    0.082, 0.082, sx, sy, 0, uv, coat);
             Shapes.strut(mesh, kx, ky, base + lift + kneeUp[i],
-                    ax, ay, base + lift + ankleUp[i], 0.072, 0.072, uv, coat);
+                    ax, ay, base + lift + ankleUp[i], 0.072, 0.072, sx, sy, 0, uv, coat);
             // A boot, so a leg reads as having an end to it. Kept level and
             // yawed with the body: a foot rolls through a step, but a box that
             // rolled with a boxy shin would only show the gap between them.
@@ -216,9 +306,20 @@ public final class WalkerModel {
         for (int i = 0; i < 2; i++) {
             double side = i == 0 ? -1 : 1;
             double angle = turn + (side > 0 ? Math.PI : 0);
-            double lean = Math.sin(angle) * SWING * 0.85 * drive;
+            double swung = Math.sin(angle) * SWING * 0.85 * drive;
             double forward = Math.max(0, Math.cos(angle));
-            double bend = ELBOW_REST + ELBOW_BEND * drive * forward * forward;
+            double walkBend = ELBOW_REST + ELBOW_BEND * drive * forward * forward;
+            // Arms go up with the jump and come down and out with the fall, and
+            // then forward for balance out of the landing. This is most of what
+            // makes a jump read as a jump: the legs are under the body and
+            // mostly hidden, and the arms are the part with a whole silhouette
+            // to themselves.
+            double lean = mix(swung, mix(AIR_ARM_FALL, AIR_ARM_RISE, tuck), air)
+                    + settle * 0.55;
+            // Nearly straight in the air. An elbow folds the forearm further
+            // round the way the arm is already swung, so the fold that reads as
+            // a bent arm hanging down wraps a raised one back over the head.
+            double bend = mix(walkBend, 0.14, air);
             double ex = Math.sin(lean) * upper;
             double eu = -Math.cos(lean) * upper;
             double wx = ex + Math.sin(lean + bend) * fore;
@@ -227,9 +328,11 @@ public final class WalkerModel {
             double shX = x + sx * side * 0.20 + fx * shoulderAlong;
             double shY = y + sy * side * 0.20 + fy * shoulderAlong;
             Shapes.strut(mesh, shX, shY, shoulderZ,
-                    shX + fx * ex, shY + fy * ex, shoulderZ + eu, 0.062, 0.062, uv, coat);
+                    shX + fx * ex, shY + fy * ex, shoulderZ + eu,
+                    0.062, 0.062, sx, sy, 0, uv, coat);
             Shapes.strut(mesh, shX + fx * ex, shY + fy * ex, shoulderZ + eu,
-                    shX + fx * wx, shY + fy * wx, shoulderZ + wu, 0.055, 0.055, uv, coat);
+                    shX + fx * wx, shY + fy * wx, shoulderZ + wu,
+                    0.055, 0.055, sx, sy, 0, uv, coat);
             Shapes.box(mesh, shX + fx * wx, shY + fy * wx, shoulderZ + wu - 0.02,
                     0.055, 0.055, 0.055, yaw, uv, skin);
         }
@@ -330,8 +433,10 @@ public final class WalkerModel {
             double ax = x + sx * side * 0.13 + fx * footAlong;
             double ay = y + sy * side * 0.13 + fy * footAlong;
             double footZ = floor + 0.06;
-            Shapes.strut(mesh, hx, hy, hipsZ, kx, ky, kneeZ, 0.082, 0.082, uv, coat);
-            Shapes.strut(mesh, kx, ky, kneeZ, ax, ay, footZ, 0.072, 0.072, uv, coat);
+            Shapes.strut(mesh, hx, hy, hipsZ, kx, ky, kneeZ,
+                    0.082, 0.082, sx, sy, 0, uv, coat);
+            Shapes.strut(mesh, kx, ky, kneeZ, ax, ay, footZ,
+                    0.072, 0.072, sx, sy, 0, uv, coat);
             Shapes.box(mesh, ax + fx * 0.03, ay + fy * 0.03, footZ - 0.02,
                     0.085, 0.115, 0.05, yaw, uv, boot);
         }
@@ -368,9 +473,9 @@ public final class WalkerModel {
             fold(shX, shY, shoulderZ, gx, gy, gz, upper, fore,
                     sx * side, sy * side, -1.4, elbow);
             Shapes.strut(mesh, shX, shY, shoulderZ, elbow[0], elbow[1], elbow[2],
-                    0.062, 0.062, uv, coat);
+                    0.062, 0.062, sx, sy, 0, uv, coat);
             Shapes.strut(mesh, elbow[0], elbow[1], elbow[2], gx, gy, gz,
-                    0.055, 0.055, uv, coat);
+                    0.055, 0.055, sx, sy, 0, uv, coat);
             Shapes.box(mesh, gx, gy, gz, 0.055, 0.055, 0.055, yaw, uv, skin);
         }
 
@@ -560,8 +665,10 @@ public final class WalkerModel {
             double footF = kneeF + leg[0], footZ = kneeZ + leg[1];
             double axf = x + fx * footF + sx * out * 0.8;
             double ayf = y + fy * footF + sy * out * 0.8;
-            Shapes.strut(mesh, hx, hy, hipsZ, kx, ky, kneeZ, 0.082, 0.082, uv, coat);
-            Shapes.strut(mesh, kx, ky, kneeZ, axf, ayf, footZ, 0.072, 0.072, uv, coat);
+            Shapes.strut(mesh, hx, hy, hipsZ, kx, ky, kneeZ,
+                    0.082, 0.082, sx, sy, 0, uv, coat);
+            Shapes.strut(mesh, kx, ky, kneeZ, axf, ayf, footZ,
+                    0.072, 0.072, sx, sy, 0, uv, coat);
             // The boot goes on the end of the shin rather than lying flat: a
             // swimmer's foot points the way their leg does.
             Shapes.strut(mesh, axf, ayf, footZ,
@@ -601,9 +708,9 @@ public final class WalkerModel {
                     sx * side - fx * bellyF * 0.6, sy * side - fy * bellyF * 0.6,
                     -bellyZ * 0.6, elbow);
             Shapes.strut(mesh, shX, shY, shoulderZ, elbow[0], elbow[1], elbow[2],
-                    0.062, 0.062, uv, coat);
+                    0.062, 0.062, sx, sy, 0, uv, coat);
             Shapes.strut(mesh, elbow[0], elbow[1], elbow[2], hx2, hy2, handZ,
-                    0.055, 0.055, uv, coat);
+                    0.055, 0.055, sx, sy, 0, uv, coat);
             Shapes.box(mesh, hx2, hy2, handZ, 0.055, 0.055, 0.055, yaw, uv, skin);
         }
 

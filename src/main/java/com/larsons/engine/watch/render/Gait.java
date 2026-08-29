@@ -116,17 +116,52 @@ public final class Gait {
      *              what the limb swing is scaled by
      * @param phase the walk cycle, the rowing stroke or the swimming one, in
      *              turns
+     * @param leap  what their legs are doing that is not walking — off the
+     *              ground, and landing
      */
     public record Step(double x, double y, double z, double yaw,
-                       double speed, double phase) {}
+                       double speed, double phase, WalkerModel.Leap leap) {
+
+        /** A pose for somebody standing on the ground. */
+        public Step(double x, double y, double z, double yaw,
+                    double speed, double phase) {
+            this(x, y, z, yaw, speed, phase, WalkerModel.Leap.GROUNDED);
+        }
+    }
 
     private static final class Track {
         double x, y, z, yaw;
-        double speed, through;
+        double speed, through, climb;
         double phase;
+        double air, settle;
         boolean placed;
         Step step = new Step(0, 0, 0, 0, 0, 0);
     }
+
+    /**
+     * How fast the drawn "off the ground" reading follows the real one, per
+     * second.
+     *
+     * <p>Eased rather than switched, because it is switched at the source: a
+     * walker is off the ground or on it, and a pose that took the answer raw
+     * would cut between a walk and a jump on the frame the feet left. A tenth
+     * of a second of blend is what makes a take-off a take-off.
+     */
+    public static final double AIR_SETTLE = 11;
+
+    /**
+     * How long a landing takes to stand back up out of, in seconds.
+     *
+     * <p>Public, with {@link #LANDING_REFERENCE} and {@link #AIR_SETTLE}, so
+     * that the player holding the mouse — whose jump is known outright rather
+     * than derived from a position — lands on the same clock as everybody they
+     * are walking with. Two copies of these would be two different landings in
+     * one party.
+     */
+    public static final double SETTLE_SECONDS = 0.34;
+
+    /** The descent that costs a full landing crouch, in metres per second. */
+    public static final double LANDING_REFERENCE = 6.5;
 
     /**
      * One entry per player in the party, which {@code WatchProto} caps at eight.
@@ -144,10 +179,13 @@ public final class Gait {
      * all, which is drawn in a later pass and would otherwise slide about
      * underneath its own rower.
      *
-     * @param cycle which cycle they are running, and so what rate it runs at
+     * @param cycle   which cycle they are running, and so what rate it runs at
+     * @param offGround whether both their feet are off it — which this class
+     *                  eases, times the landing out of, and hands back as part
+     *                  of the {@link Step}
      */
     public Step follow(int id, double x, double y, double z, double yaw,
-                       Cycle cycle, double dt) {
+                       Cycle cycle, boolean offGround, double dt) {
         Track track = tracks.computeIfAbsent(id, key -> new Track());
         double step = Math.max(0, Math.min(0.25, dt));
         if (!track.placed || Math.hypot(x - track.x, y - track.y) > SNAP) {
@@ -158,6 +196,9 @@ public final class Gait {
             track.yaw = yaw;
             track.speed = 0;
             track.through = 0;
+            track.climb = 0;
+            track.air = offGround ? 1 : 0;
+            track.settle = 0;
         } else {
             double fromX = track.x, fromY = track.y, fromZ = track.z;
             // Exponential rather than linear: the fraction closed in a frame
@@ -169,10 +210,26 @@ public final class Gait {
             track.z += (z - track.z) * close;
             track.yaw = turn(track.yaw, yaw, close);
             double over = Math.hypot(track.x - fromX, track.y - fromY);
-            double through = Math.hypot(over, track.z - fromZ);
+            double climbed = track.z - fromZ;
+            double through = Math.hypot(over, climbed);
             double settle = Math.min(1, step * SPEED_SETTLE);
             track.speed += ((step > 1e-6 ? over / step : 0) - track.speed) * settle;
             track.through += ((step > 1e-6 ? through / step : 0) - track.through) * settle;
+            track.climb += ((step > 1e-6 ? climbed / step : 0) - track.climb) * settle;
+
+            // Landing: the frame the feet arrive, take the descent they arrived
+            // at as how hard. Read off the drawn motion rather than sent, like
+            // everything else here — a jump reaches this client as a z that
+            // went up and came down, and that is enough to know both that it
+            // happened and how far it fell.
+            boolean was = track.air > 0.5;
+            if (was && !offGround) {
+                track.settle = Math.max(track.settle,
+                        Math.min(1, -track.climb / LANDING_REFERENCE));
+            }
+            track.air += ((offGround ? 1 : 0) - track.air)
+                    * Math.min(1, step * AIR_SETTLE);
+            track.settle = Math.max(0, track.settle - step / SETTLE_SECONDS);
         }
         double rate = switch (cycle) {
             case STROKE -> strokeRate(track.speed);
@@ -181,7 +238,8 @@ public final class Gait {
         };
         track.phase = RowStroke.wrap(track.phase + rate * step);
         double swung = cycle == Cycle.SWIM ? track.through : track.speed;
-        track.step = new Step(track.x, track.y, track.z, track.yaw, swung, track.phase);
+        track.step = new Step(track.x, track.y, track.z, track.yaw, swung, track.phase,
+                new WalkerModel.Leap(track.air, track.climb, track.settle));
         return track.step;
     }
 
