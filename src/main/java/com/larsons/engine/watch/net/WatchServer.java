@@ -398,6 +398,16 @@ public final class WatchServer implements WatchGame.Sink {
 
             case "glass" -> game.glass(id, WatchJson.num(message, "m", 1));
 
+            case "debug" -> {
+                // The satchel it reports afterwards is the same satchel; what
+                // changed is what the client is allowed to think it can afford,
+                // and that rides on the next snapshot. Sending the bag anyway
+                // means the cooking screen redraws on the very next frame
+                // rather than on the next thing that happens to be picked up.
+                game.debug(id, WatchJson.str(message, "c", ""));
+                bagChanged(id, null);
+            }
+
             case "cast" -> game.castRod(id);
 
             case "strike" -> {

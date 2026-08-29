@@ -84,10 +84,25 @@ public final class Forage {
 
     private static final Map<String, Item> ITEMS = build();
 
+    /**
+     * Every item, in the order {@link #build} declares them.
+     *
+     * <p>Held rather than derived on each call, and — the part that matters —
+     * derived from a map that <b>keeps its insertion order</b>. It did not:
+     * {@code build()} ended in {@code Map.copyOf}, whose iteration order is
+     * unspecified and is in fact salted per JVM run, so "in a stable order" was
+     * a promise this class made and broke. Nothing noticed while the only
+     * reader was a lookup by key; the satchel screen of a
+     * {@linkplain Satchel#bottomless() debug} satchel, which lists the whole
+     * catalogue, notices immediately — it shuffled the entire inventory between
+     * runs.
+     */
+    private static final List<Item> ALL = List.copyOf(ITEMS.values());
+
     private Forage() {}
 
     /** Every item there is, in a stable order. */
-    public static List<Item> all() { return List.copyOf(ITEMS.values()); }
+    public static List<Item> all() { return ALL; }
 
     /** The item with this key, or {@code null}. */
     public static Item byKey(String key) {
@@ -317,7 +332,9 @@ public final class Forage {
         item(map, Spyglass.ITEM, "Spyglass", Kind.TOOL, 0, 0,
                 "Two lenses in a tube. Hold it up and the far shore comes to you.");
 
-        return Map.copyOf(map);
+        // Unmodifiable rather than Map.copyOf: the order is part of what this
+        // returns. See ALL.
+        return java.util.Collections.unmodifiableMap(map);
     }
 
     private static void berry(Map<String, Item> map, String key, String name, String note) {

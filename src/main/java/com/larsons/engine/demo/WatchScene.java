@@ -11,6 +11,7 @@ import com.larsons.engine.input.Pointer;
 import com.larsons.engine.scene.AbstractScene;
 import com.larsons.engine.watch.Boats;
 import com.larsons.engine.watch.Cultivation;
+import com.larsons.engine.watch.Debug;
 import com.larsons.engine.watch.Fishing;
 import com.larsons.engine.watch.Forage;
 import com.larsons.engine.watch.Lure;
@@ -196,6 +197,15 @@ public class WatchScene extends AbstractScene {
     private double sentGlassPower = Spyglass.NONE;
 
     /**
+     * The last few number keys, waiting to spell {@link Debug#CODE}.
+     *
+     * <p>Read straight off the keyboard rather than through {@link KeyBinds},
+     * and that is the point: a cheat code is not a control. Putting ten digits
+     * on the controls screen would be putting the answer on it too.
+     */
+    private final Debug.Pad pad = new Debug.Pad();
+
+    /**
      * How far the player's feet are below the waterline, in metres.
      *
      * <p>Zero on land and at the surface; up to the depth of the water when
@@ -365,6 +375,11 @@ public class WatchScene extends AbstractScene {
             leave();
             return;
         }
+
+        // Before the panel branch, so the code can be typed anywhere in the
+        // walk — including on the satchel screen, which is exactly where
+        // somebody testing a recipe is standing when they want it.
+        readCode(dt, input);
 
         if (panel != Panel.NONE) {
             Pointer.restore();
@@ -570,6 +585,43 @@ public class WatchScene extends AbstractScene {
         reach = Math.min(reach, renderer.acceleratedByGpu() ? 30 : 10);
         streamer.setFocus(ChunkStreamer.Focus.looking(px, py, aimYaw, reach, half,
                 glass.power()));
+    }
+
+    /**
+     * Watch the number keys for {@link Debug#CODE}.
+     *
+     * <p>Both the number row and the keypad, because a code you can only type
+     * on one of them is a code that does not work on half the keyboards people
+     * have. Nothing is drawn while it is half typed — a code with a progress
+     * bar is not a code — and the answer, when it comes, comes from the host:
+     * this only sends the digits.
+     */
+    private void readCode(double dt, InputManager input) {
+        pad.tick(dt);
+        for (int digit = 0; digit <= 9; digit++) {
+            boolean pressed = input.isKeyJustPressed(java.awt.event.KeyEvent.VK_0 + digit)
+                    || input.isKeyJustPressed(java.awt.event.KeyEvent.VK_NUMPAD0 + digit);
+            if (!pressed || !pad.type(digit)) continue;
+            if (session.local() != null) {
+                // A solo game has no sink for its own chat, so the line and the
+                // flash are raised here — and this is the one moment in the
+                // game where a player has to be certain something happened.
+                boolean on = session.local().debug(session.selfId(), Debug.CODE);
+                picked(on ? "Debug mode ON — everything is unlimited"
+                        : "Debug mode off");
+            } else if (session.client() != null) {
+                // The host answers with a line of its own, and may refuse: on
+                // somebody else's walk the code does nothing. Saying anything
+                // here would risk saying the opposite of what happened.
+                session.client().sendDebug(Debug.CODE);
+            }
+        }
+    }
+
+    /** Whether this player is in debug mode, as the last snapshot has it. */
+    private boolean debugging() {
+        WatchView.Walker me = view() == null ? null : view().self();
+        return me != null && me.debug();
     }
 
     /** How settled this player is — the host's number when there is one. */
@@ -1073,6 +1125,13 @@ public class WatchScene extends AbstractScene {
      * event.
      */
     private void noticePickups() {
+        // Nothing is ever gained when everything is unlimited, and the frame
+        // debug mode goes on would otherwise flash whichever item the diff
+        // happened to reach first.
+        if (view().satchel().bottomless()) {
+            carried = null;
+            return;
+        }
         Map<String, Integer> now = view().satchel().contents();
         if (carried != null && pickedFlash < FLASH_SECONDS - 0.2) {
             String gained = null;
@@ -1643,7 +1702,7 @@ public class WatchScene extends AbstractScene {
                     return new WatchView.Walker(walker.id(), walker.name(), px, py, pz,
                             yaw, pitch, walker.stillness(), walker.crouching(),
                             walker.submerged(), walker.breath(), walker.boatId(),
-                            walker.glass());
+                            walker.glass(), walker.debug());
                 }
                 return walker;
             }
@@ -1817,6 +1876,73 @@ public class WatchScene extends AbstractScene {
                     new Color(150, 168, 152));
         }
         drawGlassReadout(target);
+        drawDebugReadout(target, biome);
+    }
+
+    /**
+     * The debug readout: what the mode grants, and what the world is doing.
+     *
+     * <p><b>Down the left, under the compass</b>, because the top left is
+     * already where this game puts "where and when" and this is more of that.
+     * It is drawn on its own dark card rather than as shadowed text over the
+     * world: it is nine lines of numbers and it has to be readable over a
+     * sunlit lake, and unlike the rest of the HUD it is not something a player
+     * is meant to be looking past.
+     *
+     * <p><b>This is the place a new debug feature announces itself.</b> A row
+     * added to {@link Debug.Power} appears in the granted list without a line
+     * here; a number worth watching goes in {@code lines} below. Both halves
+     * are one edit each, which is the whole reason the readout exists rather
+     * than a {@code System.out.println} somebody deletes afterwards.
+     */
+    private void drawDebugReadout(DrawTarget target, WatchBiome biome) {
+        if (!debugging()) return;
+        WatchView view = view();
+
+        List<String> lines = new ArrayList<>();
+        for (Debug.Power power : Debug.powers()) lines.add("· " + power.label());
+        lines.add("");
+        lines.add(String.format("at  %.1f, %.1f, %.1f", px, py, pz));
+        WatchChunk here = streamer.chunkAt(px, py);
+        lines.add("chunk  " + WatchChunk.chunkOf(px) + ", " + WatchChunk.chunkOf(py)
+                + (here == null ? "  (not built)" : "  lod " + here.lod()));
+        lines.add("ground  " + biome.displayName().toLowerCase()
+                + (here == null ? ""
+                        : " · " + here.surfaceAtWorld(px, py).name().toLowerCase()));
+        ChunkStreamer.Focus focus = streamer.focus();
+        lines.add("chunks  " + streamer.loadedCount() + " up · "
+                + streamer.pending() + " queued · " + streamer.cachedCount() + " kept"
+                + "   r" + streamer.viewRadius()
+                + (focus == null ? "" : " +cone r" + focus.radius()));
+        lines.add("frame  " + (renderer.acceleratedByGpu() ? "gpu" : "painter")
+                + " · " + renderer.drawnTriangles() + " drawn · "
+                + renderer.culledTriangles() + " culled");
+        lines.add("alive  " + view.creatures().size() + " animals · "
+                + view.lures().size() + " feeders · " + view.walkers().size() + " walking");
+        lines.add("glass  " + (glass.up()
+                ? "×" + Math.round(glass.power()) + " · " + Math.round(glass.range()) + " m"
+                : "down"));
+        lines.add("guide  " + view.guide().discovered() + " / " + view.guide().total()
+                + " · " + view.guide().points() + " pts");
+
+        int pad = 16;
+        // Clear of the compass strip, which is the last thing the ordinary HUD
+        // puts down the left.
+        int top = pad + 128;
+        int width = 268;
+        int height = 28 + lines.size() * 15;
+        target.fillRect(pad - 6, top - 16, width, height, new Color(10, 14, 20, 205));
+        target.drawRect(pad - 6, top - 16, width, height, HUD_WARN);
+        target.drawText("DEBUG  ·  code " + Debug.CODE + " again to stop",
+                pad, top, HUD_SMALL, HUD_WARN);
+        int row = top + 18;
+        for (String line : lines) {
+            if (!line.isEmpty()) {
+                target.drawText(line, pad, row, HUD_SMALL,
+                        line.startsWith("· ") ? HUD_ACCENT : HUD_DIM);
+            }
+            row += 15;
+        }
     }
 
     /**
@@ -2136,10 +2262,13 @@ public class WatchScene extends AbstractScene {
         for (String key : satchel.keys()) {
             if (shown++ >= 6) break;
             if (sb.length() > 0) sb.append("   ");
-            sb.append(satchel.count(key)).append("× ").append(Forage.nameOf(key));
+            sb.append(satchel.countLabel(key)).append("× ").append(Forage.nameOf(key));
         }
         if (satchel.kinds() > 6) sb.append("   +").append(satchel.kinds() - 6).append(" more");
-        label(target, sb.toString(), x, baseline, HUD_SMALL, HUD_DIM);
+        // Half the screen, so a satchel full of long names does not run into
+        // the party log along the other side.
+        label(target, fitted(target, sb.toString(), viewportWidth / 2 - x),
+                x, baseline, HUD_SMALL, HUD_DIM);
     }
 
     /**
@@ -2207,8 +2336,11 @@ public class WatchScene extends AbstractScene {
 
         // --- carrying ------------------------------------------------------
         int col = x + 20;
-        target.drawText("Carrying  (" + satchel.kinds() + " kinds, "
-                        + satchel.total() + " things)", col, y + 68, HUD_BOLD,
+        String carrying = satchel.bottomless()
+                ? "Carrying  (everything — debug)"
+                : "Carrying  (" + satchel.kinds() + " kinds, "
+                        + satchel.total() + " things)";
+        target.drawText(carrying, col, y + 68, HUD_BOLD,
                 recipeColumn ? HUD_DIM : HUD_ACCENT);
         // Keep the cursor on screen: the window follows it rather than the
         // other way round, which is what makes a long list navigable with two
@@ -2224,7 +2356,7 @@ public class WatchScene extends AbstractScene {
                 target.fillRect(col - 6, row - 13, colWidth, ROW_HEIGHT - 1,
                         new Color(60, 110, 70, 160));
             }
-            target.drawText(satchel.count(key) + "×", col, row, HUD_FONT, HUD_ACCENT);
+            target.drawText(satchel.countLabel(key) + "×", col, row, HUD_FONT, HUD_ACCENT);
             target.drawText(Forage.nameOf(key), col + 36, row, HUD_FONT, HUD_INK);
             if (item != null) {
                 target.drawText(item.kind().label(), col + colWidth - 96, row,
@@ -2256,8 +2388,13 @@ public class WatchScene extends AbstractScene {
             }
             target.drawText(recipe.name(), rx, row, HUD_FONT,
                     can ? HUD_INK : new Color(130, 140, 132));
-            target.drawText(recipe.costLine(), rx + 168, row, HUD_SMALL,
-                    can ? HUD_DIM : new Color(120, 110, 100));
+            // Clipped to the column rather than drawn over the panel's own
+            // edge and out into the world, which is what a four-ingredient
+            // recipe did. Whichever row the cursor is on says it in full along
+            // the footer, so nothing is actually hidden.
+            int costX = rx + 168;
+            target.drawText(fitted(target, recipe.costLine(), rx + colWidth - 8 - costX),
+                    costX, row, HUD_SMALL, can ? HUD_DIM : new Color(120, 110, 100));
         }
         scrollbar(target, rx + colWidth - 4, listTop - 13, listBottom - listTop,
                 recipeScroll, rows, recipes.size());
@@ -2266,7 +2403,10 @@ public class WatchScene extends AbstractScene {
         String note;
         if (recipeColumn && !recipes.isEmpty()) {
             Recipes.Recipe recipe = recipes.get(recipeIndex);
-            note = recipe.station().label() + " · " + recipe.note();
+            // The cost in full, because the list's copy of it may have been
+            // cut to fit the column.
+            note = recipe.station().label() + "  ·  " + recipe.costLine()
+                    + "  ·  " + recipe.note();
         } else if (!items.isEmpty()) {
             Forage.Item item = Forage.byKey(items.get(
                     Math.min(satchelIndex, items.size() - 1)));
@@ -2274,12 +2414,30 @@ public class WatchScene extends AbstractScene {
         } else {
             note = "";
         }
-        target.drawText(note, x + 20, y + h - 18, HUD_SMALL, HUD_DIM);
+        target.drawText(fitted(target, note, w - 40), x + 20, y + h - 18, HUD_SMALL, HUD_DIM);
         String keys = recipeColumn
                 ? "↑↓ choose · Enter make · ← carrying · Tab close"
                 : "↑↓ choose · Enter put out or plant · → recipes · Tab close";
         target.drawText(keys, x + w - target.textWidth(keys, HUD_SMALL) - 20, y + 32,
                 HUD_SMALL, HUD_DIM);
+    }
+
+    /**
+     * A line cut to a width, with an ellipsis where it was cut.
+     *
+     * <p>Measured against the target's own font metrics rather than guessed
+     * from a character count, because {@code HUD_SMALL} is proportional and
+     * "1 × Sap, 1 × Stone" and "1 × Millet, 1 × Wild Rice" are the same number
+     * of characters and nothing like the same number of pixels.
+     */
+    private static String fitted(DrawTarget target, String text, int width) {
+        if (text == null || text.isEmpty() || width <= 0) return "";
+        if (target.textWidth(text, HUD_SMALL) <= width) return text;
+        int end = text.length();
+        while (end > 1 && target.textWidth(text.substring(0, end) + "…", HUD_SMALL) > width) {
+            end--;
+        }
+        return text.substring(0, end) + "…";
     }
 
     /**

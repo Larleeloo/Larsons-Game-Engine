@@ -392,6 +392,52 @@ public final class WatchGame implements Animal.Surroundings {
         return player.glassPower();
     }
 
+    // --- debug mode ------------------------------------------------------------------
+
+    /**
+     * Somebody typed a code. Turn debug mode on, or off, or refuse it.
+     *
+     * <p><b>The code is checked here and not on the client</b>, for the same
+     * reason every other rule is: a client is a thing that asks. And the answer
+     * depends on whose walk it is — on your own, or on one you are hosting, the
+     * code works; on somebody else's it does not, because the field guide is
+     * shared and a stranger with unlimited suet cake writes their way through a
+     * book four other people are keeping. The host is the first walker on the
+     * walk, which is the same rule the lobby's party list uses.
+     *
+     * <p>Toggles rather than sets, so the same four keys undo it.
+     *
+     * @param code what they typed
+     * @return whether debug mode is now on for that player
+     */
+    public synchronized boolean debug(int playerId, String code) {
+        WatchPlayer player = players.get(playerId);
+        if (player == null || !Debug.isCode(code)) return false;
+        if (!ownsThisWalk(playerId)) {
+            say(player.name() + " tried a code — this is not their walk");
+            return player.debugging();
+        }
+        player.setDebug(!player.debugging());
+        say(player.name() + (player.debugging()
+                ? " turned on debug mode — everything is unlimited"
+                : " turned debug mode off"));
+        return player.debugging();
+    }
+
+    /**
+     * Whether a player is the one whose walk this is.
+     *
+     * <p>Alone, there is only one of you. In a party it is whoever arrived
+     * first, which is the host: {@code WatchServer.hostId} answers the same
+     * question the same way, off the same insertion-ordered map, and this is
+     * here rather than there because it is a rule about the game rather than
+     * about the socket.
+     */
+    private boolean ownsThisWalk(int playerId) {
+        for (WatchPlayer first : players.values()) return first.id() == playerId;
+        return false;
+    }
+
     /**
      * The animal a player is looking at, or {@code null}.
      *

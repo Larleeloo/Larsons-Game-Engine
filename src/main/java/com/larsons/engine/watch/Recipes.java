@@ -214,6 +214,11 @@ public final class Recipes {
         for (int i = 0; i + 1 < pairs.length; i += 2) {
             inputs.put((String) pairs[i], (Integer) pairs[i + 1]);
         }
-        out.add(new Recipe(output, count, station, Map.copyOf(inputs), note));
+        // Unmodifiable rather than Map.copyOf, whose iteration order is
+        // unspecified: the order these are declared in is the order `costLine`
+        // prints them, and a cost that reshuffles itself between runs is a
+        // recipe nobody can learn by looking at it.
+        out.add(new Recipe(output, count, station,
+                java.util.Collections.unmodifiableMap(inputs), note));
     }
 }

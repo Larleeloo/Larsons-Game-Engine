@@ -3388,6 +3388,48 @@ plants, <kbd>C</kbd> cross-pollinates, <kbd>Y</kbd> boards and leaves a boat,
 strikes, <kbd>L</kbd> leaves. All rebindable from **Controls (Key Binds)** in
 the walk's own lobby, which shows this game's keys rather than the engine's.
 
+### Debug mode (type `7799`)
+
+Type **7 7 9 9** on the number keys anywhere in the walk — the satchel screen
+included — and debug mode comes on. Type it again and it goes off. It is not on
+the controls screen and it is not on a menu, because a cheat code is not a
+control and a menu item is an invitation to press it
+([`Debug`](src/main/java/com/larsons/engine/watch/Debug.java)).
+
+It grants:
+
+- **Unlimited items.** Every recipe, every build piece, every feeder, every
+  seed and every tool, in any number, for ever.
+- **A readout** down the left: position, chunk and level of detail, the biome
+  and the material underfoot, what the streamer is holding and queueing, what
+  the frame drew and culled, what is alive nearby, the spyglass, the guide.
+
+**The part worth reading about is how the first one works**, because it is the
+answer to "it should keep working as the game grows". Debug mode does not hand
+out a list of items — a list is a copy of a registry, and it goes stale the
+week after it is written. It makes the player's satchel *bottomless*, and every
+cost in this game is a `has` and a `take` against a `Satchel`. So an item added
+to `Forage` is already unlimited, a recipe added to `Recipes` is already
+affordable, and a build piece added to `BuildPiece` is already free — with no
+edit to the debug code at all. The spyglass proved it: it was built before this
+mode existed and debug mode granted it without a line.
+
+It is a **lens, not a gift**: what is really in the bag is untouched
+underneath, so switching the mode off leaves the walk exactly as it was. The
+flag rides in the player's own snapshot, so a client's cooking and build
+screens light up exactly when the host says they should, and it survives a save
+— a walk played with everything unlimited is that walk when you reopen it.
+
+And it is **the host's walk only**. On your own walk, or one you are hosting,
+the code works; on somebody else's it is refused, because the field guide is
+shared and a stranger with unlimited suet cake writes their way through a book
+four other people are keeping.
+
+When a future feature needs something the bottomless satchel cannot already
+give it — a spawn, a teleport, a clock wound forward — the shape is: add a row
+to `Debug.Power`, which is what puts it on the readout, and one
+`if (player.debugging())` where it acts.
+
 ### Bringing your own art
 
 Every animal ships with a generated 64×64 Minecraft-style skin and a boxy
