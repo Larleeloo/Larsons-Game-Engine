@@ -5,6 +5,7 @@ import com.larsons.engine.watch.life.Animal;
 import com.larsons.engine.watch.life.AnimState;
 import com.larsons.engine.watch.life.AnimalDef;
 import com.larsons.engine.watch.life.AnimalRegistry;
+import com.larsons.engine.watch.life.Hurl;
 import com.larsons.engine.watch.world.Grove;
 
 import java.util.ArrayList;
@@ -74,6 +75,12 @@ public final class WatchView {
     private final List<Walker> walkers = new ArrayList<>();
     private final List<Creature> creatures = new ArrayList<>();
     private final List<Lure> lures = new ArrayList<>();
+
+    /**
+     * Everything in the air — bone shards a wendigo has thrown. See
+     * {@link com.larsons.engine.watch.life.Hurl}.
+     */
+    private final List<Hurl> hurls = new ArrayList<>();
     private final List<Spotlight> spotlights = new ArrayList<>();
     private final List<String> log = new ArrayList<>();
 
@@ -175,6 +182,9 @@ public final class WatchView {
     public List<Creature> creatures() { return creatures; }
 
     public List<Lure> lures() { return lures; }
+
+    /** Everything in the air. */
+    public List<Hurl> hurls() { return hurls; }
 
     public List<Spotlight> spotlights() { return spotlights; }
 
@@ -280,6 +290,8 @@ public final class WatchView {
         }
         lures.clear();
         lures.addAll(game.lures());
+        hurls.clear();
+        hurls.addAll(game.hurls());
         spotlights.clear();
         spotlights.addAll(game.spotlights());
         weather = game.weather();
@@ -352,6 +364,22 @@ public final class WatchView {
         takenLitter.clear();
         for (Object id : ids) {
             if (id instanceof Number n) takenLitter.add(n.longValue());
+        }
+    }
+
+    /**
+     * Replace what is in the air from a snapshot's {@code hurls} array.
+     *
+     * <p>Cleared even when the array is absent, which is what makes a shard that
+     * has landed disappear: the field is omitted from a snapshot with nothing
+     * flying, and a client that only replaced on presence would keep drawing the
+     * last shard of the last fight for ever.
+     */
+    public void loadHurls(List<Map<String, Object>> rows) {
+        hurls.clear();
+        for (Map<String, Object> row : rows) {
+            Hurl hurl = Hurl.fromMap(row);
+            if (hurl != null) hurls.add(hurl);
         }
     }
 

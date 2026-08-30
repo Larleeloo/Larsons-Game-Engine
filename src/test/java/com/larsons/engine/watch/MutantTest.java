@@ -5,9 +5,13 @@ import com.larsons.engine.watch.life.Animal;
 import com.larsons.engine.watch.life.AnimalDef;
 import com.larsons.engine.watch.life.AnimalFamily;
 import com.larsons.engine.watch.life.AnimalModel;
+import com.larsons.engine.audio.SoundKeys;
 import com.larsons.engine.watch.life.AnimalModels;
 import com.larsons.engine.watch.life.AnimalRegistry;
+import com.larsons.engine.watch.life.AnimalSkins;
 import com.larsons.engine.watch.life.Diet;
+import com.larsons.engine.watch.life.Hurl;
+import com.larsons.engine.watch.life.MutantVoice;
 import com.larsons.engine.watch.life.Mutants;
 import com.larsons.engine.watch.life.Rarity;
 import com.larsons.engine.watch.world.WatchBiomes;
@@ -22,6 +26,7 @@ import java.util.TreeSet;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
+import static org.junit.jupiter.api.Assertions.assertNotEquals;
 import static org.junit.jupiter.api.Assertions.assertNotNull;
 import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertTrue;
@@ -234,6 +239,386 @@ class MutantTest {
         assertEquals(3, damages.size(), "two mutants hit equally hard");
     }
 
+    /**
+     * <b>Fast creatures, slow blows.</b> The two are one design and neither half
+     * survives on its own: something that holds a sprinting player's pace has to
+     * be survivable once it arrives, and what makes being caught survivable is
+     * whole seconds between swings in which to get out again.
+     */
+    @Test
+    void twoOfThemHoldASprintAndAllThreeSwingSlowly() {
+        Mutants.Kind wendigo = wendigo();
+        assertTrue(wendigo.pursuitSpeed() > WatchPlayer.WALK_SPEED,
+                "a walk outpaces the wendigo, so walking away from one would work");
+        assertTrue(wendigo.pursuitSpeed() < WatchPlayer.RUN_SPEED,
+                "the wendigo matches a sprint and also throws, which leaves a "
+                        + "player no answer at all");
+
+        for (Mutants.Kind kind : Mutants.all()) {
+            if (kind == wendigo) continue;
+            // Within a tenth of a metre a second of a dead sprint: level, so the
+            // chase is decided by the ground rather than by the legs.
+            assertEquals(WatchPlayer.RUN_SPEED, sustained(kind), 0.1,
+                    kind.key() + " does not hold a sprinting player's pace");
+        }
+        for (Mutants.Kind kind : Mutants.all()) {
+            assertTrue(kind.strikeSeconds() >= 2.0, kind.key() + " swings every "
+                    + kind.strikeSeconds() + " s — too fast for something this quick");
+        }
+    }
+
+    /**
+     * How fast one of these actually travels while hunting, held rather than
+     * peak — which for a burster is the speed between bursts and for the other
+     * two is simply their pursuit speed.
+     */
+    private static double sustained(Mutants.Kind kind) {
+        return kind.power() == Mutants.Power.LUNGE
+                ? kind.pursuitSpeed() * 0.72 : kind.pursuitSpeed();
+    }
+
+    // --- the wendigo's arm ----------------------------------------------------------------
+
+    @Test
+    void onlyTheWendigoThrowsAnything() {
+        int throwers = 0;
+        for (Mutants.Kind kind : Mutants.all()) {
+            if (!kind.hurls()) continue;
+            throwers++;
+            Mutants.Ranged ranged = kind.ranged();
+            assertTrue(ranged.range() > kind.reach() * 4,
+                    kind.key() + " throws barely further than it can reach");
+            assertTrue(ranged.minRange() > kind.reach(),
+                    kind.key() + " can throw and swing at the same distance, so "
+                            + "closing on it would not turn the ranged attack off");
+            assertTrue(ranged.damage() < kind.damage(),
+                    kind.key() + " hurts more at range than in reach");
+        }
+        assertEquals(1, throwers, "the ranged attack is meant to be one creature's");
+        assertEquals(wendigo().key(), Mutants.all().stream()
+                .filter(Mutants.Kind::hurls).findFirst().orElseThrow().key());
+    }
+
+    /**
+     * <b>It connects, at every distance in its band.</b>
+     *
+     * <p>This is the test for two bugs that each produced the same symptom — an
+     * attack that works except at distances nobody can name — and neither of
+     * which any existing test could have caught:
+     *
+     * <ol>
+     *   <li>the launch angle was approximated by adding the drop over an
+     *       estimated flight time, which is wrong because lifting the aim steals
+     *       speed from the horizontal; measured, it missed at thirty metres and
+     *       hit at twenty and forty;</li>
+     *   <li>the hit test compared the shard's sampled position against the
+     *       target, and a shard moves 1.2 m per tick against a 1.1 m hit radius,
+     *       so it stepped clean through people.</li>
+     * </ol>
+     *
+     * <p><b>Flat ground, and no game.</b> Both bugs are in the arc and the
+     * sweep, and both were first chased through a live world where the answer
+     * depended on the seed: a shard thrown across real terrain legitimately
+     * buries itself in a rise, which is the entire "put something between you"
+     * mechanic working, and a thrower standing ten metres downhill legitimately
+     * falls short. A test that cannot tell those apart from a broken arc is a
+     * test that measures the landscape. So this drives {@link Hurl} directly
+     * over level ground, which is the only condition under which "it should hit"
+     * is unambiguously true.
+     */
+    @Test
+    void theShardHitsFromEveryDistanceInItsBand() {
+        Mutants.Kind wendigo = wendigo();
+        Mutants.Ranged arm = wendigo.ranged();
+        List<Double> missed = new java.util.ArrayList<>();
+        for (double range = arm.minRange(); range <= arm.range(); range += 2) {
+            // A thrower standing on flat ground, and somebody standing on it too.
+            Animal beast = new Animal(1, wendigo.def(), 0, 0, 0, 5L);
+            Hurl shard = Hurl.thrown(1, beast, range, 0, 0, arm);
+            boolean hit = false;
+            while (shard.step(1.0 / 20, 0)) {
+                if (shard.hits(range, 0, 0)) {
+                    hit = true;
+                    break;
+                }
+            }
+            if (!hit) missed.add(range);
+        }
+        assertEquals(List.of(), missed,
+                "a shard thrown over flat ground missed a stationary target at "
+                        + missed + " m");
+    }
+
+    /**
+     * …and a wendigo <em>decides</em> to throw, at range and not in reach.
+     *
+     * <p>Through the animal rather than through a live world, on purpose. In a
+     * world the shard flies over real ground, and a thrower held at
+     * twenty-six metres on one seed buries every one of them in the rise
+     * between — which is the cover mechanic working exactly as designed and
+     * tells you nothing about whether the creature tried. What is under test
+     * here is the decision: the band it throws in, and the band it does not.
+     */
+    @Test
+    void aWendigoThrowsAtRangeAndNotInReach() {
+        Mutants.Kind wendigo = wendigo();
+        Mutants.Ranged arm = wendigo.ranged();
+
+        Clearing far = new Clearing();
+        far.playerX = (arm.minRange() + arm.range()) / 2;
+        Animal atRange = new Animal(1, wendigo.def(), 0, 0, 20, 5L);
+        // Pinned, so it cannot simply walk into melee and stop throwing.
+        for (int i = 0; i < 400; i++) {
+            atRange.place(0, 0, 20, atRange.yaw());
+            atRange.step(1.0 / 20, far);
+        }
+        assertTrue(far.thrown >= 3, "a wendigo held at " + Math.round(far.playerX)
+                + " m threw " + far.thrown + " times in twenty seconds");
+        assertEquals(0, far.blows, "it reached somebody twenty-five metres away");
+
+        Clearing close = new Clearing();
+        close.playerX = arm.minRange() * 0.5;
+        Animal atHand = new Animal(2, wendigo.def(), 0, 0, 20, 5L);
+        for (int i = 0; i < 400; i++) {
+            atHand.place(0, 0, 20, atHand.yaw());
+            atHand.step(1.0 / 20, close);
+        }
+        assertEquals(0, close.thrown, "it threw from inside its own minimum range");
+        assertTrue(close.blows > 0, "it neither threw nor swung at arm's length");
+    }
+
+    @Test
+    void aShardIsNotSavedAndDoesNotOutliveItsFlight() {
+        Mutants.Kind wendigo = wendigo();
+        WatchGame game = new WatchGame(new WatchGame.Config(808L, "Air", 1));
+        WatchPlayer me = game.join(1, "Kara");
+        game.debug(1, Debug.CODE);
+        Animal beast = game.summon(1, wendigo.key());
+        // Somewhere it will throw from, and a player who then leaves.
+        double level = me.z();
+        double bx = me.x() + 30, by = me.y();
+        for (int i = 0; i < 120; i++) {
+            beast.place(bx, by, level, beast.yaw());
+            game.move(1, me.x(), me.y(), level, 0, 0, false, 0.05);
+            game.tick(0.05);
+        }
+        assertFalse(game.toMap().containsKey("hurls"),
+                "a shard in the air was written into the save");
+        // Everything eventually lands, times out or connects.
+        game.leave(1);
+        for (int i = 0; i < 200; i++) game.tick(0.05);
+        assertEquals(0, game.hurls().size(), "a shard is still in the air a minute later");
+    }
+
+    // --- the way they move and the way they look -------------------------------------------
+
+    /**
+     * <b>They do not walk like animals, and this is what says so.</b> The shared
+     * table is a good deer walk: legs exactly out of phase, both sides the same,
+     * head on the same clock as the feet. Every one of those is broken on
+     * purpose here — see {@code MutantGait} — and each break is worth a test
+     * because each of them would silently revert to "fine" if somebody pointed
+     * a mutant back at {@code AnimalModel.procedural()}.
+     */
+    @Test
+    void theirGaitIsBrokenOnPurpose() {
+        for (Mutants.Kind kind : Mutants.all()) {
+            AnimalModels.Loaded model = AnimalModels.of(kind.def());
+            AnimalModel.PoseSource poses = model.poses();
+
+            // The legs are not half a turn apart, so the limp never resolves.
+            double clash = 0;
+            for (double phase = 0; phase < 1; phase += 0.05) {
+                double left = poses.poseOf(AnimState.WALK, AnimalModel.Joint.LEG_BL,
+                        phase).pitch();
+                double opposite = poses.poseOf(AnimState.WALK,
+                        AnimalModel.Joint.LEG_BR, phase + 0.5).pitch();
+                clash = Math.max(clash, Math.abs(left - opposite));
+            }
+            assertTrue(clash > 0.05, kind.key()
+                    + " walks with its legs exactly opposed, which is a deer");
+
+            // The two sides do not stride equally far.
+            double leftReach = 0, rightReach = 0;
+            for (double phase = 0; phase < 1; phase += 0.02) {
+                leftReach = Math.max(leftReach, Math.abs(poses.poseOf(AnimState.WALK,
+                        AnimalModel.Joint.LEG_BL, phase).pitch()));
+                rightReach = Math.max(rightReach, Math.abs(poses.poseOf(AnimState.WALK,
+                        AnimalModel.Joint.LEG_BR, phase).pitch()));
+            }
+            assertTrue(Math.abs(leftReach - rightReach) > 0.05,
+                    kind.key() + " strides the same distance on both sides");
+
+            // And it differs from the shared animal table it would otherwise use.
+            double fromAnimals = 0;
+            for (double phase = 0; phase < 1; phase += 0.05) {
+                for (AnimalModel.Joint joint : AnimalModel.Joint.values()) {
+                    fromAnimals += Math.abs(
+                            poses.poseOf(AnimState.WALK, joint, phase).pitch()
+                                    - AnimalModel.pose(AnimState.WALK, joint, phase)
+                                            .pitch());
+                }
+            }
+            assertTrue(fromAnimals > 1.0,
+                    kind.key() + " poses identically to the shared animal table");
+        }
+    }
+
+    /** A run is the walk wound up, not a different creature. */
+    @Test
+    void aRunIsTheSameBrokenWalkWithLongerStrides() {
+        for (Mutants.Kind kind : Mutants.all()) {
+            AnimalModel.PoseSource poses = AnimalModels.of(kind.def()).poses();
+            double walk = 0, run = 0;
+            for (double phase = 0; phase < 1; phase += 0.02) {
+                walk = Math.max(walk, Math.abs(poses.poseOf(AnimState.WALK,
+                        AnimalModel.Joint.LEG_BL, phase).pitch()));
+                run = Math.max(run, Math.abs(poses.poseOf(AnimState.RUN,
+                        AnimalModel.Joint.LEG_BL, phase).pitch()));
+            }
+            assertTrue(run > walk * 1.4,
+                    kind.key() + " runs with the same stride it walks with");
+        }
+    }
+
+    /**
+     * The two lights, and the dark they are read against.
+     *
+     * <p>The whole trick is a ratio between two painted colours — see
+     * {@code AnimalSkins.Region.GLOW} — so what has to hold is that the glow is
+     * far brighter than the shadow beside it. Both are multiplied by the hour's
+     * light, so a ratio that holds here holds at every hour.
+     */
+    @Test
+    void theGlowsAreBrightAndTheSocketsAreDark() {
+        for (Mutants.Kind kind : Mutants.all()) {
+            int glow = AnimalSkins.regionColour(kind.def(), AnimalSkins.Region.GLOW);
+            int shadow = AnimalSkins.regionColour(kind.def(), AnimalSkins.Region.SHADOW);
+            assertTrue(brightness(glow) > brightness(shadow) * 4,
+                    kind.key() + " glow " + Integer.toHexString(glow) + " is not much "
+                            + "brighter than its socket " + Integer.toHexString(shadow));
+            assertTrue(brightness(glow) > 0.75,
+                    kind.key() + " glow is not bright enough to read at night");
+            assertTrue(brightness(shadow) < 0.2, kind.key() + " socket is not dark");
+        }
+        // The two red pairs are red; the mirewraith's lantern is not, so a party
+        // can tell which of them is in the treeline.
+        assertTrue(red(Mutants.of(AnimalRegistry.inFamily(AnimalFamily.WENDIGO)
+                .get(0)).glow()));
+        assertTrue(red(Mutants.of(AnimalRegistry.inFamily(AnimalFamily.WEREWOLF)
+                .get(0)).glow()));
+        assertFalse(red(Mutants.of(AnimalRegistry.inFamily(AnimalFamily.MIREWRAITH)
+                .get(0)).glow()));
+    }
+
+    private static double brightness(int rgb) {
+        return Math.max((rgb >> 16) & 0xFF, Math.max((rgb >> 8) & 0xFF, rgb & 0xFF))
+                / 255.0;
+    }
+
+    private static boolean red(int rgb) {
+        int r = (rgb >> 16) & 0xFF, g = (rgb >> 8) & 0xFF, b = rgb & 0xFF;
+        return r > 180 && r > g * 2 && r > b * 2;
+    }
+
+    /**
+     * Nothing else in the book gained or lost a colour when the two new regions
+     * were carved out of the sheet.
+     *
+     * <p>They were taken from the 32×16 corner below {@code HARD} and
+     * {@code EYE} that nothing had ever painted — but "nothing had ever painted
+     * it" is exactly the sort of claim that is true until somebody moves a
+     * rectangle, so it is worth holding down.
+     */
+    @Test
+    void theNewRegionsTookNothingFromTheOldOnes() {
+        for (AnimalDef def : List.of(AnimalRegistry.all().get(0),
+                AnimalRegistry.all().get(400), AnimalRegistry.all().get(900))) {
+            for (AnimalSkins.Region region : AnimalSkins.Region.values()) {
+                int colour = AnimalSkins.regionColour(def, region);
+                assertTrue(colour >= 0, def.key() + " " + region);
+            }
+            // An ordinary animal's hard parts and eyes are still their own
+            // colours rather than having been overwritten by the new strip.
+            assertNotEquals(AnimalSkins.regionColour(def, AnimalSkins.Region.SHADOW),
+                    AnimalSkins.regionColour(def, AnimalSkins.Region.HARD),
+                    def.key() + " hard parts have become the shadow colour");
+        }
+    }
+
+    @Test
+    void theyAreBuiltFromFarMoreThanABoxPerLimb() {
+        for (Mutants.Kind kind : Mutants.all()) {
+            int boxes = AnimalModels.of(kind.def()).geometry().boxCount();
+            assertTrue(boxes >= 80, kind.key() + " is built from only " + boxes
+                    + " boxes — the ordinary animal plans manage a dozen");
+            boolean glows = false, shadowed = false;
+            for (AnimalModel.Part part : AnimalModels.of(kind.def()).geometry().parts()) {
+                if (part.region() == AnimalSkins.Region.GLOW) glows = true;
+                if (part.region() == AnimalSkins.Region.SHADOW) shadowed = true;
+            }
+            assertTrue(glows, kind.key() + " has nothing lit from inside");
+            assertTrue(shadowed, kind.key() + " has no dark to read its glow against");
+        }
+    }
+
+    // --- what they sound like ---------------------------------------------------------------
+
+    /**
+     * Every voice a mutant can use is in the catalogue a creator reads, and
+     * nothing else in the Field Guide is.
+     */
+    @Test
+    void theMutantsHaveVoicesAndTheOtherThirteenHundredDoNot() {
+        Set<String> catalogue = new HashSet<>();
+        for (SoundKeys.Entry entry : SoundKeys.all()) {
+            if (SoundKeys.WATCH.equals(entry.folder())) catalogue.add(entry.key());
+        }
+        assertFalse(catalogue.isEmpty(), "the Field Guide has no sounds at all");
+
+        int expected = 0;
+        for (Mutants.Kind kind : Mutants.all()) {
+            for (String state : MutantVoice.statesFor(kind)) {
+                String key = MutantVoice.key(kind, state);
+                assertTrue(catalogue.contains(key),
+                        key + " is played but is not in SOUND_KEYS.txt, so nobody "
+                                + "will ever know to record it");
+                // …and it resolves to a file a person can name.
+                assertTrue(SoundKeys.paths(key).contains(
+                                SoundKeys.WATCH + "/" + kind.def().family().key()
+                                        + "_" + state),
+                        key + " does not map to watch/<creature>_<state>");
+                expected++;
+            }
+        }
+        assertEquals(expected, catalogue.size(),
+                "the catalogue lists sounds nothing will ever play");
+
+        // Only the thrower is asked for a throw.
+        for (Mutants.Kind kind : Mutants.all()) {
+            List<String> states = MutantVoice.statesFor(kind);
+            assertEquals(kind.hurls(), states.contains(MutantVoice.HURL),
+                    kind.key() + " is asked for a hurl sound it cannot use");
+        }
+    }
+
+    /** A creature file answers for every state it has not been given one of. */
+    @Test
+    void oneFilePerCreatureIsEnough() {
+        Mutants.Kind kind = wendigo();
+        for (String state : MutantVoice.statesFor(kind)) {
+            List<String> paths = SoundKeys.paths(MutantVoice.key(kind, state));
+            assertTrue(paths.indexOf(SoundKeys.WATCH + "/wendigo_" + state)
+                            < paths.indexOf(SoundKeys.WATCH + "/wendigo"),
+                    "watch/wendigo.wav should be the fallback for " + state
+                            + ", not the first choice");
+            assertTrue(paths.contains(SoundKeys.WATCH + "/wendigo"),
+                    "one file named for the creature does not cover " + state);
+        }
+    }
+
+    // --- how often one turns up -----------------------------------------------------------
+
     @Test
     void everyMutantHasAModelAndAStrikePose() {
         for (Mutants.Kind kind : Mutants.all()) {
@@ -262,6 +647,7 @@ class MutantTest {
         double playerX, playerY;
         double damageTaken;
         int blows;
+        int thrown;
 
         @Override public double groundAt(double x, double y) { return 20; }
 
@@ -302,6 +688,11 @@ class MutantTest {
         @Override public void wound(String name, double amount, Animal by) {
             damageTaken += amount;
             blows++;
+        }
+
+        @Override
+        public void hurlAt(Animal from, String at, Mutants.Ranged ranged) {
+            thrown++;
         }
     }
 
@@ -608,8 +999,6 @@ class MutantTest {
         assertTrue(Math.hypot(beast.x() - me.x(), beast.y() - me.y()) < startedAt,
                 "it did not close at all in ten seconds");
     }
-
-    // --- how often one turns up -----------------------------------------------------------
 
     /**
      * <b>The wood has to be safe.</b> A world that puts a mutant in front of a

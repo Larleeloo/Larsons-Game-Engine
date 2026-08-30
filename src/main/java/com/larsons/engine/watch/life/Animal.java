@@ -163,6 +163,22 @@ public final class Animal {
          * @param by     the animal that hit them, for the line in the log
          */
         default void wound(String name, double amount, Animal by) { }
+
+        /**
+         * Throw something at a player — the wendigo's ranged attack.
+         *
+         * <p>The same split as {@link #wound}: the animal decides that it is
+         * loosing one, and the world builds it, tracks it and works out whether
+         * it connects. An {@link Animal} owns no projectile and never sees one
+         * again after this call.
+         *
+         * <p>Defaulted for {@link #nearestQuarry}'s reason, and more so: one of
+         * thirteen hundred species ever calls it.
+         *
+         * @param at     who it is aimed at
+         * @param ranged what the thrower's arm can do
+         */
+        default void hurlAt(Animal from, String at, Mutants.Ranged ranged) { }
     }
 
     /** How far an animal will travel to reach a lure. */
@@ -259,6 +275,24 @@ public final class Animal {
     private static final double BURST_REST = 3.2;
 
     /**
+     * What share of its burst speed a {@link Mutants.Power#LUNGE} hunter holds
+     * between bursts.
+     *
+     * <p>Not a feel number: it is chosen so that the werewolf's <em>resting</em>
+     * pursuit is {@link com.larsons.engine.watch.WatchPlayer#RUN_SPEED} exactly.
+     * Its burst is 11.1 m/s and 0.72 of that is 8.0, which is a sprinting
+     * player's pace to two decimal places — so a straight-line chase is a
+     * stalemate that the bursts slowly win, and the way out is the ground rather
+     * than the legs.
+     *
+     * <p>Kept here rather than as a second multiplier on {@code Kind} because
+     * every {@code LUNGE} creature should have the same shape of rhythm; what
+     * differs between two of them is how fast the burst is, which
+     * {@link Mutants.Kind#chase()} already says.
+     */
+    private static final double LUNGE_REST = 0.72;
+
+    /**
      * How close an {@link Mutants.Power#AMBUSH} hunter lets somebody get before
      * it stands up, as a share of its notice range.
      *
@@ -318,6 +352,9 @@ public final class Animal {
 
     /** How long until it can swing again, in seconds. */
     private double strikeCooldown;
+
+    /** …and until it can throw again. Its own clock — see {@link #hurl}. */
+    private double hurlCooldown;
 
     /** Where a lunging hunter is in its burst-and-breather cycle, in seconds. */
     private double burstClock;
@@ -534,11 +571,41 @@ public final class Animal {
             }
             return;
         }
+
+        // Out of reach, and it may still be able to hurt them. It keeps walking
+        // while it does: a thrower that stopped to throw would be a turret, and
+        // the wendigo's whole character is that it does not stop.
+        hurl(dt, around, distance);
         // Walk at where they are now rather than at where they were when the
         // last target was set: a pursuit that re-aims once a second is a thing
         // you can walk in a circle around.
         aimAt(scratch[0], scratch[1]);
         enter(Behaviour.HUNT);
+    }
+
+    /**
+     * Throw something, if this one throws and the range is right.
+     *
+     * <p><b>A band rather than a ceiling.</b> The maximum is what you would
+     * expect; the minimum is the interesting half. Inside
+     * {@link Mutants.Ranged#minRange} it does not throw at all, which means
+     * closing on a wendigo <em>turns its ranged attack off</em> and leaves you
+     * with the slowest melee in the game. That is the shape of the fight: the
+     * dangerous place is the middle distance, and both running away and running
+     * at it are better than standing at forty metres in the open.
+     *
+     * <p>The cooldown is its own, not the melee one. A creature that had to
+     * choose between swinging and throwing on one clock would spend the whole
+     * approach doing neither.
+     */
+    private void hurl(double dt, Surroundings around, double distance) {
+        Mutants.Ranged ranged = mutant.ranged();
+        if (ranged == null) return;
+        hurlCooldown = Math.max(0, hurlCooldown - dt);
+        if (distance < ranged.minRange() || distance > ranged.range()) return;
+        if (hurlCooldown > 0) return;
+        hurlCooldown = ranged.everySeconds();
+        around.hurlAt(this, quarry, ranged);
     }
 
     /**
@@ -567,15 +634,15 @@ public final class Animal {
 
     /** How fast it is going after somebody, in metres per second. */
     private double huntSpeed() {
-        double chase = def.speed() * mutant.chase();
+        double chase = mutant.pursuitSpeed();
         return switch (mutant.power()) {
-            // Between bursts it is merely keeping up; during one it is the
-            // fastest thing in the game.
-            case LUNGE -> bursting ? chase : def.speed() * 0.85;
-            // Slow, and it does not need to be anything else: it was already
-            // where you were going.
-            case AMBUSH -> chase;
-            case STALK -> chase;
+            // Between bursts it holds a sprinting player exactly level; during
+            // one it is the fastest thing in the world. See LUNGE_REST — the
+            // fraction is what makes the between-burst speed the design's
+            // number rather than an incidental one.
+            case LUNGE -> bursting ? chase : chase * LUNGE_REST;
+            // Flat out, with no rhythm to read. Both of these hold a sprint.
+            case AMBUSH, STALK -> chase;
         };
     }
 

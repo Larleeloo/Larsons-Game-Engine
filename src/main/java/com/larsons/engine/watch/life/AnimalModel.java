@@ -734,174 +734,318 @@ public final class AnimalModel {
      */
     private static AnimalModel wendigo() {
         List<Part> parts = new ArrayList<>();
-        double hip = 0.50;          // where the legs meet the body
-        double shoulder = 0.84;     // and where the arms do
-        double thigh = (hip - 0.06) / 2;
+        double hip = 0.46;
+        double shoulder = 0.845;
+        double segment = (hip - 0.05) / 2;
 
-        // Legs: two segments, so the knee reads.
+        // --- legs: thigh, shin, a long foot, and toes on the end of it -------
         for (int side = -1; side <= 1; side += 2) {
             Joint joint = side < 0 ? Joint.LEG_BL : Joint.LEG_BR;
-            parts.add(new Part(joint, 0, side * 0.055, hip,
-                    0, 0, -thigh / 2, 0.035, 0.038, thigh / 2,
-                    AnimalSkins.Region.LIMB));
-            parts.add(new Part(joint, 0, side * 0.055, hip,
-                    0.012, 0, -thigh - thigh / 2, 0.028, 0.030, thigh / 2,
-                    AnimalSkins.Region.LIMB));
-            // A long, flat foot. It is what stops the legs ending in points and
-            // what makes the thing look planted rather than floating.
-            parts.add(new Part(joint, 0, side * 0.055, hip,
-                    0.030, 0, -hip + 0.022, 0.070, 0.034, 0.022,
-                    AnimalSkins.Region.LIMB));
-        }
-
-        // The ribcage, and a waist far too narrow for it.
-        parts.add(new Part(Joint.BODY, 0, 0, hip, 0, 0, 0.06,
-                0.055, 0.070, 0.075, AnimalSkins.Region.BELLY));
-        parts.add(new Part(Joint.BODY, 0, 0, hip, -0.010, 0, 0.22,
-                0.075, 0.105, 0.115, AnimalSkins.Region.BODY));
-        // Three ribs on each flank, standing proud of the chest.
-        for (int side = -1; side <= 1; side += 2) {
-            for (int i = 0; i < 3; i++) {
-                parts.add(new Part(Joint.BODY, 0, 0, hip,
-                        -0.010, side * 0.108, 0.16 + i * 0.070,
-                        0.070, 0.014, 0.020, AnimalSkins.Region.HARD));
+            double py = side * 0.055;
+            limb(parts, joint, 0, py, hip, 0, 0, -segment / 2, 0.034, 0.038,
+                    segment / 2, AnimalSkins.Region.LIMB);
+            // A knee, standing proud of both segments: the joint is what makes
+            // a leg read as jointed rather than as one tapering stick.
+            box(parts, joint, 0, py, hip, 0.004, 0, -segment, 0.040, 0.044, 0.026,
+                    AnimalSkins.Region.HARD);
+            limb(parts, joint, 0, py, hip, 0.014, 0, -segment * 1.5 - 0.010,
+                    0.026, 0.030, segment / 2, AnimalSkins.Region.LIMB);
+            box(parts, joint, 0, py, hip, 0.026, 0, -hip + 0.030, 0.052, 0.032,
+                    0.026, AnimalSkins.Region.LIMB);
+            for (int toe = -1; toe <= 1; toe++) {
+                box(parts, joint, 0, py, hip, 0.086, toe * 0.020, -hip + 0.014,
+                        0.034, 0.011, 0.012, AnimalSkins.Region.HARD);
             }
         }
-        // Shoulders, hunched forward of the chest.
-        parts.add(new Part(Joint.BODY, 0, 0, hip, -0.030, 0, 0.335,
-                0.060, 0.140, 0.048, AnimalSkins.Region.BODY));
 
-        // Arms: upper, forearm, and a hand of claws. Long enough that the
-        // fingertips hang below the knee, which is the proportion that does more
-        // for this silhouette than anything else in the method.
+        // --- pelvis and a spine that reads as vertebrae -----------------------
+        box(parts, Joint.BODY, 0, 0, hip, 0, 0, 0.030, 0.052, 0.078, 0.048,
+                AnimalSkins.Region.BELLY);
+        for (int i = 0; i < 3; i++) {
+            box(parts, Joint.BODY, 0, 0, hip, -0.030, 0, 0.085 + i * 0.052,
+                    0.022, 0.030, 0.026, AnimalSkins.Region.HARD);
+        }
+        // The gut: narrow, and it is what the ribcage above it is wider than.
+        box(parts, Joint.BODY, 0, 0, hip, 0, 0, 0.115, 0.048, 0.064, 0.070,
+                AnimalSkins.Region.BELLY);
+
+        // --- the open chest ---------------------------------------------------
+        //
+        // The one thing on this creature a player will describe afterwards, and
+        // it is built as three shells: a near-black cavity, the fire inside it,
+        // and the ribs of the cage standing in front of both. The order matters
+        // less than the sizes — the glow has to be visible *between* the ribs
+        // rather than behind them, so it is wider than the gap it shows through
+        // and set back only a little.
+        double chestZ = 0.255;
+        box(parts, Joint.BODY, 0, 0, hip, -0.014, 0, chestZ, 0.066, 0.098, 0.106,
+                AnimalSkins.Region.SHADOW);
+        box(parts, Joint.BODY, 0, 0, hip, 0.010, 0, chestZ, 0.056, 0.086, 0.094,
+                AnimalSkins.Region.GLOW);
+        // Two dimmer shells around the core, which is how a flat-shaded world
+        // spells "this is giving off light". See AnimalSkins.Region.GLOW.
+        box(parts, Joint.BODY, 0, 0, hip, 0.010, 0, chestZ + 0.098, 0.040, 0.058,
+                0.016, AnimalSkins.Region.GLOW);
+        box(parts, Joint.BODY, 0, 0, hip, 0.010, 0, chestZ - 0.098, 0.040, 0.058,
+                0.016, AnimalSkins.Region.GLOW);
+        // Ribs: four a side, curving forward, with the sternum they meet at.
+        for (int side = -1; side <= 1; side += 2) {
+            for (int i = 0; i < 4; i++) {
+                double up = chestZ - 0.060 + i * 0.052;
+                box(parts, Joint.BODY, 0, 0, hip, 0.026, side * 0.086, up,
+                        0.052, 0.016, 0.017, AnimalSkins.Region.HARD);
+                box(parts, Joint.BODY, 0, 0, hip, -0.030, side * 0.098, up,
+                        0.030, 0.014, 0.015, AnimalSkins.Region.HARD);
+            }
+        }
+        box(parts, Joint.BODY, 0, 0, hip, 0.060, 0, chestZ, 0.016, 0.026, 0.088,
+                AnimalSkins.Region.HARD);
+
+        // --- shoulders and collarbones ----------------------------------------
+        box(parts, Joint.BODY, 0, 0, hip, -0.030, 0, 0.390, 0.048, 0.128, 0.040,
+                AnimalSkins.Region.BODY);
+        for (int side = -1; side <= 1; side += 2) {
+            box(parts, Joint.BODY, 0, 0, hip, 0.016, side * 0.070, 0.372,
+                    0.030, 0.062, 0.014, AnimalSkins.Region.HARD);
+            box(parts, Joint.BODY, 0, 0, hip, -0.026, side * 0.130, 0.386,
+                    0.038, 0.030, 0.034, AnimalSkins.Region.BODY);
+        }
+
+        // --- arms: upper, elbow, forearm, wrist, and long fingers -------------
         for (int side = -1; side <= 1; side += 2) {
             Joint joint = side < 0 ? Joint.LEG_FL : Joint.LEG_FR;
-            parts.add(new Part(joint, -0.030, side * 0.135, shoulder,
-                    0, 0, -0.115, 0.030, 0.032, 0.115, AnimalSkins.Region.LIMB));
-            parts.add(new Part(joint, -0.030, side * 0.135, shoulder,
-                    0.010, 0, -0.345, 0.024, 0.026, 0.120, AnimalSkins.Region.LIMB));
-            for (int finger = -1; finger <= 1; finger++) {
-                parts.add(new Part(joint, -0.030, side * 0.135, shoulder,
-                        0.020, finger * 0.020, -0.510, 0.014, 0.008, 0.050,
-                        AnimalSkins.Region.HARD));
+            double py = side * 0.140;
+            limb(parts, joint, -0.030, py, shoulder, 0, 0, -0.115, 0.029, 0.031,
+                    0.115, AnimalSkins.Region.LIMB);
+            box(parts, joint, -0.030, py, shoulder, 0.004, 0, -0.232, 0.034,
+                    0.036, 0.024, AnimalSkins.Region.HARD);
+            limb(parts, joint, -0.030, py, shoulder, 0.010, 0, -0.352, 0.023,
+                    0.025, 0.108, AnimalSkins.Region.LIMB);
+            box(parts, joint, -0.030, py, shoulder, 0.018, 0, -0.472, 0.028,
+                    0.030, 0.022, AnimalSkins.Region.LIMB);
+            // Four fingers, two joints each, splayed and far too long.
+            for (int finger = 0; finger < 4; finger++) {
+                double across = (finger - 1.5) * 0.019;
+                box(parts, joint, -0.030, py, shoulder, 0.020 + Math.abs(across),
+                        across, -0.530, 0.012, 0.007, 0.042,
+                        AnimalSkins.Region.HARD);
+                box(parts, joint, -0.030, py, shoulder,
+                        0.026 + Math.abs(across) * 1.4, across * 1.25, -0.596,
+                        0.010, 0.006, 0.030, AnimalSkins.Region.HARD);
             }
         }
 
-        // A long neck, and a head that is mostly jaw.
-        double headZ = shoulder + 0.105;
-        parts.add(new Part(Joint.HEAD, -0.020, 0, shoulder + 0.02,
-                0.010, 0, 0.045, 0.030, 0.034, 0.055, AnimalSkins.Region.BODY));
-        parts.add(new Part(Joint.HEAD, -0.020, 0, shoulder + 0.02,
-                0.020, 0, 0.130, 0.055, 0.055, 0.055, AnimalSkins.Region.HEAD));
-        parts.add(new Part(Joint.HEAD, -0.020, 0, shoulder + 0.02,
-                0.080, 0, 0.105, 0.050, 0.038, 0.030, AnimalSkins.Region.HEAD));
-        // Two lights where the eyes should be. The EYE region is the brightest
-        // thing on any skin sheet, which is what makes these carry at distance.
+        // --- neck, skull, jaw -------------------------------------------------
+        double neck = shoulder + 0.020;
+        for (int i = 0; i < 2; i++) {
+            box(parts, Joint.HEAD, -0.020, 0, neck, 0.006 + i * 0.008, 0,
+                    0.024 + i * 0.044, 0.026, 0.030, 0.026,
+                    AnimalSkins.Region.HARD);
+        }
+        double skull = 0.130;
+        box(parts, Joint.HEAD, -0.020, 0, neck, 0.020, 0, skull, 0.050, 0.052,
+                0.050, AnimalSkins.Region.HEAD);
+        // A heavy brow, which is most of what makes a skull read as a skull.
+        box(parts, Joint.HEAD, -0.020, 0, neck, 0.052, 0, skull + 0.032, 0.030,
+                0.056, 0.018, AnimalSkins.Region.HARD);
+        // The sockets, and the fire in them. Dark first, wider than the light.
         for (int side = -1; side <= 1; side += 2) {
-            parts.add(new Part(Joint.HEAD, -0.020, 0, shoulder + 0.02,
-                    0.062, side * 0.030, 0.150, 0.016, 0.014, 0.014,
-                    AnimalSkins.Region.EYE));
+            box(parts, Joint.HEAD, -0.020, 0, neck, 0.056, side * 0.030,
+                    skull + 0.008, 0.022, 0.020, 0.022,
+                    AnimalSkins.Region.SHADOW);
+            box(parts, Joint.HEAD, -0.020, 0, neck, 0.066, side * 0.030,
+                    skull + 0.008, 0.014, 0.013, 0.014, AnimalSkins.Region.GLOW);
+        }
+        // The muzzle, the hanging lower jaw, and teeth in both.
+        box(parts, Joint.HEAD, -0.020, 0, neck, 0.086, 0, skull - 0.024, 0.042,
+                0.034, 0.026, AnimalSkins.Region.HEAD);
+        box(parts, Joint.HEAD, -0.020, 0, neck, 0.082, 0, skull - 0.070, 0.038,
+                0.030, 0.018, AnimalSkins.Region.HEAD);
+        for (int tooth = -2; tooth <= 2; tooth++) {
+            box(parts, Joint.HEAD, -0.020, 0, neck, 0.116, tooth * 0.013,
+                    skull - 0.046, 0.010, 0.006, 0.016, AnimalSkins.Region.HARD);
         }
 
-        // The antlers. Two beams and three tines a side, swept back — a
-        // silhouette rather than a piece of anatomy, because that is all a
-        // player will ever see of them.
+        // --- antlers ----------------------------------------------------------
+        //
+        // The thing a player sees over a hedge, so they are built for
+        // silhouette: a swept beam a side and four tines off each, none of them
+        // symmetrical with its opposite number.
+        // Seated on the skull rather than hovering over it. The first version
+        // put the pivot a full 6 cm of body length above the cranium's top,
+        // which at five and a half metres is a third of a metre of daylight
+        // between an animal and its own antlers.
+        double crown = neck + skull + 0.030;
         for (int side = -1; side <= 1; side += 2) {
-            parts.add(new Part(Joint.HORN, -0.020, side * 0.035, headZ + 0.06,
-                    -0.010, side * 0.020, 0.100, 0.016, 0.016, 0.100,
-                    AnimalSkins.Region.HARD));
-            parts.add(new Part(Joint.HORN, -0.020, side * 0.035, headZ + 0.06,
-                    -0.040, side * 0.080, 0.195, 0.014, 0.075, 0.014,
-                    AnimalSkins.Region.HARD));
-            parts.add(new Part(Joint.HORN, -0.020, side * 0.035, headZ + 0.06,
-                    0.030, side * 0.105, 0.235, 0.055, 0.014, 0.014,
-                    AnimalSkins.Region.HARD));
-            parts.add(new Part(Joint.HORN, -0.020, side * 0.035, headZ + 0.06,
-                    -0.070, side * 0.130, 0.250, 0.014, 0.014, 0.055,
-                    AnimalSkins.Region.HARD));
+            box(parts, Joint.HORN, -0.020, side * 0.034, crown, -0.012,
+                    side * 0.018, 0.086, 0.015, 0.015, 0.088,
+                    AnimalSkins.Region.HARD);
+            box(parts, Joint.HORN, -0.020, side * 0.034, crown, -0.044,
+                    side * 0.074, 0.174, 0.013, 0.070, 0.013,
+                    AnimalSkins.Region.HARD);
+            box(parts, Joint.HORN, -0.020, side * 0.034, crown, 0.026,
+                    side * 0.100, 0.212, 0.052, 0.013, 0.013,
+                    AnimalSkins.Region.HARD);
+            box(parts, Joint.HORN, -0.020, side * 0.034, crown, -0.074,
+                    side * 0.126, 0.230, 0.013, 0.013, 0.052,
+                    AnimalSkins.Region.HARD);
+            box(parts, Joint.HORN, -0.020, side * 0.034, crown, 0.010,
+                    side * 0.150, 0.268, 0.013, 0.013, 0.044,
+                    AnimalSkins.Region.HARD);
+            box(parts, Joint.HORN, -0.020, side * 0.034, crown, -0.036,
+                    side * (0.086 + side * 0.014), 0.290, 0.038, 0.012, 0.012,
+                    AnimalSkins.Region.HARD);
         }
         return new AnimalModel(parts, shoulder);
     }
 
     /**
-     * The Moonfell Werewolf: shoulders, jaw and a tail.
+     * The Moonfell Werewolf: shoulders, jaw, and two red lights in the dark.
      *
-     * <p>The opposite build to the wendigo in every proportion — short legs
-     * under an enormous chest, arms thick rather than long, and a head carried
-     * <em>forward</em> of the shoulders instead of above them. It is meant to
-     * read as something that will cover ground fast, which is what it does.
+     * <p>The opposite build to the wendigo in every proportion — short
+     * digitigrade legs under an enormous chest, arms thick rather than long, and
+     * a head carried <em>forward</em> of the shoulders instead of above them. It
+     * is meant to read as something that will cover ground fast, which it does:
+     * it holds a sprinting player level.
+     *
+     * <p>Its eyes are the point of it. Everything else about this creature is
+     * dark on dark at the hour it is out, so two small saturated reds set in
+     * black sockets are the whole of what a player sees at forty metres — and,
+     * having seen them once, the thing they will look for in every treeline
+     * afterwards.
      */
     private static AnimalModel werewolf() {
         List<Part> parts = new ArrayList<>();
         double hip = 0.46;
-        double shoulder = 0.80;
-        double thigh = (hip - 0.05) / 2;
+        double shoulder = 0.795;
+        double segment = (hip - 0.05) / 2;
 
-        // Digitigrade: thigh forward, shin back, and a long foot on the ground.
+        // --- digitigrade legs: thigh forward, shin back, long foot ------------
         for (int side = -1; side <= 1; side += 2) {
             Joint joint = side < 0 ? Joint.LEG_BL : Joint.LEG_BR;
-            parts.add(new Part(joint, 0, side * 0.085, hip,
-                    0.030, 0, -thigh / 2, 0.055, 0.055, thigh / 2,
-                    AnimalSkins.Region.LIMB));
-            parts.add(new Part(joint, 0, side * 0.085, hip,
-                    -0.020, 0, -thigh - thigh / 2, 0.040, 0.045, thigh / 2,
-                    AnimalSkins.Region.LIMB));
-            parts.add(new Part(joint, 0, side * 0.085, hip,
-                    0.045, 0, -hip + 0.025, 0.085, 0.048, 0.025,
-                    AnimalSkins.Region.LIMB));
-        }
-
-        // A barrel chest over a narrow gut, leaning forward.
-        parts.add(new Part(Joint.BODY, 0, 0, hip, 0, 0, 0.07,
-                0.085, 0.100, 0.090, AnimalSkins.Region.BELLY));
-        parts.add(new Part(Joint.BODY, 0, 0, hip, 0.015, 0, 0.235,
-                0.110, 0.150, 0.120, AnimalSkins.Region.BODY));
-        // The hackles: a ridge of raised fur along the spine, which is the one
-        // detail that says "this is angry" from behind.
-        for (int i = 0; i < 4; i++) {
-            parts.add(new Part(Joint.BODY, 0, 0, hip,
-                    0.060 - i * 0.055, 0, 0.350 + (i == 0 ? 0.010 : 0),
-                    0.024, 0.016, 0.045 - i * 0.006, AnimalSkins.Region.HARD));
-        }
-        parts.add(new Part(Joint.BODY, 0, 0, hip, 0.010, 0, 0.325,
-                0.075, 0.185, 0.055, AnimalSkins.Region.BODY));
-
-        // Arms: heavy, and they reach the ground when it drops onto them.
-        for (int side = -1; side <= 1; side += 2) {
-            Joint joint = side < 0 ? Joint.LEG_FL : Joint.LEG_FR;
-            parts.add(new Part(joint, 0.010, side * 0.175, shoulder,
-                    0, 0, -0.105, 0.055, 0.055, 0.105, AnimalSkins.Region.LIMB));
-            parts.add(new Part(joint, 0.010, side * 0.175, shoulder,
-                    0.015, 0, -0.310, 0.045, 0.048, 0.105, AnimalSkins.Region.LIMB));
-            parts.add(new Part(joint, 0.010, side * 0.175, shoulder,
-                    0.030, 0, -0.430, 0.055, 0.048, 0.030, AnimalSkins.Region.LIMB));
-            for (int claw = -1; claw <= 1; claw++) {
-                parts.add(new Part(joint, 0.010, side * 0.175, shoulder,
-                        0.085, claw * 0.026, -0.445, 0.030, 0.010, 0.012,
-                        AnimalSkins.Region.HARD));
+            double py = side * 0.085;
+            limb(parts, joint, 0, py, hip, 0.030, 0, -segment / 2, 0.052, 0.054,
+                    segment / 2, AnimalSkins.Region.LIMB);
+            box(parts, joint, 0, py, hip, 0.026, 0, -segment, 0.048, 0.050,
+                    0.024, AnimalSkins.Region.LIMB);
+            limb(parts, joint, 0, py, hip, -0.018, 0, -segment * 1.5 - 0.008,
+                    0.038, 0.042, segment / 2, AnimalSkins.Region.LIMB);
+            box(parts, joint, 0, py, hip, 0.006, 0, -hip + 0.048, 0.030, 0.038,
+                    0.036, AnimalSkins.Region.LIMB);
+            box(parts, joint, 0, py, hip, 0.048, 0, -hip + 0.020, 0.062, 0.042,
+                    0.020, AnimalSkins.Region.LIMB);
+            for (int toe = -1; toe <= 1; toe++) {
+                box(parts, joint, 0, py, hip, 0.106, toe * 0.024, -hip + 0.012,
+                        0.026, 0.013, 0.013, AnimalSkins.Region.LIMB);
+                box(parts, joint, 0, py, hip, 0.140, toe * 0.024, -hip + 0.008,
+                        0.018, 0.008, 0.008, AnimalSkins.Region.HARD);
             }
         }
 
-        // The head, thrust forward: skull, muzzle, ears, and eyes that catch.
-        double neck = shoulder + 0.03;
-        parts.add(new Part(Joint.HEAD, 0.060, 0, neck,
-                0.035, 0, 0.030, 0.060, 0.060, 0.055, AnimalSkins.Region.HEAD));
-        parts.add(new Part(Joint.HEAD, 0.060, 0, neck,
-                0.135, 0, 0.010, 0.055, 0.042, 0.038, AnimalSkins.Region.HEAD));
-        parts.add(new Part(Joint.HEAD, 0.060, 0, neck,
-                0.150, 0, -0.020, 0.045, 0.036, 0.014, AnimalSkins.Region.HARD));
+        // --- a barrel chest over a narrow gut, leaning forward ----------------
+        box(parts, Joint.BODY, 0, 0, hip, 0, 0, 0.062, 0.078, 0.094, 0.084,
+                AnimalSkins.Region.BELLY);
+        box(parts, Joint.BODY, 0, 0, hip, 0.014, 0, 0.224, 0.104, 0.142, 0.112,
+                AnimalSkins.Region.BODY);
+        // Ribs under the fur — a suggestion of them, on the flanks only, so the
+        // thing reads as starved-but-huge rather than as merely huge.
         for (int side = -1; side <= 1; side += 2) {
-            parts.add(new Part(Joint.EAR, 0.060, side * 0.035, neck + 0.08,
-                    -0.015, side * 0.010, 0.050, 0.022, 0.016, 0.050,
-                    AnimalSkins.Region.HEAD));
-            parts.add(new Part(Joint.HEAD, 0.060, 0, neck,
-                    0.100, side * 0.038, 0.050, 0.020, 0.016, 0.014,
-                    AnimalSkins.Region.EYE));
+            for (int i = 0; i < 3; i++) {
+                box(parts, Joint.BODY, 0, 0, hip, 0.020, side * 0.140,
+                        0.170 + i * 0.048, 0.058, 0.012, 0.012,
+                        AnimalSkins.Region.HARD);
+            }
+        }
+        // The hackles: a ridge of raised fur down the spine, which is the one
+        // detail that says "this is angry" from behind.
+        for (int i = 0; i < 6; i++) {
+            box(parts, Joint.BODY, 0, 0, hip, 0.070 - i * 0.040, 0,
+                    0.332 - i * 0.008, 0.020, 0.014, 0.046 - i * 0.005,
+                    AnimalSkins.Region.HARD);
+        }
+        box(parts, Joint.BODY, 0, 0, hip, 0.008, 0, 0.316, 0.072, 0.176, 0.052,
+                AnimalSkins.Region.BODY);
+        // A ruff at the shoulders, wider than the chest.
+        for (int side = -1; side <= 1; side += 2) {
+            box(parts, Joint.BODY, 0, 0, hip, -0.010, side * 0.170, 0.290,
+                    0.062, 0.042, 0.070, AnimalSkins.Region.BODY);
         }
 
-        // A heavy tail, low. It swings with the walk like every other tail here.
-        parts.add(new Part(Joint.TAIL, -0.095, 0, hip + 0.22,
-                -0.110, 0, -0.060, 0.110, 0.045, 0.045, AnimalSkins.Region.TAIL));
+        // --- arms: heavy, and they reach the ground when it drops on them -----
+        for (int side = -1; side <= 1; side += 2) {
+            Joint joint = side < 0 ? Joint.LEG_FL : Joint.LEG_FR;
+            double py = side * 0.178;
+            limb(parts, joint, 0.010, py, shoulder, 0, 0, -0.100, 0.052, 0.054,
+                    0.100, AnimalSkins.Region.LIMB);
+            box(parts, joint, 0.010, py, shoulder, 0.006, 0, -0.206, 0.048,
+                    0.050, 0.024, AnimalSkins.Region.LIMB);
+            limb(parts, joint, 0.010, py, shoulder, 0.014, 0, -0.312, 0.042,
+                    0.045, 0.098, AnimalSkins.Region.LIMB);
+            box(parts, joint, 0.010, py, shoulder, 0.028, 0, -0.428, 0.050,
+                    0.046, 0.028, AnimalSkins.Region.LIMB);
+            for (int claw = 0; claw < 4; claw++) {
+                double across = (claw - 1.5) * 0.023;
+                box(parts, joint, 0.010, py, shoulder, 0.076, across, -0.436,
+                        0.028, 0.009, 0.011, AnimalSkins.Region.HARD);
+                box(parts, joint, 0.010, py, shoulder, 0.108, across, -0.452,
+                        0.020, 0.007, 0.008, AnimalSkins.Region.HARD);
+            }
+        }
+
+        // --- head: skull, muzzle, jaw, teeth, ears, and the two lights --------
+        double neck = shoulder + 0.028;
+        box(parts, Joint.HEAD, 0.058, 0, neck, 0.010, 0, 0.010, 0.038, 0.052,
+                0.042, AnimalSkins.Region.BODY);
+        box(parts, Joint.HEAD, 0.058, 0, neck, 0.036, 0, 0.030, 0.056, 0.058,
+                0.052, AnimalSkins.Region.HEAD);
+        box(parts, Joint.HEAD, 0.058, 0, neck, 0.116, 0, 0.014, 0.048, 0.040,
+                0.034, AnimalSkins.Region.HEAD);
+        box(parts, Joint.HEAD, 0.058, 0, neck, 0.156, 0, 0.022, 0.016, 0.026,
+                0.020, AnimalSkins.Region.HARD);
+        // The lower jaw, hanging open, with a row of teeth in each half.
+        box(parts, Joint.HEAD, 0.058, 0, neck, 0.108, 0, -0.036, 0.042, 0.034,
+                0.016, AnimalSkins.Region.HEAD);
+        for (int tooth = -2; tooth <= 2; tooth++) {
+            box(parts, Joint.HEAD, 0.058, 0, neck, 0.130, tooth * 0.014, -0.010,
+                    0.011, 0.006, 0.016, AnimalSkins.Region.HARD);
+            box(parts, Joint.HEAD, 0.058, 0, neck, 0.126, tooth * 0.014, -0.048,
+                    0.010, 0.006, 0.013, AnimalSkins.Region.HARD);
+        }
+        for (int side = -1; side <= 1; side += 2) {
+            // <b>On the brow, above the muzzle, and standing out from the
+            // skull.</b> They were first put level with the snout at the width
+            // of it, and were invisible from every angle a player will ever see
+            // this creature from: the muzzle is 4 cm of solid head in front of
+            // them and the skull is 5 cm of it behind, so the only sightline to
+            // an eye was straight up its own nose. Two red lights nobody can see
+            // are not a feature.
+            //
+            // Sockets first, and deliberately larger than the light in them: the
+            // black is what the red is read against.
+            box(parts, Joint.HEAD, 0.058, 0, neck, 0.070, side * 0.044, 0.066,
+                    0.032, 0.024, 0.026, AnimalSkins.Region.SHADOW);
+            box(parts, Joint.HEAD, 0.058, 0, neck, 0.080, side * 0.050, 0.068,
+                    0.022, 0.019, 0.019, AnimalSkins.Region.GLOW);
+            // A dimmer shell over the top of each, which is how a flat-shaded
+            // world spells "this is giving off light".
+            box(parts, Joint.HEAD, 0.058, 0, neck, 0.080, side * 0.050, 0.090,
+                    0.016, 0.014, 0.008, AnimalSkins.Region.GLOW);
+            // Ears: outer, and a darker inner face inside it.
+            box(parts, Joint.EAR, 0.058, side * 0.038, neck + 0.078, -0.014,
+                    side * 0.010, 0.048, 0.020, 0.015, 0.050,
+                    AnimalSkins.Region.HEAD);
+            box(parts, Joint.EAR, 0.058, side * 0.038, neck + 0.078, -0.006,
+                    side * 0.010, 0.042, 0.010, 0.009, 0.034,
+                    AnimalSkins.Region.SHADOW);
+        }
+
+        // --- a heavy tail, in four falling segments ---------------------------
+        for (int i = 0; i < 4; i++) {
+            box(parts, Joint.TAIL, -0.092, 0, hip + 0.212,
+                    -0.048 - i * 0.076, 0, -0.024 - i * 0.040,
+                    0.042 - i * 0.006, 0.042 - i * 0.006, 0.040 - i * 0.005,
+                    AnimalSkins.Region.TAIL);
+        }
         return new AnimalModel(parts, shoulder);
     }
 
@@ -910,83 +1054,162 @@ public final class AnimalModel {
      *
      * <p>The third silhouette had to differ from the other two as much as they
      * differ from an animal, so this one loses the head entirely — the neck ends
-     * in shoulders and the shoulders carry a lantern-pale glow where a face
-     * should be. Four arms, hanging, the front pair longer than the back, and
-     * legs too short for the mass above them.
+     * in shoulders, and where a face should be there is a lantern-green light
+     * sunk between them. Four arms, hanging, the front pair longer than the back,
+     * and legs too short for the mass above them.
+     *
+     * <p>Its waist is narrower than its shoulders, which is the load-bearing
+     * proportion: built as a barrel it swallowed its own arms and read as a
+     * crate with feet.
      */
     private static AnimalModel mirewraith() {
         List<Part> parts = new ArrayList<>();
         double hip = 0.40;
         double shoulder = 0.80;
 
-        // Short, thick legs, splayed a little, and broad flat feet — a thing
-        // built for standing in mud rather than for running over it.
+        // --- short, thick, splayed legs on broad feet -------------------------
         for (int side = -1; side <= 1; side += 2) {
             Joint joint = side < 0 ? Joint.LEG_BL : Joint.LEG_BR;
-            parts.add(new Part(joint, 0, side * 0.090, hip,
-                    0, side * 0.020, -hip / 2, 0.060, 0.065, hip / 2,
-                    AnimalSkins.Region.LIMB));
-            parts.add(new Part(joint, 0, side * 0.090, hip,
-                    0.020, side * 0.035, -hip + 0.022, 0.090, 0.070, 0.022,
-                    AnimalSkins.Region.LIMB));
+            double py = side * 0.092;
+            limb(parts, joint, 0, py, hip, 0, side * 0.012, -hip * 0.28, 0.056,
+                    0.060, hip * 0.28, AnimalSkins.Region.LIMB);
+            box(parts, joint, 0, py, hip, 0.004, side * 0.024, -hip * 0.56,
+                    0.052, 0.054, 0.024, AnimalSkins.Region.LIMB);
+            limb(parts, joint, 0, py, hip, 0.006, side * 0.032, -hip * 0.80,
+                    0.046, 0.050, hip * 0.22, AnimalSkins.Region.LIMB);
+            box(parts, joint, 0, py, hip, 0.024, side * 0.038, -hip + 0.020,
+                    0.084, 0.064, 0.020, AnimalSkins.Region.LIMB);
+            for (int toe = -1; toe <= 1; toe++) {
+                box(parts, joint, 0, py, hip, 0.104, side * 0.038 + toe * 0.026,
+                        -hip + 0.012, 0.026, 0.012, 0.012,
+                        AnimalSkins.Region.HARD);
+            }
         }
 
-        // A swollen trunk — and <b>narrower than the shoulders above it</b>,
-        // which is the whole of what makes this silhouette work. The first
-        // version was a barrel wider than the arms hanging beside it, and every
-        // limb on the thing disappeared into its own body: at any distance it
-        // read as a green box with feet, which is not a horror, it is a crate.
-        // A waist the arms hang clear of is what turns four dangling limbs into
-        // something you can see are four dangling limbs.
-        parts.add(new Part(Joint.BODY, 0, 0, hip, 0, 0, 0.115,
-                0.090, 0.105, 0.135, AnimalSkins.Region.BELLY));
-        parts.add(new Part(Joint.BODY, 0, 0, hip, -0.015, 0, 0.315,
-                0.080, 0.095, 0.105, AnimalSkins.Region.BODY));
+        // --- a swollen trunk, narrower than the shoulders above it ------------
+        box(parts, Joint.BODY, 0, 0, hip, 0, 0, 0.105, 0.088, 0.102, 0.128,
+                AnimalSkins.Region.BELLY);
+        box(parts, Joint.BODY, 0, 0, hip, -0.014, 0, 0.310, 0.078, 0.092, 0.100,
+                AnimalSkins.Region.BODY);
+        // Ribs pressing through the swollen flanks, four a side, low.
+        for (int side = -1; side <= 1; side += 2) {
+            for (int i = 0; i < 4; i++) {
+                box(parts, Joint.BODY, 0, 0, hip, 0.006, side * 0.098,
+                        0.046 + i * 0.052, 0.058, 0.013, 0.014,
+                        AnimalSkins.Region.HARD);
+            }
+        }
         // …and shoulders far wider than either, hunched forward.
-        parts.add(new Part(Joint.BODY, 0, 0, hip, -0.045, 0, 0.440,
-                0.075, 0.195, 0.055, AnimalSkins.Region.BODY));
-        // Weed, or hair, or whatever it dragged up with it — four strands off
-        // the shoulders, in the tail region so a pack can recolour them apart
-        // from the body.
-        for (int i = 0; i < 4; i++) {
-            double across = -0.09 + i * 0.06;
-            parts.add(new Part(Joint.TAIL, -0.045, across, hip + 0.45,
-                    -0.020, 0, -0.100, 0.014, 0.014, 0.100,
-                    AnimalSkins.Region.TAIL));
-        }
-        // The light where a face is not. It sits <em>between</em> the shoulders
-        // and stands proud of them rather than inside them — a lantern sunk in
-        // the geometry is a lantern nobody sees, and at night this is the first
-        // thing a player sees and for a second or two it is the only thing.
-        parts.add(new Part(Joint.HEAD, -0.045, 0, hip + 0.44,
-                0.070, 0, 0.075, 0.045, 0.055, 0.050, AnimalSkins.Region.EYE));
+        box(parts, Joint.BODY, 0, 0, hip, -0.044, 0, 0.436, 0.074, 0.192, 0.054,
+                AnimalSkins.Region.BODY);
 
-        // Four arms, hanging outboard of the trunk. The upper pair is long
-        // enough to drag; the lower pair is shorter and set further back, which
-        // is what makes the count read as "too many" rather than as a drawing
-        // mistake.
+        // --- the light where a face is not ------------------------------------
+        //
+        // It stands proud of the shoulders rather than sunk inside them — a
+        // lantern buried in geometry is a lantern nobody sees — and it is the
+        // first thing a player meets at night and, for a second or two, the only
+        // thing.
+        // A rim rather than a slab. Built first as a block of shadow with the
+        // light inside it, it read at any distance as a black box balanced on
+        // the shoulders — the dark has to be a <em>frame</em> around the glow,
+        // only a little larger than it, or the socket becomes the feature and
+        // the lantern becomes a detail on it.
+        box(parts, Joint.HEAD, -0.044, 0, hip + 0.436, 0.058, 0, 0.070, 0.044,
+                0.050, 0.048, AnimalSkins.Region.SHADOW);
+        box(parts, Joint.HEAD, -0.044, 0, hip + 0.436, 0.074, 0, 0.070, 0.038,
+                0.042, 0.040, AnimalSkins.Region.GLOW);
+        box(parts, Joint.HEAD, -0.044, 0, hip + 0.436, 0.070, 0, 0.116, 0.026,
+                0.030, 0.014, AnimalSkins.Region.GLOW);
+        box(parts, Joint.HEAD, -0.044, 0, hip + 0.436, 0.070, 0, 0.022, 0.026,
+                0.030, 0.014, AnimalSkins.Region.GLOW);
+
+        // --- weed, or hair, or whatever it dragged up with it ------------------
+        for (int i = 0; i < 7; i++) {
+            double across = -0.108 + i * 0.036;
+            box(parts, Joint.TAIL, -0.044, across, hip + 0.452, -0.020, 0,
+                    -0.062 - (i % 3) * 0.024, 0.012, 0.012,
+                    0.064 + (i % 3) * 0.024, AnimalSkins.Region.TAIL);
+        }
+
+        // --- four arms, hanging outboard of the trunk -------------------------
         for (int side = -1; side <= 1; side += 2) {
             Joint joint = side < 0 ? Joint.LEG_FL : Joint.LEG_FR;
-            parts.add(new Part(joint, -0.045, side * 0.205, shoulder,
-                    0, 0, -0.130, 0.042, 0.045, 0.130, AnimalSkins.Region.LIMB));
-            parts.add(new Part(joint, -0.045, side * 0.205, shoulder,
-                    0.015, 0, -0.390, 0.034, 0.036, 0.130, AnimalSkins.Region.LIMB));
-            for (int finger = -1; finger <= 1; finger++) {
-                parts.add(new Part(joint, -0.045, side * 0.205, shoulder,
-                        0.025, finger * 0.024, -0.560, 0.018, 0.010, 0.055,
-                        AnimalSkins.Region.HARD));
+            double py = side * 0.206;
+            // The long front pair: upper, elbow, forearm, hand, fingers.
+            limb(parts, joint, -0.044, py, shoulder, 0, 0, -0.126, 0.040, 0.043,
+                    0.126, AnimalSkins.Region.LIMB);
+            box(parts, joint, -0.044, py, shoulder, 0.004, 0, -0.256, 0.038,
+                    0.040, 0.022, AnimalSkins.Region.LIMB);
+            limb(parts, joint, -0.044, py, shoulder, 0.012, 0, -0.382, 0.032,
+                    0.034, 0.120, AnimalSkins.Region.LIMB);
+            box(parts, joint, -0.044, py, shoulder, 0.020, 0, -0.516, 0.034,
+                    0.034, 0.024, AnimalSkins.Region.LIMB);
+            for (int finger = 0; finger < 4; finger++) {
+                double across = (finger - 1.5) * 0.020;
+                box(parts, joint, -0.044, py, shoulder, 0.022, across, -0.572,
+                        0.014, 0.008, 0.038, AnimalSkins.Region.HARD);
+                box(parts, joint, -0.044, py, shoulder, 0.028, across * 1.3,
+                        -0.630, 0.011, 0.007, 0.026, AnimalSkins.Region.HARD);
             }
-            // The second pair, on the same joints so they swing together — one
-            // creature moving, rather than two halves of one — and set inboard
-            // and behind, so the two pairs read as two.
-            parts.add(new Part(joint, -0.045, side * 0.205, shoulder,
-                    -0.075, side * -0.045, -0.230, 0.034, 0.036, 0.115,
-                    AnimalSkins.Region.LIMB));
-            parts.add(new Part(joint, -0.045, side * 0.205, shoulder,
-                    -0.055, side * -0.045, -0.430, 0.028, 0.030, 0.105,
-                    AnimalSkins.Region.LIMB));
+            // The second pair, shorter, set inboard and behind — on the same
+            // joint so they swing together: one creature moving, rather than two
+            // halves of one.
+            limb(parts, joint, -0.044, py, shoulder, -0.074, side * -0.048,
+                    -0.228, 0.032, 0.034, 0.108, AnimalSkins.Region.LIMB);
+            box(parts, joint, -0.044, py, shoulder, -0.070, side * -0.048,
+                    -0.342, 0.030, 0.032, 0.020, AnimalSkins.Region.LIMB);
+            limb(parts, joint, -0.044, py, shoulder, -0.058, side * -0.048,
+                    -0.442, 0.026, 0.028, 0.098, AnimalSkins.Region.LIMB);
+            for (int finger = -1; finger <= 1; finger++) {
+                box(parts, joint, -0.044, py, shoulder, -0.052,
+                        side * -0.048 + finger * 0.018, -0.564, 0.011, 0.007,
+                        0.030, AnimalSkins.Region.HARD);
+            }
         }
         return new AnimalModel(parts, shoulder);
+    }
+
+    // --- the two helpers the mutant plans are written with -----------------------------
+
+    /**
+     * One box, hung off a joint.
+     *
+     * <p>Nothing but {@code parts.add(new Part(…))} with the arguments in an
+     * order that reads left to right — joint, where the hinge is, where the box
+     * is relative to it, how big it is, what it is painted from. The three
+     * mutant plans place something like two hundred and forty boxes between
+     * them, and a twelve-argument constructor written out two hundred and forty
+     * times is a plan nobody can read and nobody can safely change.
+     */
+    private static void box(List<Part> parts, Joint joint,
+                            double pivotX, double pivotY, double pivotZ,
+                            double cx, double cy, double cz,
+                            double hx, double hy, double hz,
+                            AnimalSkins.Region region) {
+        parts.add(new Part(joint, pivotX, pivotY, pivotZ, cx, cy, cz, hx, hy, hz,
+                region));
+    }
+
+    /**
+     * A limb segment, which is a box that also gets a slightly narrower cap at
+     * each end.
+     *
+     * <p>What it buys is the thing that separates these three from the boxy
+     * animals around them: a straight-sided rectangle reads as a plank, and the
+     * same rectangle with its ends drawn in reads as something that tapers into
+     * a joint. Two extra boxes per segment, and there are thirty-odd segments on
+     * a mirewraith.
+     */
+    private static void limb(List<Part> parts, Joint joint,
+                             double pivotX, double pivotY, double pivotZ,
+                             double cx, double cy, double cz,
+                             double hx, double hy, double hz,
+                             AnimalSkins.Region region) {
+        box(parts, joint, pivotX, pivotY, pivotZ, cx, cy, cz, hx, hy, hz, region);
+        box(parts, joint, pivotX, pivotY, pivotZ, cx, cy, cz + hz * 0.92,
+                hx * 1.18, hy * 1.18, hz * 0.14, region);
+        box(parts, joint, pivotX, pivotY, pivotZ, cx, cy, cz - hz * 0.92,
+                hx * 0.82, hy * 0.82, hz * 0.14, region);
     }
 
     /** Whatever a sprite is: a core, a halo of shards, and no legs. */

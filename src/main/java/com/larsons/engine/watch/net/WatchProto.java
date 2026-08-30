@@ -5,6 +5,7 @@ import com.larsons.engine.watch.Spotlight;
 import com.larsons.engine.watch.WatchGame;
 import com.larsons.engine.watch.WatchPlayer;
 import com.larsons.engine.watch.life.Animal;
+import com.larsons.engine.watch.life.Hurl;
 
 import java.util.ArrayList;
 import java.util.LinkedHashMap;
@@ -27,7 +28,7 @@ import java.util.Map;
  *
  *   client → server   {"t":"move","x":..,"y":..,"z":..,"yaw":..,"p":..,"c":false}
  *   server → all      {"t":"state","tick":42,"time":0.61,
- *                      "players":[…],"animals":[…],"lures":[…]}
+ *                      "players":[…],"animals":[…],"lures":[…],"hurls":[…]}
  *
  *   client → server   {"t":"spot","a":animalId}     (0 = whatever I am looking at)
  *   server → all      {"t":"seen","a":id,"sp":"songbird_finch_banded","by":"Kara",
@@ -188,6 +189,7 @@ public final class WatchProto {
     public static Map<String, Object> state(long tick, double timeOfDay,
                                             List<WatchPlayer> players,
                                             List<Animal> animals, List<Lure> lures,
+                                            List<Hurl> hurls,
                                             Map<String, Object> sky) {
         Map<String, Object> m = msg("state");
         m.put("tick", tick);
@@ -215,6 +217,18 @@ public final class WatchProto {
             animalRows.add(row);
         }
         m.put("animals", animalRows);
+
+        // What is in the air. On the snapshot rather than on an event, because
+        // a shard is a moving thing rather than a thing that happened: a client
+        // told only "one was thrown, here, this fast" would have to simulate it,
+        // and two clients simulating the same shard is two shards. Omitted
+        // entirely when nothing is flying, which is nearly every snapshot in
+        // nearly every walk.
+        if (hurls != null && !hurls.isEmpty()) {
+            List<Object> hurlRows = new ArrayList<>();
+            for (Hurl hurl : hurls) hurlRows.add(hurl.toMap());
+            m.put("hurls", hurlRows);
+        }
 
         List<Object> lureRows = new ArrayList<>();
         for (Lure lure : lures) lureRows.add(lure.toMap());

@@ -1614,14 +1614,27 @@ occasionally not safe at all.
 
 | | Where | When | How it hunts |
 |---|---|---|---|
-| **Hollow Wendigo** — 5.6 m | boreal taiga, tundra barrens, crystal highlands | night | `STALK`: notices at 78 m, follows to 190, 4.9 m/s for ever, six blows to kill |
-| **Moonfell Werewolf** — 4.4 m | deciduous woods, autumn birchwood, pine forest | dawn and dusk | `LUNGE`: 1.8 s bursts at 7.8 m/s, 2.9 m/s for the 3.2 s between them, five blows |
-| **Drowned Mirewraith** — 5.0 m | reed marsh, mangrove coast, mushroom hollow | night | `AMBUSH`: stands up at 22 m, slowest at 4.6 m/s, hardest blow — three of them |
+| **Hollow Wendigo** — 5.6 m | boreal taiga, tundra barrens, crystal highlands | night | `STALK`: notices at 78 m, follows to 190, **6.6 m/s**, and **throws** — six blows to kill |
+| **Moonfell Werewolf** — 4.4 m | deciduous woods, autumn birchwood, pine forest | dawn and dusk | `LUNGE`: **8.0 m/s held**, 11.1 in a 1.8 s burst — five blows |
+| **Drowned Mirewraith** — 5.0 m | reed marsh, mangrove coast, mushroom hollow | night | `AMBUSH`: stands up at 22 m, then **8.0 m/s flat** — three blows |
 
-The wendigo's 4.9 m/s is the load-bearing number of the three: it sits between a
-player's walk (4.4) and their run (8.0), so walking away from one does not work
-and running does — and running costs every scrap of the stillness that the rest
-of this game is played through.
+**Two of them run exactly as fast as you can.** `WatchPlayer.RUN_SPEED` is
+8.0 m/s and so is a mirewraith's pursuit and a werewolf's speed between bursts,
+to two decimal places. A player at a flat sprint holds either of them exactly
+level and loses ground on every werewolf burst, so a straight-line chase has no
+winning pace: what saves you is a ridge, a lake or a stand of trees. The chase is
+decided by the ground rather than by the legs, which is the right verb for a game
+about walking around looking at things.
+
+**So the blows are slow.** 2.4 s for the werewolf, 3.0 for the wendigo, 3.6 for
+the mirewraith — the three slowest attacks in anything. That is one design and
+neither half survives alone: something that can hold a sprinting player's pace
+has to be survivable once it arrives, and what makes being caught survivable
+rather than fatal is whole seconds between swings, with a wind-up you can see
+from behind. Being caught is a problem, not a death.
+
+The wendigo is the exception and pays for it. At 6.6 m/s it is the only one a
+sprint outpaces — and the only one that does not need to catch you.
 
 No two of them share a biome, so a region has at most one horror in it and it is
 always the same one. Between them they haunt nine of the twenty biomes; the
@@ -1717,7 +1730,9 @@ mutants cannot be a setting on it — something that should look *wrong* in a
 world cannot be drawn by the thing that world is drawn by.
 
 So `wendigo()`, `werewolf()` and `mirewraith()` are written box by box, they
-share no plan with anything, and each is the only species in its build. Every
+share no plan with anything, and each is the only species in its build. (They
+were later rebuilt at four times the detail, and two of them lit from inside —
+see *More intricate models* below.) Every
 other model here stands a horizontal body on legs; these stand a torso on end
 with arms hanging off it, at four to six metres, which reads as not-an-animal
 from across a valley and before it has moved.
@@ -1867,6 +1882,146 @@ one that is always refused is the exact thing `Debug`'s class note says a menu
 item would do wrong. So K is read raw off the keyboard, the way the code itself
 is, and to anybody who has not typed 7799 it does nothing at all.
 
+### The wendigo throws (`watch/life/Hurl`)
+
+A creature that cannot catch you and cannot hurt you is scenery, and the wendigo
+is deliberately the slow one. So it throws splinters of bone: 45 m of reach, one
+every three and a half seconds, 24 m/s, under a quarter of real gravity.
+
+The answer to it is a third verb rather than a third speed. Against a werewolf
+you look for ground; against a mirewraith you look at the twenty-two metres you
+have left; against a wendigo you look for something to put **between** you. The
+shard buries itself in a rise exactly as you would hope, which is the cover
+mechanic working rather than a bug — a fact that cost two tests before it was
+appreciated, see below.
+
+**The minimum range is the interesting half.** Inside six metres it does not
+throw at all, which means *closing* on a wendigo turns its ranged attack off and
+leaves you with the slowest melee in the game. The dangerous place is the middle
+distance; both running away and running at it beat standing at forty metres in
+the open.
+
+It is not the engine's projectile system, on purpose. That one belongs to the
+block world and knows about block collision, damage types, owners and item
+drops; there is exactly one thing in the Field Guide that flies, and it is a
+straight line with a lifetime.
+
+**Two bugs, both of which read as "it works except at some distances".** Worth
+recording because they are the same bug wearing different clothes — a continuous
+model sampled discretely — and because the first fix for each looked right:
+
+1. *The arc was approximated.* The aim was lifted by however far the shard would
+   fall over a flight time of `range / speed`. That is wrong twice: lifting a
+   fixed-magnitude velocity steals speed from the horizontal, so the shard takes
+   longer than the estimate and falls further than the correction allowed. The
+   error is small and not monotonic — measured, it hit at 12, 20, 40 and 44 m and
+   missed cleanly at 30. It is now the exact launch angle, which is one square
+   root, taking the flatter of the two solutions.
+2. *The hit test sampled a point.* A shard covers 1.2 m per tick against a 1.1 m
+   hit radius, so it stepped straight through people. It now measures the
+   **segment it swept** this tick against the target, which is exact at any speed
+   and makes the answer independent of the tick rate.
+
+### More intricate models, and two of them are lit
+
+The three were rebuilt from a few dozen boxes each to around a hundred: jointed
+legs with knees and toes, segmented spines, ribcages, collarbones, fingers with
+two joints apiece, hanging jaws with teeth in them, layered antlers, ears with
+inner faces. `AnimalModel` gained two small helpers (`box` and `limb`) because a
+twelve-argument constructor written out two hundred and forty times is a plan
+nobody can safely change; `limb` also caps each segment, which is the difference
+between a plank and something that tapers into a joint.
+
+**The wendigo's chest is open and burning**, ribs standing in front of the fire
+rather than hiding it, with dimmer shells above and below. **The werewolf has two
+red eyes** — and they had to move: first built level with the snout at the width
+of it, they were invisible from every angle a player will ever see the creature
+from, because a muzzle is 4 cm of solid head in front and a skull 5 cm behind.
+They sit on the brow now. **The mirewraith's lantern is green**, not red, so that
+a party who has met all three can tell which pair of lights is in the treeline.
+
+**How "glowing" is done, and what it is not.** The renderer multiplies every
+vertex by the hour's light and the mesh format has no emissive channel; adding
+one means a field on `Mesh`, a branch in the painter's shading and a change to
+the card's shaders — a great deal of renderer for two eyes. So it glows the way a
+flat-shaded world can: the brightest, most saturated colour on the creature, set
+in a near-black socket, with dimmer shells around it. Both are multiplied by the
+same light, so the *contrast* survives every hour of the day, and at night —
+which is when these are out — ten-to-one against a dark body is the only thing on
+them the eye finds.
+
+Two new skin regions carry it, `GLOW` and `SHADOW`, and they **cost nothing**:
+the eight original regions look like they tile the 64×64 sheet and do not quite,
+leaving a 32×16 strip along the bottom right that nothing had ever painted or
+read. Every one of the thirteen hundred existing species is unchanged to the
+byte, and a pack author's sheet gains two blocks rather than losing any.
+
+### And they do not walk like animals (`watch/life/MutantGait`)
+
+`AnimalModel.pose` is a good walk cycle: legs exactly out of phase, both sides
+the same, body rising on each footfall, head bobbing in time. That is what a deer
+looks like and why a deer looks fine. Run it on a six-metre biped and you get a
+six-metre biped going for a pleasant walk.
+
+Everything unsettling about a gait is a broken symmetry, and each of these is a
+specific one:
+
+* **The legs are 0.43 of a turn apart, not 0.5.** One foot lands a fourteenth of
+  a stride early, for ever, and the limp never resolves into a rhythm you can tap
+  along to. It is the single most effective line in the file.
+* **One side strides 22% further than the other**, held constant, so it walks in
+  a very slight curve it is forever correcting.
+* **The torso lags the legs by a quarter turn and counter-rotates**, which is
+  what a body being *carried* by its legs looks like rather than one driving them.
+* **The head runs at a third of the stride rate**, drifting, never landing on the
+  beat — a head that nods in time reads as a horse.
+* **The arms hang and overshoot** rather than pumping, because the creature is
+  not using them for balance.
+
+Idling is not standing still either: a slow breath, a head that keeps turning to
+look at something that is not there, and a shudder that spikes once every few
+cycles rather than a even sway. The strike is slow up and fast down, so the pose
+says *now* before the damage does.
+
+It reaches the renderer through `AnimalModel.PoseSource`, which is the seam an
+imported Blockbench model already uses — so a mutant is just a species whose
+poses come from somewhere else, and a hand-animated `.bbmodel` still overrides
+it exactly as it overrides the geometry.
+
+### Fifteen sounds, and nothing else in the game makes any
+
+The Field Guide has thirteen hundred species and no sound at all, on purpose: a
+wood full of generated bird calls is a wood where the calls are wallpaper, and
+the whole proposition is that you find things by looking. Nothing is lost by that
+silence because nothing you can find can hurt you.
+
+Three things can — and a creature that hunts you is exactly the case where sound
+stops being decoration and becomes **information**, because it is the only
+channel that works when the thing is behind you, which is where it is trying to
+be. So these three have voices and the finches do not.
+
+`call · notice · step · strike`, plus `hurl · impact` for the thrower. Drop
+`watch/wendigo_call.wav` into the sound pack and it plays; a file named for the
+creature alone answers for every state it has not been given one of; anything
+missing is silence. They are listed in the generated `SOUND_KEYS.txt` under
+**Field Guide mutants**, and `resources/watch/sounds/README.md` is the long form.
+
+`call` is the important one and carries **900 m** — deliberately further than the
+creature is ever *drawn*. Somebody who hears it and looks up at an empty treeline
+has understood the situation exactly.
+
+Two design notes. The sounds are **derived from replicated state rather than sent
+as events** (`WatchSounds` watches the view for edges — a creature appearing, a
+state changing, a shard leaving the air), so a sound can never disagree with what
+is on screen and no message can be lost. And footfalls are laid **per metre
+walked rather than per second**, the same rule the track system uses, so they
+speed up when a mutant does with no extra state.
+
+The engine's one distance-and-pan model (`Sounds.playAt`) takes a screen-space
+offset because it was written for a side-scroller; `WatchSounds.at` rotates the
+world delta into the listener's own frame and hands it over, so the Field Guide
+fades and pans through exactly the same call as every mob in the block world.
+
 ### One thing that changed for everybody
 
 `AnimalPortrait` framed every subject so that its largest extent filled a fixed
@@ -1923,6 +2078,29 @@ written to avoid is still a metre away at the closest corner.
   nothing before the code is typed, and three presses after it produce three
   different mutants — which is the only place the raw key binding and the cycle
   can be tested at all, since neither exists anywhere else.
+  **That two of them hold a sprint**: the werewolf's between-burst speed and the
+  mirewraith's flat pursuit are `WatchPlayer.RUN_SPEED` to a tenth of a metre a
+  second, the wendigo's sits between a walk and a run, and all three swing no
+  faster than every two seconds. **That the wendigo throws**: only it has an arm,
+  its reach is far beyond its grasp, it hurts less at range than in it — and,
+  driven directly over flat ground, a shard connects with a stationary target
+  from every distance in its band. That last one is a *unit* test on `Hurl` and
+  deliberately not a world one: over real terrain a shard buries itself in a rise
+  and a thrower ten metres downhill falls short, both of which are the physics
+  working, and a test that cannot tell those from a broken arc is a test that
+  measures the landscape. The decision to throw is tested through the animal
+  instead — at range it throws and cannot reach; inside its minimum it swings and
+  never throws. **That they do not walk like animals**: the legs are not exactly
+  opposed, the two sides do not stride equally far, a run is the walk wound up
+  rather than a different creature, and every one of them poses measurably
+  differently from the shared animal table it would otherwise fall back to.
+  **That the glows read**: each is four times brighter than the socket beside it,
+  bright enough to carry at night, and the two red pairs are red while the
+  mirewraith's is not — plus that the two new skin regions took nothing from the
+  eight old ones. **That they have voices**: every key the game plays is in the
+  catalogue a creator reads, the catalogue lists nothing that will never play,
+  only the thrower is asked for a throwing sound, and one file named for a
+  creature covers every state it has not been given its own.
 * `AnimalModelTest` — every species builds a model with boxes and a skin; every
   animation state resolves to a pose.
 * `BlockbenchTest` — a small `.bbmodel` parses to the right boxes, bones and
