@@ -1988,6 +1988,89 @@ imported Blockbench model already uses — so a mutant is just a species whose
 poses come from somewhere else, and a hand-animated `.bbmodel` still overrides
 it exactly as it overrides the geometry.
 
+### The bug that deleted three torsos
+
+Worth writing down at length, because it survived a full test suite, three
+rounds of looking at renders, and a commit — and because the reason it survived
+is more interesting than the bug.
+
+`AnimalModel.Pose` has a four-argument shorthand, `(pitch, roll, lift, spread)`,
+and the last number **multiplies the part's width**. It exists for exactly one
+thing: folding a bird's wing flat against its flank, because no rotation folds a
+plate.
+
+Every `BODY` and `HEAD` pose in `MutantGait` was written with that shorthand,
+passing a sway value — or a plain zero — into the slot where `spread` lives. So
+on all three creatures the torso, ribcage, chest glow, shoulders, neck and skull
+were multiplied to **zero width**: a flat plane, seen edge-on. The limbs used the
+three-argument form, which leaves the spread at one, so what a player saw was a
+pair of arms and a pair of legs walking around with a vertical line between them.
+The models were right the whole time. The poses were deleting them.
+
+**Why nobody spotted it.** Every render taken while building this was a
+three-quarter view, and from three-quarters a collapsed torso reads as *gaunt* —
+which is exactly what a wendigo is meant to look like. The red chest glow still
+showed, as a red rectangle, and was noted approvingly. It took a front-on view to
+make it obvious.
+
+**Why the obvious test would not have caught it either.** The first version of
+the regression test measured the creature's overall bounding box, and it stayed
+green when the bug was deliberately reintroduced: arms hanging at the sides and a
+metre of antler keep the box perfectly wide around a torso that is not there.
+The test now pulls the `BODY` and `HEAD` parts into a model of their own and
+measures *that*, where there is nothing to hide behind.
+
+Two guards, at the cause and at the symptom:
+
+* **`onlyAWingMayBeNarrowed`** walks every pose source in the game — the shared
+  animal table included — and asserts that no joint but a wing is ever given a
+  spread other than one. The shared table is one mistyped argument away from
+  doing this to a heron.
+* **`theirTorsoIsSolidInEveryState`** meshes each mutant's trunk alone and
+  asserts it has real width and depth in every state and at every phase.
+
+And the file itself no longer constructs a `Pose` directly: a body part goes
+through `body(pitch, turn, roll, lift)` and a limb through `limb(pitch, roll,
+lift)`, neither of which can reach the argument that did this.
+
+### Making the shard obvious (`watch/render/Sparks`)
+
+A bone shard crosses forty metres in under two seconds, and the first version of
+it was two thin pale struts. At that speed that is a thing a player notices
+*after* it has hit them, which makes the wendigo's whole attack feel like
+unexplained damage rather than like something they could have stepped out of the
+way of.
+
+Three changes. The shard is twice the size and built as a shape rather than a
+sliver — a bone shaft, a barbed head and a cross-piece, with a core in the
+thrower's own fire colour, so what is coming at you is a metre of burning bone.
+It lays a **trail of embers**, which is the part that actually does the work: a
+trail is visible along the path the shard has *already* taken, so it says where
+the thing came from as well as where it is. And it **bursts on impact**, because
+a projectile that simply stops existing reads as a rendering fault rather than as
+a thing that landed.
+
+**Not the engine's particle system**, and this is not laziness. `graphics/Particles`
+draws sprites in *screen space* for a side-scroller; a screen-space sprite has
+nowhere to live in a first-person world built out of submitted triangles, and an
+ember that does not sort against the terrain behind it is an ember that shines
+through hillsides. So an ember here is what everything else here is: a very small
+box, in the world, in the frame's moving mesh. It occludes correctly, it fogs
+correctly, and it needed no renderer changes at all.
+
+Two details worth keeping. The trail is emitted **along the segment the shard
+covered this frame** rather than at the point it reached — at 24 m/s a shard
+moves more than a metre between frames, so emitting at the point gives a dotted
+line of clumps that flickers with the frame rate. (The same reasoning that made
+the shard's own hit test measure a segment.) And embers **shrink** rather than
+fading, because the mesh they go into is opaque and an alpha fade would mean a
+second translucent mesh sorted against the first; a cube that shrinks to nothing
+has the same silhouette at a distance for none of the cost.
+
+Nothing about an ember travels. `Sparks` watches the same replicated shard
+positions the renderer draws and derives the trail and the impact from them,
+exactly as `WatchSounds` derives the noises.
+
 ### Fifteen sounds, and nothing else in the game makes any
 
 The Field Guide has thirteen hundred species and no sound at all, on purpose: a

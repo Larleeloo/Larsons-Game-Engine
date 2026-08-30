@@ -132,27 +132,29 @@ public final class MutantGait implements AnimalModel.PoseSource {
             // Legs. The hind pair walk; note that a run does not simply scale
             // the lift, because a foot that leaves the ground by a metre reads
             // as a hop rather than as a stride.
-            case LEG_BL -> new Pose(left * 0.52 * reach * longSide, 0,
+            case LEG_BL -> limb(left * 0.52 * reach * longSide, 0,
                     Math.max(0, left) * 0.02 * reach);
-            case LEG_BR -> new Pose(right * 0.52 * reach * shortSide, 0,
+            case LEG_BR -> limb(right * 0.52 * reach * shortSide, 0,
                     Math.max(0, right) * 0.02 * reach);
             // Arms: dead weight, out of phase with the leg on their own side,
             // and swinging wider than a walking figure's would.
-            case LEG_FL -> new Pose(right * 0.44 * reach * shortSide,
+            case LEG_FL -> limb(right * 0.44 * reach * shortSide,
                     -0.06 - Math.abs(right) * 0.10, -0.012 * reach);
-            case LEG_FR -> new Pose(left * 0.44 * reach * longSide,
+            case LEG_FR -> limb(left * 0.44 * reach * longSide,
                     0.06 + Math.abs(left) * 0.10, -0.012 * reach);
-            // The trunk: a forward lean that deepens with the pace, a roll that
-            // lags the feet, and a sway that does not line up with either.
-            case BODY -> new Pose(-0.06 * reach + body * 0.05,
-                    wave(t - 0.25 + 0.5) * 0.03, body * 0.055 * reach,
-                    body * 0.09);
-            // The head, on its own slow clock, lolling.
-            case HEAD -> new Pose(0.10 + head * 0.13, head * 0.16,
-                    head * 0.07, 0);
-            case TAIL -> new Pose(-0.18 + body * 0.20, body * 0.12, 0);
-            case EAR -> new Pose(-0.14 + head * 0.22, 0, 0);
-            case HORN -> new Pose(head * 0.04, head * 0.05, 0);
+            // The trunk: a forward lean that deepens with the pace, a sway
+            // about the spine, a roll that lags the feet, and the rise on each
+            // footfall. The sway is the number that used to be eating the
+            // torso — see the note on `body` below.
+            case BODY -> body(-0.06 * reach + body * 0.05, body * 0.09,
+                    wave(t - 0.25 + 0.5) * 0.03, body * 0.055 * reach);
+            // The head, lolling on its own slow clock. The turn is what makes
+            // it look about while it walks rather than merely nod.
+            case HEAD -> body(0.10 + head * 0.13, head * 0.26, head * 0.16,
+                    head * 0.07);
+            case TAIL -> limb(-0.18 + body * 0.20, body * 0.12, 0);
+            case EAR -> limb(-0.14 + head * 0.22, 0, 0);
+            case HORN -> limb(head * 0.04, head * 0.05, 0);
             default -> Pose.REST;
         };
     }
@@ -170,14 +172,16 @@ public final class MutantGait implements AnimalModel.PoseSource {
         // A twitch: near zero most of the cycle, and a sharp spike in it.
         double twitch = Math.pow(Math.max(0, wave(t * 0.37)), 12);
         return switch (joint) {
-            case BODY -> new Pose(breath * 0.02 + twitch * 0.06, 0,
-                    breath * 0.012, 0);
-            case HEAD -> new Pose(0.06 + look * 0.20 - twitch * 0.24,
-                    look * 0.42, 0, 0);
-            case LEG_FL -> new Pose(0.05 + breath * 0.05, -0.08, 0);
-            case LEG_FR -> new Pose(0.05 - breath * 0.05, 0.08, 0);
-            case TAIL -> new Pose(-0.10 + breath * 0.10, 0, 0);
-            case EAR -> new Pose(-0.10 + twitch * 0.5, 0, 0);
+            case BODY -> body(breath * 0.02 + twitch * 0.06, twitch * 0.05, 0,
+                    breath * 0.012);
+            // The head turns to look at something that is not there; the twitch
+            // is what makes it a look rather than a sway.
+            case HEAD -> body(0.06 + look * 0.20 - twitch * 0.24, look * 0.42,
+                    0, 0);
+            case LEG_FL -> limb(0.05 + breath * 0.05, -0.08, 0);
+            case LEG_FR -> limb(0.05 - breath * 0.05, 0.08, 0);
+            case TAIL -> limb(-0.10 + breath * 0.10, 0, 0);
+            case EAR -> limb(-0.10 + twitch * 0.5, 0, 0);
             default -> Pose.REST;
         };
     }
@@ -192,12 +196,12 @@ public final class MutantGait implements AnimalModel.PoseSource {
     private Pose alert(Joint joint, double t) {
         double tremor = wave(t * 2.6);
         return switch (joint) {
-            case BODY -> new Pose(-0.16, tremor * 0.02, 0.02, 0);
-            case HEAD -> new Pose(-0.22 + tremor * 0.03, tremor * 0.05, 0.02, 0);
-            case LEG_FL -> new Pose(-0.34, -0.16, 0);
-            case LEG_FR -> new Pose(-0.34, 0.16, 0);
-            case TAIL -> new Pose(-0.42, 0, 0);
-            case EAR -> new Pose(-0.44, 0, 0);
+            case BODY -> body(-0.16, tremor * 0.02, 0, 0.02);
+            case HEAD -> body(-0.22 + tremor * 0.03, tremor * 0.05, 0, 0.02);
+            case LEG_FL -> limb(-0.34, -0.16, 0);
+            case LEG_FR -> limb(-0.34, 0.16, 0);
+            case TAIL -> limb(-0.42, 0, 0);
+            case EAR -> limb(-0.44, 0, 0);
             default -> Pose.REST;
         };
     }
@@ -226,18 +230,54 @@ public final class MutantGait implements AnimalModel.PoseSource {
         double other = together ? raise
                 : Math.max(0, 0.5 - 0.5 * Math.cos((turn + 0.5) % 1 / 0.66 * Math.PI));
         return switch (joint) {
-            case LEG_FL -> new Pose(-1.5 * raise + 0.4, -0.30 - raise * 0.35, 0);
-            case LEG_FR -> new Pose(-1.5 * other + 0.4, 0.30 + other * 0.35, 0);
+            case LEG_FL -> limb(-1.5 * raise + 0.4, -0.30 - raise * 0.35, 0);
+            case LEG_FR -> limb(-1.5 * other + 0.4, 0.30 + other * 0.35, 0);
             // Braced: the legs plant and the body drives through the swing.
-            case LEG_BL -> new Pose(0.26, 0, 0);
-            case LEG_BR -> new Pose(-0.26, 0, 0);
-            case BODY -> new Pose(-0.22 + raise * 0.40, 0, -raise * 0.05, 0);
-            case HEAD -> new Pose(-0.44 + raise * 0.62, 0, 0, 0);
-            case TAIL -> new Pose(-0.36, 0, 0);
-            case EAR -> new Pose(-0.5, 0, 0);
-            case HORN -> new Pose(0.06, 0, 0);
+            case LEG_BL -> limb(0.26, 0, 0);
+            case LEG_BR -> limb(-0.26, 0, 0);
+            // The trunk turns into the blow, which is where the weight is.
+            case BODY -> body(-0.22 + raise * 0.40, raise * 0.16, 0,
+                    -raise * 0.05);
+            case HEAD -> body(-0.44 + raise * 0.62, raise * 0.10, 0, 0);
+            case TAIL -> limb(-0.36, 0, 0);
+            case EAR -> limb(-0.5, 0, 0);
+            case HORN -> limb(0.06, 0, 0);
             default -> Pose.REST;
         };
+    }
+
+    /**
+     * A pose for a part of a <b>body</b>: three rotations and a lift, with the
+     * part's own width left alone.
+     *
+     * <p><b>This exists because of a bug, and it is worth naming.</b>
+     * {@link Pose} has a four-argument shorthand — {@code (pitch, roll, lift,
+     * spread)} — whose last number scales the part's <em>y</em> extent, and it
+     * is there for exactly one thing: folding a bird's wing flat against its
+     * flank, because no rotation folds a plate. Every {@code BODY} and
+     * {@code HEAD} pose in this file was first written with that shorthand,
+     * passing a sway value (or a plain zero) into the slot where {@code spread}
+     * lives.
+     *
+     * <p>The result was that on all three creatures the torso, ribcage, chest
+     * glow, shoulders, neck and skull were multiplied to <em>zero width</em> —
+     * a flat plane seen edge-on. The limbs were written with the three-argument
+     * form, which leaves the spread at one, so what a player saw was a pair of
+     * arms and a pair of legs walking around with a vertical line between them.
+     * The models had been right the whole time; the poses were deleting them.
+     *
+     * <p>So nothing in this file constructs a {@link Pose} directly any more.
+     * A body part goes through here, a limb goes through {@link #limb}, and
+     * neither can reach the argument that made three creatures invisible from
+     * the neck down.
+     */
+    private static Pose body(double pitch, double turn, double roll, double lift) {
+        return Pose.full(pitch, turn, roll, 0, 0, lift);
+    }
+
+    /** A limb: a swing, a splay, and a lift. Width untouched, as above. */
+    private static Pose limb(double pitch, double roll, double lift) {
+        return Pose.full(pitch, 0, roll, 0, 0, lift);
     }
 
     private static double wave(double turns) {

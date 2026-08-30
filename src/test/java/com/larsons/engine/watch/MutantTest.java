@@ -14,6 +14,7 @@ import com.larsons.engine.watch.life.Hurl;
 import com.larsons.engine.watch.life.MutantVoice;
 import com.larsons.engine.watch.life.Mutants;
 import com.larsons.engine.watch.life.Rarity;
+import com.larsons.engine.watch.render.Mesh;
 import com.larsons.engine.watch.world.WatchBiomes;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.Timeout;
@@ -461,6 +462,120 @@ class MutantTest {
             }
             assertTrue(fromAnimals > 1.0,
                     kind.key() + " poses identically to the shared animal table");
+        }
+    }
+
+    /**
+     * <b>Nothing but a wing may narrow a part, and this is the test for the
+     * worst bug in the whole feature.</b>
+     *
+     * <p>{@link AnimalModel.Pose} has a four-argument shorthand,
+     * {@code (pitch, roll, lift, spread)}, and the last number multiplies the
+     * part's width. It exists for one thing: folding a bird's wing flat against
+     * its flank, because no rotation folds a plate.
+     *
+     * <p>Every {@code BODY} and {@code HEAD} pose in {@code MutantGait} was
+     * first written with that shorthand, passing a sway value — or a plain
+     * zero — into the slot where {@code spread} lives. The result was that on
+     * all three creatures the torso, ribcage, chest glow, shoulders, neck and
+     * skull were multiplied to <em>zero width</em>: a flat plane, seen edge-on.
+     * The limbs used the three-argument form and survived, so what a player saw
+     * was a pair of arms and a pair of legs walking around with a vertical line
+     * between them. The models were right the whole time; the poses were
+     * deleting them.
+     *
+     * <p>It survived a full test suite and three rounds of looking at renders,
+     * because from the three-quarter angle everything is drawn at, a collapsed
+     * torso reads as "gaunt". So the rule is asserted directly, over every pose
+     * source in the game — the shared animal table included, since it is one
+     * mistyped argument away from doing the same to a heron.
+     */
+    @Test
+    void onlyAWingMayBeNarrowed() {
+        Map<String, AnimalModel.PoseSource> sources = new java.util.LinkedHashMap<>();
+        sources.put("the shared animal table", AnimalModel.procedural());
+        for (Mutants.Kind kind : Mutants.all()) {
+            sources.put(kind.key(), AnimalModels.of(kind.def()).poses());
+        }
+        for (var source : sources.entrySet()) {
+            for (AnimState state : AnimState.values()) {
+                for (AnimalModel.Joint joint : AnimalModel.Joint.values()) {
+                    if (joint == AnimalModel.Joint.WING_L
+                            || joint == AnimalModel.Joint.WING_R) {
+                        continue;
+                    }
+                    for (double phase = 0; phase < 1; phase += 0.05) {
+                        double spread = source.getValue().poseOf(state, joint, phase)
+                                .spread();
+                        assertEquals(1.0, spread, 1e-9, source.getKey() + " narrows "
+                                + joint + " to " + spread + " of its width in "
+                                + state + " — only a wing may fold");
+                    }
+                }
+            }
+        }
+    }
+
+    /**
+     * …and the same thing said in the shape a player would notice: <b>a mutant
+     * has a torso</b>, in every state it can be seen in.
+     *
+     * <p>The backstop to the rule above — that one catches the cause, this one
+     * catches the symptom whatever the cause turns out to be next time.
+     *
+     * <p><b>It meshes the trunk alone, and that is the whole point of it.</b>
+     * The obvious version of this test measures the creature's overall bounding
+     * box, and the obvious version does not work: when the bug was reintroduced
+     * to check, the whole-figure test stayed green, because arms hanging at the
+     * sides and a metre of antler keep the box perfectly wide around a torso
+     * that has been flattened out of existence. That is exactly why the bug
+     * survived three rounds of looking at renders. So the parts on
+     * {@code BODY} and {@code HEAD} are pulled out into a model of their own and
+     * measured by themselves, where there is nothing to hide behind.
+     */
+    @Test
+    void theirTorsoIsSolidInEveryState() {
+        for (Mutants.Kind kind : Mutants.all()) {
+            var model = AnimalModels.of(kind.def());
+            List<AnimalModel.Part> trunk = new java.util.ArrayList<>();
+            for (AnimalModel.Part part : model.geometry().parts()) {
+                if (part.joint() == AnimalModel.Joint.BODY
+                        || part.joint() == AnimalModel.Joint.HEAD) {
+                    trunk.add(part);
+                }
+            }
+            assertTrue(trunk.size() > 10,
+                    kind.key() + " has only " + trunk.size() + " parts in its trunk");
+            AnimalModel body = AnimalModel.imported(trunk,
+                    model.geometry().standHeight());
+
+            for (AnimState state : new AnimState[]{AnimState.IDLE, AnimState.WALK,
+                    AnimState.RUN, AnimState.ALERT, AnimState.STRIKE}) {
+                for (double phase = 0; phase < 1; phase += 0.25) {
+                    Mesh.Builder builder = Mesh.builder(0, 0, 0, false, 1);
+                    body.mesh(builder, kind.def(), 0, 0, 0, 0, state, phase, 1,
+                            model.poses());
+                    Mesh mesh = builder.build();
+                    double width = mesh.maxY() - mesh.minY();
+                    double depth = mesh.maxX() - mesh.minX();
+                    double height = mesh.maxZ() - mesh.minZ();
+                    // A fifth as wide and as deep as it is tall. The bar is set
+                    // where it separates the two cases rather than where a
+                    // pleasing torso sits: a collapse is *zero*, and the
+                    // narrowest honest trunk here — a gaunt wendigo mid-swing —
+                    // is about a third. A fifth has margin on both sides and
+                    // will not go off because somebody made a creature thinner.
+                    assertTrue(height > 0.1, kind.key() + " " + state
+                            + " has no trunk at all");
+                    assertTrue(width > height * 0.2, kind.key() + " " + state
+                            + " at phase " + phase + ": its trunk is " + width
+                            + " m wide against " + height + " m tall — it has "
+                            + "been flattened");
+                    assertTrue(depth > height * 0.2, kind.key() + " " + state
+                            + " at phase " + phase + ": its trunk is only " + depth
+                            + " m deep");
+                }
+            }
         }
     }
 
