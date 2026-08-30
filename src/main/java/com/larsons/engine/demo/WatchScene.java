@@ -35,6 +35,7 @@ import com.larsons.engine.watch.build.BuildPiece;
 import com.larsons.engine.watch.build.Structure;
 import com.larsons.engine.watch.life.AnimalModels;
 import com.larsons.engine.watch.net.WatchSession;
+import com.larsons.engine.watch.render.BoardImage;
 import com.larsons.engine.watch.render.BoatModel;
 import com.larsons.engine.watch.render.ChartImage;
 import com.larsons.engine.watch.render.FloraMesher;
@@ -3051,9 +3052,126 @@ public class WatchScene extends AbstractScene {
                     piece.piece().sizeZ() / 2, piece.yaw(), uv,
                     WatchMaterials.shade(piece.piece().material()));
         }
+        boardFaces(mesh, view, ox, oy, uv);
 
         return mesh.build();
     }
+
+    // --- map boards ------------------------------------------------------------------
+
+    /**
+     * How many facets a board's map is drawn as, on a side — on a card, and on
+     * a machine drawing through Java2D.
+     *
+     * <p>A board is {@value #BOARD_FACE} metres across, so thirty facets is
+     * about six centimetres each: at the two or three metres somebody stands to
+     * read one that is bigger than a letter on this page, and the country on it
+     * reads at a glance. The painter gets fourteen for the reason it gets a
+     * shorter litter ring and a shorter track ring — the count is what it costs,
+     * and 2 × 14² quads is a tenth of what 2 × 30² is.
+     */
+    private static final int BOARD_GRID_GPU = 30;
+
+    private static final int BOARD_GRID_PAINTER = 14;
+
+    /** How far off a board's map is still drawn, in metres. */
+    private static final double BOARD_RANGE_GPU = 34;
+
+    private static final double BOARD_RANGE_PAINTER = 18;
+
+    /**
+     * How many boards are drawn at once.
+     *
+     * <p>A cap rather than a ring, because the ring is already short and the
+     * pathological case is not a distance: it is a party that has built a wall
+     * of boards in one clearing, which would otherwise be a frame of nothing
+     * but map. Nearest first, so the cap takes the ones nobody is reading.
+     */
+    private static final int MAX_BOARDS = 4;
+
+    /** How wide the map on a board's face is, in metres — square, inside the timber. */
+    private static final double BOARD_FACE = 1.72;
+
+    /** How far the map stands off the timber, in metres, so it cannot z-fight it. */
+    private static final double BOARD_LIFT = 0.012;
+
+    /**
+     * The maps on every board in sight, laid on the timber as flat facets.
+     *
+     * <p><b>So that standing in front of a board is enough.</b> The panel is
+     * for reading the small print — a note's words, a map's name, which sheet
+     * is which — and everything else about a board is something a party should
+     * get by walking past it: how much country has been surveyed, where the
+     * camp and the posts are, what somebody has circled. A board whose maps
+     * only exist inside a screen is a noticeboard with the notice in a drawer.
+     *
+     * <p>Both large faces, and that is deliberate rather than thorough: a board
+     * is built facing whichever way its builder happened to be looking, and a
+     * party walks round it. One face would mean half of them reading the back
+     * of it.
+     *
+     * <p><b>Not gated on {@link #debugging()}</b>, and that is not an oversight.
+     * {@link Debug.Power#MAPS} withholds the making of maps while their price is
+     * undecided; it does not withhold <em>seeing</em> one. A board is a thing
+     * standing in the world that a host has already built and pinned, and a
+     * board only half the party can see is not a board.
+     */
+    private void boardFaces(Mesh.Builder mesh, WatchView view, double ox, double oy,
+                            float[] uv) {
+        boardTriangles = 0;
+        if (streamer == null) return;
+        List<Cartography.Board> boards = view.maps().boards();
+        if (boards.isEmpty()) return;
+        boolean gpu = renderer.acceleratedByGpu();
+        int grid = gpu ? BOARD_GRID_GPU : BOARD_GRID_PAINTER;
+        double range = gpu ? BOARD_RANGE_GPU : BOARD_RANGE_PAINTER;
+
+        List<Cartography.Board> near = new ArrayList<>();
+        for (Cartography.Board board : boards) {
+            if (board.distanceTo(px, py) <= range) near.add(board);
+        }
+        near.sort((a, b) -> Double.compare(a.distanceTo(px, py), b.distanceTo(px, py)));
+
+        WatchMaterials.uv(WatchMaterial.PAPER, uv);
+        int drawn = 0;
+        for (Cartography.Board board : near) {
+            if (drawn >= MAX_BOARDS) break;
+            int[] cells = BoardImage.cells(streamer.field(), view.maps(), board, grid);
+            // Nothing pinned, or the ground is still being painted on
+            // ChartImage's worker. Either way the board is bare timber for now,
+            // which is exactly what an empty board should look like.
+            if (cells == null) continue;
+            drawn++;
+
+            // The piece's own axes: +a along its width, +b through its
+            // thickness, up left alone — the basis Shapes.box turns it on.
+            double cos = Math.cos(board.yaw()), sin = Math.sin(board.yaw());
+            double ax = cos, ay = sin;
+            double bx = -sin, by = cos;
+            double half = BOARD_FACE / 2;
+            double stand = BuildPiece.MAP_BOARD.sizeY() / 2 + BOARD_LIFT;
+            double cx = board.x() - ox, cy = board.y() - oy, cz = board.z();
+
+            // The −b face, seen from the −b side: its right is +a, so the
+            // winding a→b→d→e in Shapes.mosaic gives a normal of a × up = −b.
+            Shapes.mosaic(mesh, cx - bx * stand, cy - by * stand, cz,
+                    ax * half, ay * half, 0, 0, 0, half, cells, grid, uv);
+            // …and the +b face, which is the same picture mirrored, because a
+            // viewer on that side has their right along −a.
+            Shapes.mosaic(mesh, cx + bx * stand, cy + by * stand, cz,
+                    -ax * half, -ay * half, 0, 0, 0, half, cells, grid, uv);
+            boardTriangles += grid * grid * 4;
+        }
+    }
+
+    /**
+     * How many triangles the map boards put in the world last frame.
+     *
+     * <p>For tests, and for nothing on screen: "the board shows its maps" is
+     * otherwise a claim about pixels, and this is the same claim about
+     * geometry.
+     */
+    private int boardTriangles;
 
     /**
      * Work out where every walker is to be drawn this frame, and how far
@@ -4497,6 +4615,9 @@ public class WatchScene extends AbstractScene {
 
     /** The map screen, so a test can ask what it is showing — for tests. */
     public MapPanel mapPanel() { return mapPanel; }
+
+    /** How many triangles the map boards put in the world last frame — for tests. */
+    public int boardTriangles() { return boardTriangles; }
 
     /** How far this walk can see, which is how wide a map it draws — for tests. */
     public double mapReachMetres() { return mapReach(); }

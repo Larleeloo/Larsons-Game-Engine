@@ -76,7 +76,27 @@ public enum WatchMaterial {
     THATCH("thatch", 0xC0A45E),
     ROPE("rope", 0xB9A276),
     STONE_BLOCK("stone_block", 0x8C8880),
-    GLASSPANE("glasspane", 0xA9D6E0);
+    GLASSPANE("glasspane", 0xA9D6E0),
+
+    /**
+     * Paper: the face of a map board, and the one material here that carries no
+     * colour of its own.
+     *
+     * <p><b>White, and deliberately grainless</b> — see
+     * {@code WatchMaterials.paintTile}. Every other material in this enum is a
+     * <em>surface</em>: its tile is what the thing looks like and a triangle of
+     * it is drawn in the tile's average colour. A map board's face is not one
+     * surface but a few thousand little ones, each carrying the colour of the
+     * ground it stands for, so what its material has to supply is <em>nothing</em>.
+     *
+     * <p>That is a parity requirement rather than an aesthetic one. A card
+     * shades a fragment as {@code texture × vertexColour} and the painter uses
+     * the vertex colour alone, so any tile but a flat white one would give the
+     * two backends two different maps — and a texture pack could quietly tint
+     * every map in the game. A white tile makes the multiply the identity, and
+     * both paths draw the colours {@code BoardImage} actually sampled.
+     */
+    PAPER("paper", 0xFFFFFF);
 
     private final String key;
     private final int rgb;
