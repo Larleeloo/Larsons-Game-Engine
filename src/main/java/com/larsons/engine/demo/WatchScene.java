@@ -54,6 +54,7 @@ import com.larsons.engine.watch.render.Mesh;
 import com.larsons.engine.watch.render.RowStroke;
 import com.larsons.engine.watch.render.Shapes;
 import com.larsons.engine.watch.render.ShopModel;
+import com.larsons.engine.watch.render.Sparks;
 import com.larsons.engine.watch.render.TrackMesher;
 import com.larsons.engine.watch.render.WalkerModel;
 import com.larsons.engine.watch.render.WatchRenderer;
@@ -407,6 +408,15 @@ public class WatchScene extends AbstractScene {
     private final WatchSounds noises = new WatchSounds();
 
     /**
+     * The embers off a thrown shard.
+     *
+     * <p>Driven from the view like the noises are, and for the same reason —
+     * see {@link Sparks}, which derives a trail and an impact burst from
+     * replicated positions rather than from anything on the wire.
+     */
+    private final Sparks sparks = new Sparks();
+
+    /**
      * How far the player's feet are below the waterline, in metres.
      *
      * <p>Zero on land and at the surface; up to the depth of the water when
@@ -485,11 +495,17 @@ public class WatchScene extends AbstractScene {
      */
     private static final int SPILL_ITEMS = 6;
 
-    /** Half the length of a thrown bone shard, in metres. See {@code Hurl}. */
-    private static final double SHARD_LENGTH = 0.32;
+    /**
+     * Half the length of a thrown bone shard, in metres. See {@code Hurl}.
+     *
+     * <p>Half a metre, up from a third: the thing travels at twenty-four metres
+     * a second and it has to be legible in the tenth of a second it is anywhere
+     * near you.
+     */
+    private static final double SHARD_LENGTH = 0.5;
 
     /** …and half the span of the barb across it. */
-    private static final double SHARD_BARB = 0.13;
+    private static final double SHARD_BARB = 0.22;
 
     /**
      * The respawn count this screen has already acted on.
@@ -759,6 +775,9 @@ public class WatchScene extends AbstractScene {
     /** Where the party has walked in the last ten minutes. */
     public TrackField tracks() { return tracks; }
 
+    /** How many embers are alive — for the debug readout and for a test. */
+    public int sparkCount() { return sparks.count(); }
+
     @Override
     public void onEnter() {
         panel = Panel.NONE;
@@ -814,6 +833,7 @@ public class WatchScene extends AbstractScene {
         // there when a save is reopened cries once on the frame it is first
         // seen rather than being silently present.
         noises.clear();
+        sparks.clear();
         // A walk starts with untrodden ground. Tracks are the one thing here
         // that is neither generated from the seed nor sent by the host, so
         // there is nowhere for the last world's to have come from and nowhere
@@ -956,6 +976,7 @@ public class WatchScene extends AbstractScene {
             // Nor does being heard. A player who opened their satchel while
             // something was coming should still hear it arrive.
             noises.update(view(), px, py, aimYaw);
+            sparks.follow(view(), dt);
             return;
         }
 
@@ -1018,6 +1039,7 @@ public class WatchScene extends AbstractScene {
         // the ear is at the camera, so it hears from where the player is looking
         // rather than from where their feet point.
         noises.update(view(), px, py, aimYaw);
+        sparks.follow(view(), dt);
         noticePickups();
         // After the sync, because the sync is what a map arrives in.
         awaitMap(dt);
@@ -3229,33 +3251,53 @@ public class WatchScene extends AbstractScene {
             }
         }
 
-        // Anything a wendigo has in the air. Drawn as what it is — a splinter
-        // of bone, pointed the way it is travelling — with `strut`, which is the
-        // primitive for a thing whose length points somewhere other than
-        // straight up and is exactly what a shard on an arc is.
+        // Anything a wendigo has in the air, and the embers behind it.
         //
-        // Two struts rather than one: a barb crossing the shaft near the front
-        // is what stops a fast-moving pale sliver reading as a dropped frame. At
-        // twenty-four metres a second it crosses the screen in well under a
-        // second, and the eye needs a shape rather than a streak.
+        // <b>Built to be seen coming.</b> The first version was two thin pale
+        // struts, and at twenty-four metres a second that is a thing a player
+        // notices *after* it has hit them — which makes the whole ranged attack
+        // feel like unexplained damage rather than like something they could
+        // have stepped out of the way of. So it is now a metre of burning bone:
+        // a bone shaft, a barbed head, and a core in the thrower's own fire
+        // colour, with a trail of embers laid along the ground it has already
+        // covered. The trail is what actually does the work — it is visible
+        // along the path *behind* the shard, so it says where the thing came
+        // from as well as where it is.
         for (Hurl hurl : view.hurls()) {
             AnimalDef thrower = AnimalRegistry.byKey(hurl.species());
             int bone = thrower == null ? 0xD8D2C0
                     : AnimalSkins.regionColour(thrower, AnimalSkins.Region.HARD);
+            int fire = thrower == null ? 0xFF9A40
+                    : AnimalSkins.regionColour(thrower, AnimalSkins.Region.GLOW);
             WatchMaterials.uv(WatchMaterial.BARK, uv);
             double cos = Math.cos(hurl.pitch());
             double fx = Math.sin(hurl.yaw()) * cos;
             double fy = -Math.cos(hurl.yaw()) * cos;
             double fz = Math.sin(hurl.pitch());
             double hx = hurl.x() - ox, hy = hurl.y() - oy, hz = hurl.z();
+            // The shaft.
             Shapes.strut(mesh, hx - fx * SHARD_LENGTH, hy - fy * SHARD_LENGTH,
                     hz - fz * SHARD_LENGTH, hx + fx * SHARD_LENGTH,
                     hy + fy * SHARD_LENGTH, hz + fz * SHARD_LENGTH,
-                    0.045, 0.045, uv, bone);
+                    0.075, 0.075, uv, bone);
+            // The fire down the middle of it, standing a little proud so it is
+            // the part that catches the eye.
+            Shapes.strut(mesh, hx - fx * SHARD_LENGTH * 0.55,
+                    hy - fy * SHARD_LENGTH * 0.55, hz - fz * SHARD_LENGTH * 0.55,
+                    hx + fx * SHARD_LENGTH * 0.75, hy + fy * SHARD_LENGTH * 0.75,
+                    hz + fz * SHARD_LENGTH * 0.75, 0.095, 0.095, uv, fire);
+            // A barbed head, and a cross-piece: a shape rather than a streak.
+            Shapes.strut(mesh, hx + fx * SHARD_LENGTH * 0.6,
+                    hy + fy * SHARD_LENGTH * 0.6, hz + fz * SHARD_LENGTH * 0.6,
+                    hx + fx * SHARD_LENGTH * 1.25, hy + fy * SHARD_LENGTH * 1.25,
+                    hz + fz * SHARD_LENGTH * 1.25, 0.045, 0.045, uv, bone);
             Shapes.strut(mesh, hx - fy * SHARD_BARB, hy + fx * SHARD_BARB, hz,
                     hx + fy * SHARD_BARB, hy - fx * SHARD_BARB, hz,
-                    0.030, 0.030, uv, bone);
+                    0.048, 0.048, uv, bone);
+            Shapes.strut(mesh, hx, hy, hz - SHARD_BARB, hx, hy, hz + SHARD_BARB,
+                    0.042, 0.042, uv, bone);
         }
+        sparks.mesh(mesh, ox, oy);
 
         // Every satchel somebody has dropped by dying, within sight. In the
         // moving mesh for the litter's reason below, turned up a notch: a heap
