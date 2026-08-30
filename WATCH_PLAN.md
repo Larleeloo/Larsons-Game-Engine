@@ -1506,6 +1506,53 @@ box: building one registers a `Cartography.Board` twinned with the placement, so
 a board is a *place that holds something* rather than a wall the maps happen to
 be near.
 
+### The board wears its maps
+
+A board whose maps only exist inside a screen is a noticeboard with the notice
+in a drawer. The whole reason a party builds one is that **anybody standing in
+front of it can see the map** — so `BoardImage` bakes the combined map and
+`WatchScene.boardFaces` lays it on the timber as a grid of flat facets, one per
+cell, in the colour of the ground it stands for. That is what the terrain
+already is, so a map on a board reads as part of this world rather than as a
+photograph hung in it. Opening the panel is for the small print.
+
+Three things make it work and each is a decision:
+
+* **Baked six times over, then averaged down.** A pen stroke is a line two
+  pixels wide, and a line sampled at one point per facet either lands on a facet
+  or does not — a scribble comes out as a dotted rash. Box-filtered, the facets
+  a line crosses are tinted toward its ink and the mark reads as a mark. Icons
+  and strokes are therefore sized in *facets* rather than pixels: an icon wants
+  about two, a stroke wants one.
+* **A signature, not an invalidation.** The cache key is which maps are pinned,
+  where they are, how big they are and how many marks they carry — built fresh
+  every frame and compared. So a stroke somebody draws appears on the timber on
+  the frame the ink arrives, with nothing anywhere having to remember to tell
+  the board.
+* **`WatchMaterial.PAPER`, which is white and grainless.** A card shades a
+  fragment as `texture × vertexColour` and the painter uses the vertex colour
+  alone. Every other material here is a *surface* whose tile is what the thing
+  looks like; a board's face is a few thousand little surfaces each carrying its
+  own colour, so what its material has to supply is nothing. Any tile but a flat
+  white one would give the two backends two different maps and let a texture
+  pack quietly tint every map in the game.
+
+`Shapes.mosaic` is the primitive, and it is lit **once** rather than per facet:
+every triangle on a face shares one normal, and a cross product and a square
+root a thousand times a frame per board for an answer that cannot change is
+exactly the kind of cost that is free until it is not.
+
+Everything on the board is drawn through `MapInk`, which is also what the panel
+draws through — the same icons, the same pen, the same world-to-pixel frame.
+That is not tidiness: the board is what a party reads at a glance and the panel
+is what they open to check, so an icon meaning one thing on the timber and
+another on the screen would be worse than no icon.
+
+Seeing a board is **not** behind `Debug.Power.MAPS`, and that is not an
+oversight. The mode withholds the making of maps while their price is undecided;
+a board is a thing a host has already built and pinned, standing in the world,
+and a board only half the party can see is not a board.
+
 ### Off the map is still on the map
 
 Every walker gets a pin turned to their heading; a walker outside the paper is
@@ -1744,6 +1791,13 @@ feature off mid-keystroke.
   span apart meet exactly, pinning the second widens the board by a whole map
   and does not make it taller, taking one back shrinks it and returns the map to
   the satchel, and a walker four hundred metres away cannot pin anything.
+  **The board wears them**: an empty board's face is bare timber, a pinned map
+  gives it a face of many colours rather than a wash, a line drawn across that
+  map changes what the timber shows, and taking the map back leaves bare timber
+  again — plus, through the real scene, that the map on a board is *geometry in
+  the world* with no panel open, which is the whole claim. And the frame both
+  the board and the panel are drawn through, once: middle to middle, north up,
+  east right, and a metre→pixel→metre round trip that lands where it started.
   Finally through the real `WatchScene`, because most of this feature is a
   panel: M draws a map, opens it *and it is still open five frames later* —
   which is the assertion that catches a panel opened on a view that has not been

@@ -11,7 +11,9 @@ import com.larsons.engine.scene.SceneManager;
 import com.larsons.engine.watch.build.BuildPiece;
 import com.larsons.engine.watch.net.WatchProto;
 import com.larsons.engine.watch.net.WatchSession;
+import com.larsons.engine.watch.render.BoardImage;
 import com.larsons.engine.watch.render.ChartImage;
+import com.larsons.engine.watch.render.MapInk;
 import com.larsons.engine.watch.world.TerrainField;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.Timeout;
@@ -468,6 +470,36 @@ class MapsTest {
         }
     }
 
+    /**
+     * The frame both the panel and the board's face are drawn through.
+     *
+     * <p>One geometry, tested once. A map is drawn on a screen and on a piece of
+     * timber and the two have to be the same map, so the thing that turns metres
+     * into pixels lives in {@link MapInk} — and if it were wrong, every icon on
+     * both would be in the wrong place together, which is exactly the sort of
+     * bug that looks deliberate.
+     */
+    @Test
+    void metresAndPixelsAgreeInBothDirections() {
+        MapInk.Frame frame = new MapInk.Frame(20, 40, 300, 1000, -500, 600);
+        // The middle of the paper is the middle of the country.
+        assertEquals(1000, frame.worldX(20 + 150), 2);
+        assertEquals(-500, frame.worldY(40 + 150), 2);
+        // North is up, and north is −y.
+        assertTrue(frame.screenY(-800) < frame.screenY(-200),
+                "north is not up: a point further north drew further down");
+        assertTrue(frame.screenX(1200) > frame.screenX(800),
+                "east is not right");
+        // …and a round trip lands back where it started, to the pixel.
+        for (double at : new double[]{760, 900, 1000, 1180, 1290}) {
+            assertEquals(at, frame.worldX(frame.screenX(at)), 3);
+        }
+        assertTrue(frame.holds(20, 40));
+        assertFalse(frame.holds(19, 40));
+        assertFalse(frame.holds(20 + 300, 40));
+        assertEquals(0.5, frame.scale(), 1e-9);
+    }
+
     // --- 7. the board ------------------------------------------------------------------
 
     /**
@@ -523,6 +555,97 @@ class MapsTest {
         assertEquals(west.span(), game.maps().bounds(board.id())[2]
                 - game.maps().bounds(board.id())[0], 1e-6);
         assertEquals(List.of(east), game.maps().carriedBy(1));
+    }
+
+    /**
+     * The board carries its maps on its face, so standing in front of one is
+     * enough.
+     *
+     * <p>The claim this whole half of the feature exists to make: a board whose
+     * maps only exist inside a screen is a noticeboard with the notice in a
+     * drawer.
+     */
+    @Test
+    void theBoardWearsItsMaps() {
+        ChartImage.invalidate();
+        BoardImage.invalidate();
+        WatchGame game = walking();
+        stand(game, 1, 0, 0);
+        Chart chart = game.drawMap(1, 128);
+        assertNotNull(chart);
+        var placement = game.build(1, BuildPiece.MAP_BOARD, 0, false);
+        assertNotNull(placement);
+        Cartography.Board board = game.maps().boardAt(placement.x(), placement.y());
+        assertNotNull(board);
+
+        int grid = 24;
+        assertNull(BoardImage.cells(game.field(), game.maps(), board, grid),
+                "an empty board already has a map on it");
+
+        stand(game, 1, board.x(), board.y());
+        assertTrue(game.pinMap(1, chart.id(), board.id()));
+        // The ground is painted on a worker; bake it here so the test is about
+        // the board rather than about how fast that thread happens to be.
+        ChartImage.bake(game.field(), chart.centreX(), chart.centreY(), chart.radius());
+
+        int[] face = BoardImage.cells(game.field(), game.maps(), board, grid);
+        assertNotNull(face, "a board with a map pinned to it has a blank face");
+        assertEquals(grid * grid, face.length);
+        Set<Integer> colours = new HashSet<>();
+        for (int cell : face) colours.add(cell);
+        assertTrue(colours.size() > 20,
+                "the whole board's face is " + colours.size()
+                        + " colours — that is not a map");
+
+        // …and the face follows the ink. A pen stroke somebody draws is
+        // something the rest of the party watches appear on the board.
+        int[] before = face.clone();
+        double across = chart.span() * 0.3;
+        game.markMap(1, chart.id(), 1,
+                new double[]{chart.centreX() - across, chart.centreX() + across},
+                new double[]{chart.centreY(), chart.centreY()});
+        int[] after = BoardImage.cells(game.field(), game.maps(), board, grid);
+        assertNotNull(after);
+        assertFalse(java.util.Arrays.equals(before, after),
+                "drawing a line across the map changed nothing on the board");
+
+        // Taking the map back leaves bare timber again.
+        assertTrue(game.pinMap(1, chart.id(), 0));
+        assertNull(BoardImage.cells(game.field(), game.maps(), board, grid),
+                "a board with nothing on it still shows a map");
+    }
+
+    /** …and it is real geometry in the world, not something the panel draws. */
+    @Test
+    void theBoardsMapIsInTheWorld(@TempDir Path dir) {
+        try (Walk walk = new Walk(dir)) {
+            ChartImage.invalidate();
+            BoardImage.invalidate();
+            Chart chart = walk.drawMap();
+            assertNotNull(chart);
+            walk.press(KeyEvent.VK_ESCAPE);
+
+            var placement = walk.game.build(1, BuildPiece.MAP_BOARD, 0, false);
+            assertNotNull(placement);
+            walk.tick(4);
+            walk.draw();
+            assertEquals(0, walk.scene.boardTriangles(),
+                    "an empty board is already covered in map");
+
+            Cartography.Board board = walk.game.maps().boardAt(placement.x(),
+                    placement.y());
+            assertNotNull(board);
+            assertTrue(walk.game.pinMap(1, chart.id(), board.id()));
+            ChartImage.bake(walk.scene.streamer().field(), chart.centreX(),
+                    chart.centreY(), chart.radius());
+            walk.tick(4);
+            walk.draw();
+
+            assertTrue(walk.scene.boardTriangles() > 0,
+                    "the map on the board is not in the world at all");
+            assertEquals("none", walk.scene.panelName(),
+                    "the board's map only shows with a panel open");
+        }
     }
 
     /** A board is read from in front of it, not from the next valley. */

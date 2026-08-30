@@ -3543,6 +3543,21 @@ apart meet exactly; a detailed map of one corner nests inside the overview it
 belongs to, because the sizes are doublings. Click a pinned map to take it back
 down, and your annotations come with it.
 
+**And you can see it without opening anything.** The combined map is painted
+onto both faces of the board itself, as a grid of little flat facets in the
+colours of the ground they stand for — the same low-poly language the terrain
+is drawn in, so a map on a board looks like it belongs to this world rather
+than like a photograph hung in it
+([`BoardImage`](src/main/java/com/larsons/engine/watch/render/BoardImage.java)).
+Walk past and you can see how much country the party has surveyed, where the
+camps and the posts are, and what somebody circled in red; a pen stroke appears
+on the timber on the frame the ink lands, so drawing on a map is something the
+rest of the party watches happen from across the clearing. Both faces, because
+a board is built facing whichever way its builder happened to be looking.
+Opening it is for the small print — a note's words, a map's name, which sheet
+is which — and seeing it is not gated on debug mode: the mode withholds the
+*making* of maps, not the sight of one.
+
 **Nothing about a map ever travels as a picture.** A map on the wire and in the
 save is a centre, a radius, a name and whatever somebody drew on it
 ([`Chart`](src/main/java/com/larsons/engine/watch/Chart.java)); both ends paint

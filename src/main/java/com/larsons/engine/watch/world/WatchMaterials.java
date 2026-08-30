@@ -173,6 +173,12 @@ public final class WatchMaterials {
             case ROCK, DARK_ROCK, GRAVEL, STONE_BLOCK, ASH -> 0.22;
             case SAND, RED_SAND, SNOW, TRAIL_SAND -> 0.10;
             case WATER, SHALLOWS, ICE, GLASSPANE, CRYSTAL -> 0.07;
+            // None at all, and it is the only material with none. PAPER is the
+            // "no tint" tile: a card shades a fragment as texture × vertex
+            // colour and the painter uses the vertex colour alone, so the two
+            // backends agree about a map board's face only while this tile is
+            // uniformly white. See WatchMaterial.PAPER.
+            case PAPER -> 0;
             default -> 0.15;
         };
         int alpha = material.translucent() ? 200 : 255;

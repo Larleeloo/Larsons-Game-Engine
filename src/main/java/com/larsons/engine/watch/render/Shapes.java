@@ -77,6 +77,81 @@ public final class Shapes {
     }
 
     /**
+     * A picture laid on a flat face: a grid of coloured facets, each carrying
+     * its own colour.
+     *
+     * <p><b>The one shape here whose colour is per-facet rather than per
+     * solid</b>, and it exists for the map board — see {@code BoardImage}, which
+     * bakes the combined map and hands the colours over. A board that only shows
+     * its maps when somebody opens a screen is a noticeboard with the notice in
+     * a drawer; this is what puts the map on the timber where a party can read
+     * it standing in front of it.
+     *
+     * <p>Lit <b>once</b>, not per facet. Every triangle here shares one normal,
+     * so working it out per triangle would be a cross product and a square root
+     * a thousand times over for an answer that cannot change — and a thousand
+     * facets a frame per board is exactly the scale at which that stops being
+     * free. It is also why this is not a loop over {@link #quad} at the call
+     * site.
+     *
+     * <p>The face's material should be one that supplies no colour of its own
+     * ({@code WatchMaterial.PAPER}): a card shades a fragment as
+     * {@code texture × vertexColour}, so any tile but a flat white one would
+     * tint the picture on a card and not in the painter.
+     *
+     * @param rx   half-extent along the face's own right, in metres
+     * @param ux   half-extent along its up
+     * @param cells {@code grid × grid} packed {@code 0xRRGGBB}, row major, the
+     *              first row at the top
+     */
+    public static void mosaic(Mesh.Builder mesh, double cx, double cy, double cz,
+                              double rx, double ry, double rz,
+                              double ux, double uy, double uz,
+                              int[] cells, int grid, float[] uv) {
+        if (cells == null || grid < 1 || cells.length < grid * grid) return;
+        // The face's normal is right × up, which is the winding a→b→d→e below
+        // produces. One cross product for the whole picture.
+        double nx = ry * uz - rz * uy;
+        double ny = rz * ux - rx * uz;
+        double nz = rx * uy - ry * ux;
+        double length = Math.sqrt(nx * nx + ny * ny + nz * nz);
+        double lit = AMBIENT;
+        if (length > 1e-9) {
+            double dot = (nx * KEY_X + ny * KEY_Y + nz * KEY_Z) / length;
+            lit = AMBIENT + (1 - AMBIENT) * Math.max(0, dot);
+        }
+        float u = (uv[0] + uv[2]) / 2, v = (uv[1] + uv[3]) / 2;
+
+        for (int row = 0; row < grid; row++) {
+            double t0 = 1 - 2.0 * row / grid;
+            double t1 = 1 - 2.0 * (row + 1) / grid;
+            for (int col = 0; col < grid; col++) {
+                double s0 = -1 + 2.0 * col / grid;
+                double s1 = -1 + 2.0 * (col + 1) / grid;
+                int argb = TerrainMesher.shade(cells[row * grid + col], lit);
+                double ax = cx + s0 * rx + t1 * ux;
+                double ay = cy + s0 * ry + t1 * uy;
+                double az = cz + s0 * rz + t1 * uz;
+                double bx = cx + s1 * rx + t1 * ux;
+                double by = cy + s1 * ry + t1 * uy;
+                double bz = cz + s1 * rz + t1 * uz;
+                double dx = cx + s1 * rx + t0 * ux;
+                double dy = cy + s1 * ry + t0 * uy;
+                double dz = cz + s1 * rz + t0 * uz;
+                double ex = cx + s0 * rx + t0 * ux;
+                double ey = cy + s0 * ry + t0 * uy;
+                double ez = cz + s0 * rz + t0 * uz;
+                mesh.triangle((float) ax, (float) ay, (float) az,
+                        (float) bx, (float) by, (float) bz,
+                        (float) dx, (float) dy, (float) dz, u, v, argb);
+                mesh.triangle((float) ax, (float) ay, (float) az,
+                        (float) dx, (float) dy, (float) dz,
+                        (float) ex, (float) ey, (float) ez, u, v, argb);
+            }
+        }
+    }
+
+    /**
      * A tapered prism standing on its end — a trunk, a stem, a cane, a leg.
      *
      * @param sides    how many faces round it; 5 is enough to read as round and

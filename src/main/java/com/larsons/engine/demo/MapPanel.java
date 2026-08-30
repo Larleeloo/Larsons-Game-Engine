@@ -5,9 +5,9 @@ import com.larsons.engine.input.InputManager;
 import com.larsons.engine.ui.UiText;
 import com.larsons.engine.watch.Cartography;
 import com.larsons.engine.watch.Chart;
-import com.larsons.engine.watch.Survey;
 import com.larsons.engine.watch.WatchView;
 import com.larsons.engine.watch.render.ChartImage;
+import com.larsons.engine.watch.render.MapInk;
 import com.larsons.engine.watch.world.TerrainField;
 
 import java.awt.Color;
@@ -118,42 +118,6 @@ public final class MapPanel {
         public String label() { return label; }
 
         public String hint() { return hint; }
-    }
-
-    /**
-     * Where a rectangle of the world sits on the screen.
-     *
-     * <p>The whole of the panel's geometry, in one place, for
-     * {@code WatchScene.SatchelBox}'s reason: the drawing and the hit testing
-     * have to agree exactly, and a panel whose pointer maths is written twice is
-     * a panel that erases the mark next to the one you clicked on.
-     */
-    private record Frame(int x, int y, int size, double centreX, double centreY,
-                         double span) {
-
-        /** Pixels per metre. */
-        double scale() { return size / span; }
-
-        int screenX(double worldX) {
-            return (int) Math.round(x + (worldX - centreX) / span * size + size / 2.0);
-        }
-
-        /** North is up, and north is −y. See {@link Survey#bearing}. */
-        int screenY(double worldY) {
-            return (int) Math.round(y + (worldY - centreY) / span * size + size / 2.0);
-        }
-
-        double worldX(int screenX) {
-            return centreX + (screenX - x - size / 2.0) / size * span;
-        }
-
-        double worldY(int screenY) {
-            return centreY + (screenY - y - size / 2.0) / size * span;
-        }
-
-        boolean holds(int mx, int my) {
-            return mx >= x && mx < x + size && my >= y && my < y + size;
-        }
     }
 
     private long chartId;
@@ -278,7 +242,7 @@ public final class MapPanel {
             close();
             return;
         }
-        Frame frame = frame(view, viewportWidth, viewportHeight);
+        MapInk.Frame frame = frame(view, viewportWidth, viewportHeight);
 
         if (noteAt != null) {
             typeNote(input, view, sink);
@@ -303,7 +267,7 @@ public final class MapPanel {
             double beforeX = frame.worldX(mx), beforeY = frame.worldY(my);
             zoom = Math.max(MIN_ZOOM, Math.min(MAX_ZOOM,
                     zoom * Math.pow(ZOOM_STEP, -wheel)));
-            Frame after = frame(view, viewportWidth, viewportHeight);
+            MapInk.Frame after = frame(view, viewportWidth, viewportHeight);
             panX += beforeX - after.worldX(mx);
             panY += beforeY - after.worldY(my);
             frame = frame(view, viewportWidth, viewportHeight);
@@ -356,7 +320,7 @@ public final class MapPanel {
      * a hand resting still on the button into nothing rather than into two
      * hundred identical points.
      */
-    private void pen(InputManager input, WatchView view, Frame frame, int mx, int my,
+    private void pen(InputManager input, WatchView view, MapInk.Frame frame, int mx, int my,
                      Sink sink) {
         if (input.isMouseDown()) {
             if (!drawing) {
@@ -441,7 +405,7 @@ public final class MapPanel {
      * the class note on why a union is all "combining maps" has to mean. The
      * square is then divided by the zoom and shifted by the pan.
      */
-    private Frame frame(WatchView view, int viewportWidth, int viewportHeight) {
+    private MapInk.Frame frame(WatchView view, int viewportWidth, int viewportHeight) {
         int size = paperSize(viewportWidth, viewportHeight);
         int x = INSET + 16;
         int y = (viewportHeight - size) / 2;
@@ -467,7 +431,7 @@ public final class MapPanel {
                 span = chart.span();
             }
         }
-        return new Frame(x, y, size, centreX + panX, centreY + panY, span / zoom);
+        return new MapInk.Frame(x, y, size, centreX + panX, centreY + panY, span / zoom);
     }
 
     private int paperSize(int viewportWidth, int viewportHeight) {
@@ -482,7 +446,7 @@ public final class MapPanel {
         if (!open) return;
         target.fillRect(0, 0, viewportWidth, viewportHeight, BACKDROP);
 
-        Frame frame = frame(view, viewportWidth, viewportHeight);
+        MapInk.Frame frame = frame(view, viewportWidth, viewportHeight);
         int panelX = INSET, panelY = INSET;
         int panelW = viewportWidth - INSET * 2;
         int panelH = viewportHeight - INSET * 2;
@@ -495,7 +459,7 @@ public final class MapPanel {
 
     /** The map itself: ground, borders, icons, ink and everybody's position. */
     private void drawPaper(DrawTarget target, WatchView view, TerrainField field,
-                           Frame frame) {
+                           MapInk.Frame frame) {
         target.fillRect(frame.x(), frame.y(), frame.size(), frame.size(), UNSURVEYED);
         target.pushClip(frame.x(), frame.y(), frame.size(), frame.size());
 
@@ -523,15 +487,20 @@ public final class MapPanel {
                     frame.screenY(chart.maxY()) - top, TILE_LINE, 1f);
         }
 
+        // Icons, then ink, through the same code the board's own face is baked
+        // with — see MapInk. A player who reads a board and then opens the map
+        // is looking at one map twice, not at two drawings of it.
         for (Chart chart : sheets) {
             for (Chart.Landmark landmark : chart.landmarks()) {
-                icon(target, landmark.kind(), frame.screenX(landmark.x()),
-                        frame.screenY(landmark.y()));
+                MapInk.icon(target, landmark.kind(), frame.screenX(landmark.x()),
+                        frame.screenY(landmark.y()), 1);
             }
         }
         for (Chart chart : sheets) {
-            for (Chart.Stroke stroke : chart.strokes()) drawStroke(target, frame, stroke);
-            for (Chart.Note note : chart.notes()) drawNote(target, frame, note);
+            for (Chart.Stroke stroke : chart.strokes()) {
+                MapInk.stroke(target, frame, stroke, 1);
+            }
+            for (Chart.Note note : chart.notes()) MapInk.note(target, frame, note, 1, SMALL);
         }
         // The stroke under the hand, which is not on any map yet.
         if (drawing && pending.size() >= 2) {
@@ -552,16 +521,7 @@ public final class MapPanel {
         if (noteAt != null) drawNoteEditor(target, frame);
     }
 
-    private void drawStroke(DrawTarget target, Frame frame, Chart.Stroke stroke) {
-        Color colour = new Color(stroke.ink().rgb());
-        double[] xs = stroke.xs(), ys = stroke.ys();
-        for (int i = 1; i < xs.length; i++) {
-            target.drawLine(frame.screenX(xs[i - 1]), frame.screenY(ys[i - 1]),
-                    frame.screenX(xs[i]), frame.screenY(ys[i]), colour, 2f);
-        }
-    }
-
-    private void drawPending(DrawTarget target, Frame frame) {
+    private void drawPending(DrawTarget target, MapInk.Frame frame) {
         Color colour = new Color(Chart.Ink.at(ink).rgb());
         for (int i = 1; i < pending.size(); i++) {
             double[] a = pending.get(i - 1), b = pending.get(i);
@@ -570,18 +530,7 @@ public final class MapPanel {
         }
     }
 
-    private void drawNote(DrawTarget target, Frame frame, Chart.Note note) {
-        int x = frame.screenX(note.x()), y = frame.screenY(note.y());
-        Color colour = new Color(note.ink().rgb());
-        target.fillOval(x - 3, y - 3, 6, 6, colour);
-        int width = target.textWidth(note.text(), SMALL);
-        // The label is drawn on its own scrap of paper: a map has a picture
-        // under it, and dark text straight onto a dark wood reads as nothing.
-        target.fillRect(x + 6, y - 11, width + 8, 15, new Color(232, 224, 202, 220));
-        target.drawText(note.text(), x + 10, y + 1, SMALL, colour);
-    }
-
-    private void drawNoteEditor(DrawTarget target, Frame frame) {
+    private void drawNoteEditor(DrawTarget target, MapInk.Frame frame) {
         int x = frame.screenX(noteAt[0]), y = frame.screenY(noteAt[1]);
         String shown = noteText + "▏";
         int width = Math.max(80, target.textWidth(shown, SMALL) + 10);
@@ -602,7 +551,7 @@ public final class MapPanel {
      * information is a direction, not a place — and the number beside it is how
      * far away they are.
      */
-    private void drawWalkers(DrawTarget target, WatchView view, Frame frame) {
+    private void drawWalkers(DrawTarget target, WatchView view, MapInk.Frame frame) {
         for (WatchView.Walker walker : view.walkers()) {
             boolean self = walker.id() == view.selfId();
             int[] pin = pinAt(frame, walker.x(), walker.y());
@@ -637,7 +586,7 @@ public final class MapPanel {
      * rather than four lines inside the drawing loop: it is a claim a test can
      * make, and it is the same arithmetic the drawing uses.
      */
-    private static int[] pinAt(Frame frame, double worldX, double worldY) {
+    private static int[] pinAt(MapInk.Frame frame, double worldX, double worldY) {
         int x = frame.screenX(worldX);
         int y = frame.screenY(worldY);
         boolean off = !frame.holds(x, y);
@@ -657,7 +606,7 @@ public final class MapPanel {
 
     /** The square of world the paper is showing, as {@code minX, minY, maxX, maxY}. */
     public double[] shown(WatchView view, int viewportWidth, int viewportHeight) {
-        Frame frame = frame(view, viewportWidth, viewportHeight);
+        MapInk.Frame frame = frame(view, viewportWidth, viewportHeight);
         return new double[]{frame.worldX(frame.x()), frame.worldY(frame.y()),
                 frame.worldX(frame.x() + frame.size()),
                 frame.worldY(frame.y() + frame.size())};
@@ -690,75 +639,13 @@ public final class MapPanel {
     }
 
     /**
-     * One icon.
-     *
-     * <p>Drawn rather than lettered. A map with "S" on it for a shop is a map
-     * with a legend you have to keep reading; a little house is a house. Each
-     * shape is a handful of primitives, which is cheaper than an atlas and — the
-     * real reason — cannot be broken by a texture pack that has never heard of
-     * maps.
-     */
-    static void icon(DrawTarget target, Chart.Kind kind, int x, int y) {
-        Color colour = new Color(kind.rgb());
-        switch (kind) {
-            case SHOP -> {
-                // A hut with a pitched roof.
-                target.fillRect(x - 4, y - 1, 9, 6, colour);
-                target.fillPolygon(new int[]{x - 6, x, x + 7}, new int[]{y - 1, y - 7, y - 1},
-                        3, colour);
-                target.drawRect(x - 4, y - 1, 9, 6, INK, 1f);
-            }
-            case CAMP -> {
-                // A tent.
-                target.fillPolygon(new int[]{x - 6, x, x + 6}, new int[]{y + 5, y - 6, y + 5},
-                        3, colour);
-                target.drawPolygon(new int[]{x - 6, x, x + 6}, new int[]{y + 5, y - 6, y + 5},
-                        3, INK, 1f);
-            }
-            case FEEDER -> {
-                // A post with a tray on it.
-                target.fillRect(x - 1, y - 2, 2, 7, INK);
-                target.fillRect(x - 5, y - 4, 11, 3, colour);
-                target.drawRect(x - 5, y - 4, 11, 3, INK, 1f);
-            }
-            case PLANTING -> {
-                // A little tree.
-                target.fillRect(x - 1, y, 2, 5, new Color(90, 66, 44));
-                target.fillOval(x - 5, y - 7, 11, 9, colour);
-                target.drawOval(x - 5, y - 7, 11, 9, INK, 1f);
-            }
-            case BOAT -> {
-                // A hull, seen from above.
-                target.fillPolygon(new int[]{x - 6, x, x + 6, x},
-                        new int[]{y, y - 4, y, y + 4}, 4, colour);
-                target.drawPolygon(new int[]{x - 6, x, x + 6, x},
-                        new int[]{y, y - 4, y, y + 4}, 4, INK, 1f);
-            }
-            case SIGHTING -> {
-                // A ring with a dot in it: the mark somebody puts beside a bird.
-                target.drawOval(x - 5, y - 5, 10, 10, colour, 2f);
-                target.fillOval(x - 2, y - 2, 4, 4, colour);
-            }
-            case SUMMIT -> {
-                // A peak, with the shaded face every map draws on one.
-                target.fillPolygon(new int[]{x - 6, x, x + 6}, new int[]{y + 4, y - 6, y + 4},
-                        3, colour);
-                target.fillPolygon(new int[]{x, x + 6, x + 2}, new int[]{y - 6, y + 4, y + 4},
-                        3, new Color(70, 66, 60));
-                target.drawPolygon(new int[]{x - 6, x, x + 6}, new int[]{y + 4, y - 6, y + 4},
-                        3, INK, 1f);
-            }
-        }
-    }
-
-    /**
      * The scale bar.
      *
      * <p>A round number of metres rather than a round number of pixels, chosen
      * off the 1–2–5 ladder every printed map uses, so the bar says "200 m" and
      * not "173 m".
      */
-    private void drawScaleBar(DrawTarget target, Frame frame) {
+    private void drawScaleBar(DrawTarget target, MapInk.Frame frame) {
         double metresWanted = frame.span() / 4;
         double magnitude = Math.pow(10, Math.floor(Math.log10(Math.max(1, metresWanted))));
         double lead = metresWanted / magnitude;
@@ -848,7 +735,7 @@ public final class MapPanel {
         target.drawText("Key", x + 10, row, BOLD, INK);
         for (Chart.Kind kind : Chart.Kind.values()) {
             row += 20;
-            icon(target, kind, x + 20, row - 4);
+            MapInk.icon(target, kind, x + 20, row - 4, 1);
             target.drawText(kind.label(), x + 36, row, SMALL, INK_DIM);
         }
 
