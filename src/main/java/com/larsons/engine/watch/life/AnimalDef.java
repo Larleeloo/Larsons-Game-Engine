@@ -48,10 +48,29 @@ public record AnimalDef(String key, String name, AnimalFamily family, String lin
      * <p>Both halves matter. Rarity alone would put the same animals in front
      * of you at four in the morning as at noon, and the hour alone would make
      * a legendary as easy to find as a sparrow at the right time.
+     *
+     * <p><b>A mutant is the one thing here with a hard edge on its hour.</b>
+     * {@link Activity#activityAt} never quite returns zero, on purpose — a
+     * nocturnal warbler disturbed at noon does move, and a species that were
+     * literally unfindable outside four hours would be a page nobody finishes.
+     * Neither argument survives contact with something that hunts you: "the
+     * taiga is safe until dark" has to be true, not nearly true, or a player
+     * cannot plan a day around it. So a hostile species outside its own hours
+     * is not offered at all. See {@link Mutants}.
      */
     public double encounterWeight(WatchClock.Phase phase) {
+        if (hostile() && !activity.awakeAt(phase)) return 0;
         return rarity.frequency() * activity.activityAt(phase);
     }
+
+    /**
+     * Whether this species hunts people rather than fleeing them.
+     *
+     * <p>True for exactly the three in {@link Mutants}. Everything that behaves
+     * differently about them is behind this one question — see
+     * {@link AnimalFamily#hostile()}.
+     */
+    public boolean hostile() { return family.hostile(); }
 
     /** How far away this species notices a player who is moving normally. */
     public double flushDistance() {
@@ -73,6 +92,11 @@ public record AnimalDef(String key, String name, AnimalFamily family, String lin
 
     /** A one-line description for the guide's page. */
     public String blurb() {
+        // A mutant's page does not say what it eats. Everybody knows.
+        if (hostile()) {
+            return rarity.label() + " · " + family.plural() + " · abroad "
+                    + activity.phrase() + " · dangerous";
+        }
         return rarity.label() + " · " + family.plural() + " · seen " + activity.phrase()
                 + " · eats " + diet.label().toLowerCase();
     }

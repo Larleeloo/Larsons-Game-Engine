@@ -50,8 +50,11 @@ import java.util.Map;
  *   client → server   {"t":"erase","c":mapId,"s":markId}
  *   client → server   {"t":"pin","c":mapId,"b":boardId}   (0 = take it back)
  *
+ *   client → server   {"t":"gather"}                  (take a dropped satchel)
+ *
  *   server → client   {"t":"bag","items":{…}}          (private, after any change)
- *   server → all      {"t":"world","grove":{…},"crops":{…},"built":{…},"maps":{…}}
+ *   server → all      {"t":"world","grove":{…},"crops":{…},"built":{…},"maps":{…},
+ *                      "spills":{…}}
  *   server → all      {"t":"guide","entries":[…],"pets":[…],"earned":…,"tally":[…]}
  *   both              info / error / ping / pong
  * </pre>
@@ -173,6 +176,13 @@ public final class WatchProto {
      * per animal; at a hundred and fifty animals and twenty ticks a second that
      * is the difference between a snapshot that fits comfortably and one that
      * does not.
+     *
+     * <p><b>A respawn travels here too</b>, and as a counter rather than as a
+     * message: {@code WatchPlayer.toSnapshot} puts {@code rs} on the row of
+     * anybody who has been killed, and a client that sees its own number go up
+     * teleports to the position in the same snapshot. See
+     * {@link WatchPlayer#respawns()} for why that is better than telling them
+     * once and hoping.
      */
     public static Map<String, Object> state(long tick, double timeOfDay,
                                             List<WatchPlayer> players,
@@ -432,11 +442,19 @@ public final class WatchProto {
                                             Map<String, Object> built,
                                             Map<String, Object> maps,
                                             Map<String, Object> boats,
+                                            Map<String, Object> spills,
                                             List<Long> taken) {
         Map<String, Object> m = msg("world");
         m.put("grove", grove);
         m.put("crops", crops);
         m.put("built", built);
+        // The dropped satchels. On the slow channel with everything else the
+        // host owns, and not on the snapshot: a heap appears when somebody dies
+        // and disappears when somebody picks it up, which is a handful of times
+        // a session — and the world sync goes out the instant either happens,
+        // so it is never five seconds stale in practice. See
+        // com.larsons.engine.watch.Spill.
+        if (spills != null) m.put("spills", spills);
         // The maps ride with the buildings rather than on a channel of their
         // own: they change at the same rate and for the same reason — somebody
         // did something to the world — and a stroke of a pen is a few hundred

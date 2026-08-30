@@ -31,6 +31,16 @@ import java.util.Random;
  * feeds at your lure while you stay still gains {@link #trust()}; at full trust
  * it follows the player who fed it and stops flushing from them at all. That is
  * the pet system, and it deliberately has no button.
+ *
+ * <h2>And then there are three that do none of this</h2>
+ *
+ * <p>{@link Mutants} adds three species that hunt people, and they run
+ * {@link #hunt} instead of {@link #decide} — a different four-state machine
+ * reached by the first branch of {@link #step}. Every sentence above is false of
+ * them, which is the point of them: the mechanic this class is built around is
+ * "hold still and it will let you closer", and the whole of what a mutant means
+ * is that holding still does not work on it. Nothing in the ordinary loop was
+ * softened to make room; the hostile branch is simply somewhere else.
  */
 public final class Animal {
 
@@ -49,7 +59,13 @@ public final class Animal {
         /** Out of hours. */
         SLEEP,
         /** A tame animal, keeping up with its owner. */
-        FOLLOW
+        FOLLOW,
+        /**
+         * Coming for somebody. Only a {@link Mutants} species ever enters this.
+         */
+        HUNT,
+        /** Close enough, and swinging. Likewise. */
+        MAUL
     }
 
     /** What an animal needs to know about the world around it. */
@@ -104,6 +120,49 @@ public final class Animal {
 
         /** Where a named player is, written into {@code out}; {@code false} if gone. */
         boolean playerPosition(String name, double[] out);
+
+        /**
+         * The nearest player a mutant could hunt, by name, or {@code null}.
+         *
+         * <p><b>Not {@link #disturbanceAt}, and the difference is the point.</b>
+         * Disturbance is how <em>loud</em> a place is: a player who has stopped
+         * moving counts as three times further away than they are, which is the
+         * whole approach mechanic and is exactly the wrong question here.
+         * Holding still is how you get close to a bird; it is not how you hide
+         * from something that hunts. So this is the plain distance, and the
+         * answer to a mutant is to be somewhere else rather than to be quiet.
+         *
+         * <p>Dead players are not offered. Neither is anybody further off than
+         * {@code range}.
+         *
+         * <p><b>Defaulted</b>, along with {@link #wound}, and for a reason worth
+         * writing down: this interface is implemented by {@code WatchGame} and
+         * by test doubles, and only three of the thirteen hundred species in
+         * this game will ever call either method. A test that stands a fish on
+         * a shoreline should not have to answer questions about hunting people
+         * to keep compiling, and the fish will never ask them.
+         *
+         * @return the player's name, for {@link #playerPosition} and
+         *         {@link #wound}, or {@code null} when there is nobody
+         */
+        default String nearestQuarry(double x, double y, double range) {
+            return null;
+        }
+
+        /**
+         * Land a blow on a player.
+         *
+         * <p>The animal decides that it has hit somebody; the world decides
+         * what that costs and what happens if it was the last one they could
+         * take. That split is the same one the rest of this interface makes —
+         * an {@link Animal} never reaches into the game, it asks the game
+         * questions and tells it what it did.
+         *
+         * @param name   who was hit
+         * @param amount a share of a full health bar
+         * @param by     the animal that hit them, for the line in the log
+         */
+        default void wound(String name, double amount, Animal by) { }
     }
 
     /** How far an animal will travel to reach a lure. */
@@ -184,8 +243,46 @@ public final class Animal {
         0, Math.toRadians(30), Math.toRadians(55), Math.toRadians(80)
     };
 
+    /**
+     * How long a {@link Mutants.Power#LUNGE} burst lasts, and how long the
+     * breather between two of them is, in seconds.
+     *
+     * <p>The gap is what makes a werewolf survivable and the burst is what makes
+     * it frightening. Both are on the long side of what the numbers alone would
+     * suggest, because a player has to be able to <em>see</em> the rhythm: two
+     * seconds of it closing and three of it merely following is a pattern
+     * somebody works out on their first chase, and a pattern is the difference
+     * between a mechanic and a dice roll.
+     */
+    private static final double BURST_SECONDS = 1.8;
+
+    private static final double BURST_REST = 3.2;
+
+    /**
+     * How close an {@link Mutants.Power#AMBUSH} hunter lets somebody get before
+     * it stands up, as a share of its notice range.
+     *
+     * <p>Its notice range is already the shortest of the three, and this cuts it
+     * further — to about twenty-two metres, which is the shortest reaction
+     * window in the game. What that buys is the half-second between "that log is
+     * the wrong shape" and it being upright, which is the entire personality of
+     * the mirewraith.
+     */
+    private static final double AMBUSH_TRIGGER = 0.55;
+
     private final long id;
     private final AnimalDef def;
+
+    /**
+     * What this animal is, if it is one of the three that hunt people, and
+     * {@code null} for the other thirteen hundred.
+     *
+     * <p>Resolved once in the constructor rather than per tick: it is a map
+     * lookup on a species key, it never changes, and {@link #step} runs on
+     * every animal alive twenty times a second.
+     */
+    private final Mutants.Kind mutant;
+
     private final Random rng;
 
     private double x, y, z, yaw;
@@ -216,9 +313,22 @@ public final class Animal {
      */
     private double slideSign = 1;
 
+    /** Who this mutant is coming for, or {@code null}. */
+    private String quarry;
+
+    /** How long until it can swing again, in seconds. */
+    private double strikeCooldown;
+
+    /** Where a lunging hunter is in its burst-and-breather cycle, in seconds. */
+    private double burstClock;
+
+    /** Whether it is in the fast half of that cycle now. */
+    private boolean bursting;
+
     public Animal(long id, AnimalDef def, double x, double y, double z, long seed) {
         this.id = id;
         this.def = def;
+        this.mutant = Mutants.of(def);
         this.x = x;
         this.y = y;
         this.z = z;
@@ -265,6 +375,15 @@ public final class Animal {
     /** Whether it has been startled since it was last calm — for the HUD. */
     public boolean flushed() { return flushed; }
 
+    /** Whether this is one of the three that hunt people. */
+    public boolean hostile() { return mutant != null; }
+
+    /** Which mutant it is, or {@code null}. */
+    public Mutants.Kind mutant() { return mutant; }
+
+    /** Who it is hunting, or {@code null} — for the HUD, and for a test. */
+    public String quarry() { return quarry; }
+
     /** Put it somewhere — what a client does when a snapshot arrives. */
     public void place(double x, double y, double z, double yaw) {
         this.x = x;
@@ -301,22 +420,169 @@ public final class Animal {
      */
     public void step(double dt, Surroundings around) {
         stateTime += dt;
-        double disturbance = around.disturbanceAt(x, y);
-        boolean ownerNear = false;
         double[] scratch = new double[3];
-
-        if (tame() && around.playerPosition(owner, scratch)) {
-            double dx = scratch[0] - x, dy = scratch[1] - y;
-            ownerNear = dx * dx + dy * dy < 900;
-        }
-
         double wasX = x, wasY = y;
-        decide(dt, around, disturbance, ownerNear, scratch);
+
+        // The three mutants run a different loop entirely, and it is the first
+        // branch rather than a clause inside the ordinary one on purpose:
+        // nothing below this line applies to something that hunts. It has no
+        // flush distance, no lure it will come to, no hour it sleeps through
+        // once it is awake, and no trust to gain. See Mutants.
+        if (mutant != null) {
+            hunt(dt, around, scratch);
+        } else {
+            double disturbance = around.disturbanceAt(x, y);
+            boolean ownerNear = false;
+            if (tame() && around.playerPosition(owner, scratch)) {
+                double dx = scratch[0] - x, dy = scratch[1] - y;
+                ownerNear = dx * dx + dy * dy < 900;
+            }
+            decide(dt, around, disturbance, ownerNear, scratch);
+        }
         move(dt, around);
         poseFor(Math.hypot(x - wasX, y - wasY));
 
         phase += dt * state.cyclesPerSecond();
         phase -= Math.floor(phase);
+    }
+
+    // --- hunting ---------------------------------------------------------------------
+
+    /**
+     * One tick of a mutant, which is the only thing in this world that comes
+     * <em>toward</em> a player.
+     *
+     * <p>The state machine is deliberately four states rather than the seven the
+     * ordinary loop has, because a thing that hunts has far less to decide:
+     *
+     * <pre>
+     *   SETTLED/WANDER  →  HUNT   somebody came inside the notice range
+     *   HUNT            →  MAUL   they are within arm's reach
+     *   MAUL            →  HUNT   they moved, or it swung and is winding up again
+     *   HUNT            →  WANDER they got clear — see Kind.lose
+     * </pre>
+     *
+     * <p><b>There is no ALERT and no FLEE.</b> Both are about deciding whether a
+     * player is a problem, and these three have decided. What replaces the
+     * decision is distance: everything a player can do about a mutant is a fact
+     * about where they are standing, which is why the pursuit reads the plain
+     * distance and not {@link Surroundings#disturbanceAt}. Holding still works
+     * on a heron. It does not work on this.
+     */
+    private void hunt(double dt, Surroundings around, double[] scratch) {
+        strikeCooldown = Math.max(0, strikeCooldown - dt);
+        driveBurst(dt);
+
+        // Keep the one it already has if that one is still within the range at
+        // which it gives up; otherwise look for a new one. Sticking to a quarry
+        // is what stops a mutant between two people oscillating on the spot,
+        // and it is what makes "it is following Kara" a thing a party can say.
+        if (quarry != null && !around.playerPosition(quarry, scratch)) quarry = null;
+        if (quarry != null) {
+            double dx = scratch[0] - x, dy = scratch[1] - y;
+            if (Math.hypot(dx, dy) > mutant.lose()) quarry = null;
+        }
+        if (quarry == null) {
+            quarry = around.nearestQuarry(x, y, noticeRange());
+            if (quarry != null && !around.playerPosition(quarry, scratch)) quarry = null;
+        }
+
+        if (quarry == null) {
+            // Nobody about. It walks its ground — the same wander every other
+            // animal does, so a mutant nobody has met yet is something you can
+            // watch moving through a wood from a long way off, which is the
+            // whole of the encounter this design is built around.
+            burstClock = 0;
+            bursting = false;
+            // An ambusher does not walk its ground: it stands where it is, and
+            // "that log is the wrong shape" is the whole of the encounter. One
+            // that wandered would be a five-metre silhouette moving through a
+            // marsh, which is a thing you notice from four hundred metres away
+            // and is the opposite of an ambush.
+            if (mutant.power() == Mutants.Power.AMBUSH) {
+                aimAt(x, y);
+                enter(Behaviour.SETTLED);
+                return;
+            }
+            // Carry on with the journey it is on, while that journey is still
+            // going somewhere; choose another when it has arrived or stalled.
+            if (behaviour == Behaviour.WANDER && dx2(targetX, targetY) > 1.2
+                    && !givenUp()) {
+                return;
+            }
+            pickWanderTarget(around);
+            enter(Behaviour.WANDER);
+            return;
+        }
+
+        double dx = scratch[0] - x, dy = scratch[1] - y;
+        double distance = Math.hypot(dx, dy);
+        // Face them whatever else is happening. A mutant that is winding up to
+        // swing has to be pointed at the person it is about to hit, and a
+        // fifteen-degree error there reads as a bug rather than as a miss.
+        yaw += wrapAngle(Math.atan2(dy, dx) - yaw) * Math.min(1, dt * 4);
+
+        if (distance <= mutant.reach()) {
+            aimAt(x, y);
+            enter(Behaviour.MAUL);
+            if (strikeCooldown <= 0) {
+                strikeCooldown = mutant.strikeSeconds();
+                around.wound(quarry, mutant.damage(), this);
+                // Restart the swing so the blow lands at the top of the arc
+                // rather than wherever the shared phase clock happened to be.
+                phase = 0;
+            }
+            return;
+        }
+        // Walk at where they are now rather than at where they were when the
+        // last target was set: a pursuit that re-aims once a second is a thing
+        // you can walk in a circle around.
+        aimAt(scratch[0], scratch[1]);
+        enter(Behaviour.HUNT);
+    }
+
+    /**
+     * How far off this one picks somebody up.
+     *
+     * <p>An {@link Mutants.Power#AMBUSH} hunter is a special case in the one
+     * place it has to be: it has a short notice range to begin with, and it only
+     * takes an interest inside a fraction of even that. Everything else notices
+     * at its full range.
+     */
+    private double noticeRange() {
+        if (mutant.power() != Mutants.Power.AMBUSH) return mutant.notice();
+        return mutant.notice() * AMBUSH_TRIGGER;
+    }
+
+    /** Advance the burst-and-breather clock a {@link Mutants.Power#LUNGE} runs on. */
+    private void driveBurst(double dt) {
+        if (mutant.power() != Mutants.Power.LUNGE) return;
+        burstClock += dt;
+        double limit = bursting ? BURST_SECONDS : BURST_REST;
+        if (burstClock >= limit) {
+            burstClock = 0;
+            bursting = !bursting;
+        }
+    }
+
+    /** How fast it is going after somebody, in metres per second. */
+    private double huntSpeed() {
+        double chase = def.speed() * mutant.chase();
+        return switch (mutant.power()) {
+            // Between bursts it is merely keeping up; during one it is the
+            // fastest thing in the game.
+            case LUNGE -> bursting ? chase : def.speed() * 0.85;
+            // Slow, and it does not need to be anything else: it was already
+            // where you were going.
+            case AMBUSH -> chase;
+            case STALK -> chase;
+        };
+    }
+
+    /** The square of the distance from here to a point. */
+    private double dx2(double px, double py) {
+        double dx = px - x, dy = py - y;
+        return dx * dx + dy * dy;
     }
 
     /**
@@ -592,7 +858,25 @@ public final class Animal {
     private boolean habitable(Surroundings around, double px, double py) {
         if (def.airborne()) return true;
         double depth = around.waterDepthAt(px, py);
-        return def.aquatic() ? depth >= SWIM_DEPTH : depth <= WADE_LIMIT;
+        return def.aquatic() ? depth >= SWIM_DEPTH : depth <= wadeLimit();
+    }
+
+    /**
+     * How deep this animal will go, in metres.
+     *
+     * <p>{@link #WADE_LIMIT} for everything that walks, and rather more for the
+     * three that tower. A metre and a tenth of water is chest-deep on a fox and
+     * over its head on a hare; it is somewhere below the knee of a five-metre
+     * mirewraith, whose whole range is standing water and which would otherwise
+     * spend its night refusing to enter the marsh it lives in.
+     *
+     * <p>It also makes the shoreline a real answer to a chase: a player who
+     * swims out is safe from a werewolf at four metres of water and not at one,
+     * which is a thing you can look at a lake and judge.
+     */
+    private double wadeLimit() {
+        return mutant == null ? WADE_LIMIT
+                : Math.max(WADE_LIMIT, def.bodyLength() * 0.45);
     }
 
     private void enter(Behaviour next) {
@@ -612,6 +896,8 @@ public final class Animal {
             case ALERT -> AnimState.ALERT;
             case FLEE -> flies ? AnimState.FLY : AnimState.RUN;
             case SLEEP -> AnimState.SLEEP;
+            case HUNT -> AnimState.RUN;
+            case MAUL -> AnimState.STRIKE;
         };
     }
 
@@ -620,6 +906,10 @@ public final class Animal {
             case FLEE -> def.speed() * 1.8;
             case WANDER, FOLLOW -> def.speed();
             case FEED -> def.speed() * 0.3;
+            // A mutant that has somebody. Everything about how fast that is
+            // lives in one place, because the three of them differ in it more
+            // than in anything else. See huntSpeed.
+            case HUNT -> huntSpeed();
             default -> 0;
         };
         if (speed > 0) {
@@ -759,8 +1049,9 @@ public final class Animal {
             boolean afloat = here >= SWIM_DEPTH * 0.5;
             return afloat ? there >= SWIM_DEPTH * 0.5 : there >= here;
         }
-        boolean footing = here <= WADE_LIMIT;
-        return footing ? there <= WADE_LIMIT : there <= here;
+        double wade = wadeLimit();
+        boolean footing = here <= wade;
+        return footing ? there <= wade : there <= here;
     }
 
     private static double wrapAngle(double radians) {

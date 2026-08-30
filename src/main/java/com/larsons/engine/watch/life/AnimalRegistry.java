@@ -8,7 +8,7 @@ import java.util.List;
 import java.util.Map;
 
 /**
- * Every species there is — <b>one thousand two hundred and seventy-four of
+ * Every species there is — <b>one thousand three hundred and twenty-six of
  * them</b>, built once, the same every time.
  *
  * <h2>Why they are generated</h2>
@@ -23,11 +23,19 @@ import java.util.Map;
  *
  * <pre>
  *   family  ×  lineage  ×  epithet   →   species
- *    (26)       (7 each)   (7 each)        1274
+ *    (27)       (7 each)   (7 each)        1323
+ *                          + the three hand-written mutants   →   1326
  * </pre>
+ *
+ * <p>The three are {@link Mutants}, and they are the one part of this file that
+ * is not generated — for the reason set out there: a horror with rolled colours
+ * and a rolled size is not a horror, it is a category. Everything downstream of
+ * here treats them as ordinary rows, which is what lets the field guide page
+ * them and a texture pack redress them.
  *
  * <ul>
  *   <li>a <b>family</b> ({@link AnimalFamily}) is a body plan and a behaviour —
+ *       twenty-seven of them are crossed, and the three hostile ones are not;
  *       what it looks like, how it moves, when it is awake, where it lives;</li>
  *   <li>a <b>lineage</b> is the noun in the name (<em>Finch</em>,
  *       <em>Goshawk</em>) and belongs to exactly one family, which is what
@@ -48,7 +56,7 @@ import java.util.Map;
  * <h2>Determinism</h2>
  *
  * <p>Nothing here reads a clock, a seed, or a file. The same build of the game
- * produces the same 1 274 species in the same order with the same keys, which
+ * produces the same 1 326 species in the same order with the same keys, which
  * is what lets a save hold a species key, a wire message name one, and two
  * players compare pages.
  */
@@ -171,6 +179,12 @@ public final class AnimalRegistry {
     private static List<AnimalDef> build() {
         List<AnimalDef> out = new ArrayList<>(1300);
         for (AnimalFamily family : AnimalFamily.values()) {
+            // The three hostile families are not crossed with anything: there
+            // are three mutants and there is meant to be no fourth. Rolling
+            // forty-nine wendigos with rolled colours would turn the one
+            // genuinely frightening thing in this game into a category of
+            // wallpaper. See Mutants.
+            if (family.hostile()) continue;
             List<String> lineages = family.lineages();
             for (int l = 0; l < lineages.size(); l++) {
                 for (int e = 0; e < EPITHETS_PER_FAMILY; e++) {
@@ -178,6 +192,12 @@ public final class AnimalRegistry {
                 }
             }
         }
+        // …and then the three, written out, at the end of the book where the
+        // last page of a field guide keeps the things nobody has seen. They are
+        // ordinary AnimalDefs from here on: the guide pages them, the wire names
+        // them, the skin painter paints them and a texture pack can redress
+        // them, exactly as for the thirteen hundred above.
+        out.addAll(Mutants.species());
         return Collections.unmodifiableList(out);
     }
 
@@ -288,7 +308,11 @@ public final class AnimalRegistry {
             case UNCOMMON -> Math.max(3, most - 2);
             case SCARCE -> Math.max(2, most / 2);
             case RARE -> Math.max(2, most / 3);
-            case LEGENDARY -> Math.max(1, most / 4);
+            // A mutant never reaches this method — it is written out rather
+            // than rolled, and it keeps the whole of its family's three-biome
+            // range. The arm is here because the compiler asks for it, and it
+            // answers the way the tier below it does.
+            case LEGENDARY, MYTHIC -> Math.max(1, most / 4);
         };
         want = Math.min(want, most);
         int start = (int) ((h >>> 47) % most);

@@ -49,9 +49,9 @@ family word, the lineage, and the epithet; lower-case each, turn spaces into
 `_`, drop hyphens, and join with `_`. `AnimalRegistry.all()` lists every one of
 them if you would rather read them off than spell them out.
 
-**Family keys** are the 26 words below. A file named for one of these dresses
+**Family keys** are the 29 words below. A file named for one of these dresses
 every species in that family, which is how you redress the whole game with
-twenty-six files rather than thirteen hundred:
+twenty-nine files rather than thirteen hundred:
 
 ```
 songbird   raptor     owl        waterfowl  wader      shorebird
@@ -59,7 +59,13 @@ hummingbird parrot    corvid     woodpecker gamebird   seabird
 deer       canid      felid      rodent     mustelid   primate
 bear       bovid      hare       bat        reptile    amphibian
 butterfly  fish       sprite
+wendigo    werewolf   mirewraith
 ```
+
+The last three are the mutants, and each is a family of exactly one species —
+so for those three, the family file and the species file dress the same animal.
+They are the only bipeds here, they stand between four and six metres, and they
+are the only models that will ever play the `strike` animation (§4).
 
 **Two places are searched, in this order:**
 
@@ -145,7 +151,7 @@ an imported model animates strangely.
 
 ## 4. Animations
 
-Name a Blockbench animation after one of the nine states below and it is used
+Name a Blockbench animation after one of the ten states below and it is used
 for that state. Matching ignores any `animation.<model>.` prefix Blockbench
 writes, is case-insensitive, and accepts the name with a `_`-separated prefix or
 suffix — so `walk`, `Walk`, `animation.wren.walk`, and `walk_cycle` all mean
@@ -162,6 +168,13 @@ suffix — so `walk`, `Walk`, `animation.wren.walk`, and `walk_cycle` all mean
 | `SLEEP` | `sleep`, `rest`, `roost` | outside its own hours |
 | `CALL` | `call`, `sing`, `display` | the moment that gives it away |
 | `TAME` | `tame`, `sit`, `perch` | a pet, at home |
+| `STRIKE` | `strike`, `attack`, `bite`, `lunge`, `swipe` | swinging at somebody — mutants only |
+
+`STRIKE` is the odd one out: nothing but the three mutants (`wendigo`,
+`werewolf`, `mirewraith`) ever enters it, so a clip for it on a wren is simply
+never played. It is a full state all the same, with the same fallback rule as
+the other nine, because the three of them are ordinary imported models in every
+other respect.
 
 **What is read from a clip:** its `length`, whether it loops, and per-bone
 **`rotation`** and **`position`** keyframes with their interpolation mode
@@ -180,7 +193,7 @@ limb bending backwards.
 
 **A state with no clip falls back to the procedural animation**, per joint. A
 model that supplies only `idle` and `walk` is a working animal with the other
-seven states still moving; adding `fly` later improves it rather than completing
+eight states still moving; adding `fly` later improves it rather than completing
 a prerequisite. Ship one clip at a time.
 
 ---

@@ -393,7 +393,7 @@ class MapsTest {
 
         Map<String, Object> message = WatchProto.world(game.grove().toMap(),
                 game.crops().toMap(), game.structure().toMap(), game.maps().toMap(),
-                game.boats().toMap(), game.takenLitter());
+                game.boats().toMap(), game.spills().toMap(), game.takenLitter());
 
         WatchView view = new WatchView();
         view.maps().load(WatchJson.map(message, "maps"));

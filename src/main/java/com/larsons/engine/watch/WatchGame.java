@@ -6,6 +6,7 @@ import com.larsons.engine.watch.life.Animal;
 import com.larsons.engine.watch.life.AnimalDef;
 import com.larsons.engine.watch.life.AnimalRegistry;
 import com.larsons.engine.watch.life.Diet;
+import com.larsons.engine.watch.life.Mutants;
 import com.larsons.engine.watch.world.Flora;
 import com.larsons.engine.watch.world.Grove;
 import com.larsons.engine.watch.world.TerrainField;
@@ -121,6 +122,64 @@ public final class WatchGame implements Animal.Surroundings {
     /** Beyond this from every player, an animal is forgotten. */
     private static final double DESPAWN = 170;
 
+    /**
+     * Nearest a <em>mutant</em> is ever put down, in metres.
+     *
+     * <p>{@link #SPAWN_NEAR} is twenty-two metres and would put a five-metre
+     * wendigo inside the clearing you are standing in, arriving out of nothing —
+     * which reads as a bug rather than as a horror, and takes away the seconds
+     * of deciding what to do that the meeting is made of. Forty-five is about
+     * ten of those seconds at a walk, and a thing three times a person's height
+     * is unmistakable at it.
+     *
+     * <p>It is a <b>floor</b> rather than the distance itself, because a fixed
+     * ring was measured and was wrong: put down at ninety to a hundred and forty
+     * metres, a wendigo whose notice range is seventy-eight never noticed
+     * anybody at all, and a walker who kept walking left it behind having never
+     * known it was there. A spawn nothing comes of is not an encounter. See
+     * {@link #placeMutant}.
+     */
+    private static final double MUTANT_SPAWN_FLOOR = 45;
+
+    /**
+     * How wide the cone an ambusher is placed in, in radians either side of
+     * where its quarry is heading.
+     *
+     * <p>Twenty-eight degrees, which at the fifty-odd metres one is placed at
+     * brings a walker within about twenty-five of it — just inside the range at
+     * which it stands up. Wider and most of them are walked past unmet; narrower
+     * and every one of them is dead ahead, which is a different and worse
+     * problem.
+     *
+     * <p>An ambusher does not come to you — that is the whole of what
+     * {@link Mutants.Power#AMBUSH} means — so a ring placement leaves it
+     * standing in a fen behind you for ten minutes and then dropping out of the
+     * world unmet. Putting it roughly where you are already going is not the
+     * generator cheating; it is what the word means.
+     */
+    private static final double AMBUSH_CONE = Math.toRadians(28);
+
+    /**
+     * How many mutants may be alive at once, however many people are walking.
+     *
+     * <p>One. Two would be twice as frightening for about a minute and then
+     * would be the population of the wood, and the entire design rests on the
+     * wood being safe. See {@code Mutants} on the three filters this is the
+     * fourth of.
+     */
+    private static final int MUTANT_CAP = 1;
+
+    /**
+     * How long after one is dropped before the world will offer another, in
+     * seconds.
+     *
+     * <p>Ten minutes. Without it, walking away from a wendigo until it despawns
+     * simply hands you a fresh one on the next spawn tick, which turns "I got
+     * away" into "it teleported". Long enough to get somewhere else and calm
+     * down; short enough that a night's walk can meet more than one.
+     */
+    private static final double MUTANT_COOLDOWN = 600;
+
     /** How many animals are kept alive per player. */
     private static final int PER_PLAYER = 26;
 
@@ -184,6 +243,17 @@ public final class WatchGame implements Animal.Surroundings {
     private final Map<Long, Lure> lures = new LinkedHashMap<>();
     private final List<Spotlight> spotlights = new ArrayList<>();
 
+    /**
+     * Every satchel somebody has dropped by dying, still lying where it fell.
+     *
+     * <p>World state like the grove and the buildings — saved, synced, and
+     * owned by the host — for the reason {@link Spill} sets out at length: it is
+     * the one thing on the floor of this world that cannot be derived from the
+     * seed, because it is a record of something that happened rather than a
+     * fact about a place.
+     */
+    private final Spill spills = new Spill();
+
     private final FieldGuide guide = new FieldGuide();
     private final Grove grove = new Grove();
     private final Cultivation crops = new Cultivation();
@@ -219,6 +289,9 @@ public final class WatchGame implements Animal.Surroundings {
     private long nextLureId = 1;
     private long lastRealMillis = System.currentTimeMillis();
     private double spawnTimer;
+
+    /** How long until the world will offer another mutant. See {@link #MUTANT_COOLDOWN}. */
+    private double mutantCooldown;
 
     public WatchGame(Config config) {
         this(config, null);
@@ -310,6 +383,22 @@ public final class WatchGame implements Animal.Surroundings {
 
     /** The outlines currently up. */
     public synchronized List<Spotlight> spotlights() { return List.copyOf(spotlights); }
+
+    /** Every satchel anybody has dropped by dying. */
+    public synchronized Spill spills() { return spills; }
+
+    /**
+     * Where a walk begins, and where it begins again.
+     *
+     * <p>The world origin. Everything about this game's geography is relative —
+     * there is no edge, no map with a corner, and no landmark that is not
+     * somewhere in particular — so the one fixed point is the one the first
+     * player stood on. Dying puts you back here, which is also the only place
+     * in an endless world that everybody can agree on the name of.
+     */
+    public double spawnX() { return 0; }
+
+    public double spawnY() { return 0; }
 
     // --- the party -------------------------------------------------------------------
 
@@ -614,6 +703,26 @@ public final class WatchGame implements Animal.Surroundings {
         double dirX = Math.sin(player.yaw()) * cp;
         double dirY = -Math.cos(player.yaw()) * cp;
 
+        // <b>A dropped satchel wins over everything.</b> First in the list, and
+        // it earned the place: a player who has walked four hundred metres back
+        // to where they were killed, and presses the key standing over their own
+        // bag, must not pick a blackberry. It was tried further down — above the
+        // floor litter, below the things that grow — and a test walked somebody
+        // back to a heap that happened to have a fruiting tree next to it and
+        // got a handful of fruit.
+        //
+        // It costs nothing in the ordinary case, which is the argument for
+        // putting it first rather than fourth: there is usually no spilled
+        // satchel anywhere in the world, and {@link Spill#REACH} is 2.6 m
+        // against this method's 4.5, so it only wins when somebody is standing
+        // directly over one.
+        Spill.Pile spilled = spills.nearest(player.x(), player.y(), Spill.REACH);
+        if (spilled != null) {
+            return new Pickable(Pickable.Kind.SATCHEL, String.valueOf(spilled.id()),
+                    spilled.label(), spilled.x(), spilled.y(), spilled.z() + 0.25,
+                    Spill.RADIUS);
+        }
+
         Flora.Bush bush = flora.nearestBush(ground, player.x(), player.y(), REACH);
         if (bush != null && bush.ripe() && !bare(bushKey(bush))
                 && inFront(player, bush.x(), bush.y(), dirX, dirY)) {
@@ -749,6 +858,15 @@ public final class WatchGame implements Animal.Surroundings {
              * tell you are standing at is a board nobody uses twice.
              */
             BOARD("Read"),
+            /**
+             * Somebody's satchel, dropped where they died. See {@link Spill}.
+             *
+             * <p>Its own kind rather than a {@link #GROUND} with a different
+             * name, because what it does is different in the way that matters:
+             * a piece of litter is one item and a heap is a whole bag, taken in
+             * one gesture and gone afterwards.
+             */
+            SATCHEL("Gather"),
             /** Something lying on the ground. See {@link Litter}. */
             GROUND("Pick up");
 
@@ -952,6 +1070,7 @@ public final class WatchGame implements Animal.Surroundings {
                 String got = pick(playerId);
                 yield got == null ? null : "Picked up " + Forage.nameOf(got);
             }
+            case SATCHEL -> gather(playerId);
             case CROP -> {
                 String got = harvest(playerId);
                 yield got == null ? null : "Harvested " + got;
@@ -1543,6 +1662,8 @@ public final class WatchGame implements Animal.Surroundings {
         spotlights.removeIf(light -> !light.alive());
         lures.values().removeIf(Lure::spoiled);
 
+        mutantCooldown = Math.max(0, mutantCooldown - dt);
+
         spawnTimer += dt;
         if (spawnTimer >= 0.5) {
             spawnTimer = 0;
@@ -1581,6 +1702,16 @@ public final class WatchGame implements Animal.Surroundings {
             for (WatchPlayer player : players.values()) {
                 double dx = animal.x() - player.x(), dy = animal.y() - player.y();
                 if (dx * dx + dy * dy < DESPAWN * DESPAWN) return false;
+                // …and a mutant is kept well past the ordinary ring. It is the
+                // one thing here that follows rather than flees, and a wendigo
+                // dropped because you got a hundred and seventy metres ahead of
+                // it would make outrunning one trivial and would delete the
+                // slow, awful business of it still being behind you.
+                if (animal.hostile()
+                        && dx * dx + dy * dy < animal.mutant().lose()
+                                * animal.mutant().lose()) {
+                    return false;
+                }
                 // …and nothing being watched through a glass is ever dropped
                 // out from under the person watching it, however far away it
                 // is. Without this the ring's edge is a wall a spyglass can
@@ -1647,6 +1778,25 @@ public final class WatchGame implements Animal.Surroundings {
             }
             AnimalDef def = wantWater ? pickAquatic(x, y) : pickSpecies(x, y);
             if (def == null) continue;
+
+            // The fourth filter on a mutant, and the only one that is not about
+            // odds — see Mutants. The species table has already agreed that one
+            // could be here (right biome, right hour, and it won the weighted
+            // roll at a twentieth of a legendary's frequency); this decides
+            // whether the world is in a state to hold one, and moves it out to
+            // where it can be seen coming.
+            if (def.hostile()) {
+                if (!admitMutant()) continue;
+                double[] at = placeMutant(Mutants.of(def), host);
+                x = at[0];
+                y = at[1];
+                // The ring can land on the wrong side of a biome edge, and a
+                // mutant is too expensive to waste on a failed check — it is one
+                // animal in a night. So the species has to still belong where
+                // the new point put it.
+                if (!def.livesIn(field.biomeAt(x, y).key())) continue;
+            }
+
             double z = field.heightAt(x, y);
             double depth = field.waterDepth(z);
             // A fish out of water, or a fox in a lake, is not a spawn — and the
@@ -1662,7 +1812,77 @@ public final class WatchGame implements Animal.Surroundings {
             double spawnZ = def.aquatic()
                     ? z + Math.max(0, depth - Math.min(depth * 0.5, 0.6)) : z;
             animals.put(id, new Animal(id, def, x, y, spawnZ, config.seed() ^ id));
+            if (def.hostile()) {
+                mutantCooldown = MUTANT_COOLDOWN;
+                // Said out loud, and this is the only spawn in the game that
+                // announces itself. A player who is looking the other way when
+                // a wendigo walks out of the treeline gets no warning at all
+                // otherwise, and "something is out there" is the sentence the
+                // whole encounter is built to earn.
+                say("Something large is moving out there…");
+            }
         }
+    }
+
+    /**
+     * Where to stand a mutant, as {@code x, y}.
+     *
+     * <p><b>Measured from its own eyes, not from a constant.</b> The band is
+     * inside the range at which <em>this</em> mutant notices people and floored
+     * at {@link #MUTANT_SPAWN_FLOOR}, which is the pair of conditions the
+     * encounter needs: it takes an interest at once, and it is far enough off to
+     * be seen first.
+     *
+     * <p>Both halves were measured wrong first. A fixed ninety-to-a-hundred-and-
+     * forty ring put a wendigo whose notice is seventy-eight metres <em>outside
+     * its own senses</em>: it turned up, stood about, and the walker who kept
+     * walking left it behind having never known it was there. Fifty minutes of
+     * night walking on four seeds produced two such spawns and not one second of
+     * being hunted. Tying the band to the creature's own range instead of to a
+     * constant is what fixes it, because the distance that is a warning for one
+     * of the three is out of earshot for another.
+     *
+     * <p>The exception is the ambusher, which is meant <em>not</em> to notice
+     * you at spawn: it is put in front of whoever it is waiting for, at a
+     * distance well outside the range at which it stands up, and the encounter
+     * begins when they walk into it. See {@link #AMBUSH_CONE}.
+     */
+    private double[] placeMutant(Mutants.Kind kind, WatchPlayer host) {
+        double near = Math.max(MUTANT_SPAWN_FLOOR, kind.notice() * 0.55);
+        double far = Math.max(near + 18, kind.notice() * 0.92);
+        double away = near + rng.nextDouble() * (far - near);
+        double bearing = rng.nextDouble() * Math.PI * 2;
+        if (kind.power() == Mutants.Power.AMBUSH) {
+            // Where they are looking, which in this game is where they are
+            // going: the walk sends its aim with every move. The engine's
+            // forward vector is (sin yaw, −cos yaw), so the bearing whose
+            // (cos, sin) is that pair is atan2(−cos yaw, sin yaw) — and the two
+            // arguments are worth spelling out, because getting them the wrong
+            // way round places every ambusher behind its quarry, which is a bug
+            // that looks exactly like "ambushers never trigger".
+            double heading = Math.atan2(-Math.cos(host.yaw()), Math.sin(host.yaw()));
+            bearing = heading + (rng.nextDouble() * 2 - 1) * AMBUSH_CONE;
+        }
+        return new double[]{host.x() + Math.cos(bearing) * away,
+                host.y() + Math.sin(bearing) * away};
+    }
+
+    /**
+     * Whether the world will take another mutant right now.
+     *
+     * <p>Two questions, and they are asking different things. The cap is about
+     * the <em>wood</em>: one at a time, ever, because two is a population and a
+     * population is not frightening. The cooldown is about the <em>player</em>:
+     * having got away from one, they have ten minutes in which the next spawn
+     * roll cannot simply hand them another, or walking away would never work.
+     */
+    private boolean admitMutant() {
+        if (mutantCooldown > 0) return false;
+        int alive = 0;
+        for (Animal animal : animals.values()) {
+            if (animal.hostile()) alive++;
+        }
+        return alive < MUTANT_CAP;
     }
 
     /**
@@ -1831,6 +2051,116 @@ public final class WatchGame implements Animal.Surroundings {
         return true;
     }
 
+    /**
+     * The nearest player a mutant could come for.
+     *
+     * <p><b>Plain distance, and that is the whole difference from
+     * {@link #disturbanceAt}.</b> Every other question an animal asks about
+     * people is asked through the apparent distance, which stillness multiplies
+     * — that is the approach mechanic, and it is what makes crouching worth the
+     * speed it costs. It must not apply here. If it did, the way to be safe
+     * from a wendigo would be to stand still in front of it, and the one thing
+     * this game asks a player to do would become the thing that kills them.
+     *
+     * <p>So a mutant sees a person, not a disturbance. Nothing you do about your
+     * footsteps changes the answer; where you are standing is the answer.
+     */
+    @Override
+    public synchronized String nearestQuarry(double x, double y, double range) {
+        WatchPlayer best = null;
+        double bestDistance = range * range;
+        for (WatchPlayer player : players.values()) {
+            if (!player.alive()) continue;
+            double dx = player.x() - x, dy = player.y() - y;
+            double d = dx * dx + dy * dy;
+            if (d < bestDistance) {
+                bestDistance = d;
+                best = player;
+            }
+        }
+        return best == null ? null : best.name();
+    }
+
+    /**
+     * A mutant lands a blow.
+     *
+     * <p>The animal decided it was close enough; everything that follows is the
+     * world's business, and all of it is here: the wound, the line in the log,
+     * and — when that was the last one they could take — the satchel on the
+     * ground and the walk back from the spawn.
+     */
+    @Override
+    public synchronized void wound(String name, double amount, Animal by) {
+        WatchPlayer player = playerNamed(name);
+        if (player == null || !player.alive() || amount <= 0) return;
+        String attacker = by == null ? "Something" : by.def().name();
+        if (!player.wound(amount)) {
+            // Said once per blow rather than once per chase: the log is the
+            // only place a player who is looking the other way finds out that
+            // the thing behind them has caught up.
+            say(attacker + " struck " + player.name());
+            return;
+        }
+        kill(player, attacker);
+    }
+
+    /**
+     * Somebody went down.
+     *
+     * <p>Three things happen and they are meant to be read as one sentence:
+     * everything they were carrying goes on the ground <em>where they fell</em>,
+     * they get up at the spawn, and the party is told. The satchel is dropped
+     * rather than deleted because the penalty for dying should be the walk back
+     * — see {@link Spill} — and dropped in a heap rather than scattered because
+     * a heap is something you can find again at dusk.
+     *
+     * <p>There is no death screen and no timer. This is a game about walking
+     * around looking at things; being made to sit and watch a countdown is the
+     * one thing that would break that, and standing up at the spawn point with a
+     * long walk ahead of you is punishment enough.
+     */
+    private void kill(WatchPlayer player, String attacker) {
+        double fellX = player.x(), fellY = player.y();
+        Spill.Pile dropped = spills.drop(player.name(), fellX, fellY,
+                field.heightAt(fellX, fellY), player.satchel().contents());
+        player.satchel().clear();
+        // Anything hunting them stops: their quarry is not there any more. The
+        // animals notice on their own next tick — `nearestQuarry` skips the
+        // dead and their new position is a kilometre away — so nothing has to
+        // be told.
+        player.respawnAt(spawnX(), spawnY(), field.heightAt(spawnX(), spawnY()));
+        if (dropped == null) {
+            say(attacker + " killed " + player.name());
+            return;
+        }
+        say(attacker + " killed " + player.name() + " — their satchel is where they fell ("
+                + Math.round(fellX) + ", " + Math.round(fellY) + ")");
+    }
+
+    /**
+     * Pick up a dropped satchel: all of it, into whoever is standing over it.
+     *
+     * <p>Anybody may take any heap, including somebody else's. In a party that
+     * is the point — a friend fetching your bag off the fen while you take the
+     * long way round is the best thing this feature does — and alone it makes
+     * no difference at all.
+     *
+     * @return a line for the HUD, or {@code null} if there was nothing in reach
+     */
+    public synchronized String gather(int playerId) {
+        WatchPlayer player = players.get(playerId);
+        if (player == null) return null;
+        Spill.Pile pile = spills.nearest(player.x(), player.y(), Spill.REACH);
+        if (pile == null) return null;
+        Map<String, Integer> items = spills.take(pile.id());
+        if (items == null) return null;
+        items.forEach((key, count) -> player.satchel().add(key, count));
+        int total = pile.total();
+        boolean own = player.name().equals(pile.owner());
+        return (own ? "Picked your satchel back up" : "Picked up " + pile.label())
+                + "  ·  " + total + (total == 1 ? " thing" : " things");
+    }
+
     private void say(String text) {
         if (sink != null) sink.info(text);
     }
@@ -1854,6 +2184,12 @@ public final class WatchGame implements Animal.Surroundings {
         m.put("maps", cartography.toMap());
         m.put("sky", weather.toMap());
         m.put("boats", boats.toMap());
+        // Dropped satchels. The one thing on the floor of this world that is
+        // not a function of the seed, and the one whose loss a player would
+        // actually feel: reopening a walk to find the bag you died with gone is
+        // the save file taking something away that the game deliberately did
+        // not. See Spill.
+        m.put("spills", spills.toMap());
         List<Object> lureRows = new ArrayList<>();
         for (Lure lure : lures.values()) lureRows.add(lure.toMap());
         m.put("lures", lureRows);
@@ -1888,6 +2224,7 @@ public final class WatchGame implements Animal.Surroundings {
         cartography.load(WatchJson.map(m, "maps"));
         weather.load(WatchJson.map(m, "sky"));
         boats.load(WatchJson.map(m, "boats"));
+        spills.load(WatchJson.map(m, "spills"));
         lures.clear();
         for (Map<String, Object> row : WatchJson.objects(m, "lures")) {
             addLure(Lure.fromMap(row));

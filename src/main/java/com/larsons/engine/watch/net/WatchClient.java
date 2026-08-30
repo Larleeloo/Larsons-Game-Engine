@@ -249,6 +249,7 @@ public final class WatchClient implements AutoCloseable {
                 view.structure().load(WatchJson.map(message, "built"));
                 view.maps().load(WatchJson.map(message, "maps"));
                 view.boats().load(WatchJson.map(message, "boats"));
+                view.spills().load(WatchJson.map(message, "spills"));
                 view.loadTakenLitter(WatchJson.list(message, "taken"));
             }
             case "info" -> view.say(WatchJson.str(message, "msg", ""));

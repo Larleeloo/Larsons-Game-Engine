@@ -45,6 +45,34 @@ public final class WatchPlayer {
     /** How fast a breath comes back at the surface, relative to how fast it goes. */
     private static final double BREATH_RECOVERY = 4;
 
+    /**
+     * How long a full health bar takes to come back from empty, in seconds.
+     *
+     * <p><b>Ninety seconds, and the slowness is the whole design.</b> This is a
+     * game about walking somewhere and looking at it; the only thing that can
+     * hurt you is one of three {@link com.larsons.engine.watch.life.Mutants},
+     * and what a health bar has to produce is the feeling that getting away from
+     * one <em>cost</em> something — a minute and a half of sitting in a hollow
+     * before the next thing is safe to walk toward.
+     *
+     * <p>Regenerating at all rather than needing bandages is the other half of
+     * that: there is no medicine in this game, no crafting tree ending in a
+     * poultice, and no way to fail permanently. You get hurt, you stop, and the
+     * wood puts you back together, which is the same bargain
+     * {@link #stillness()} makes about everything else here.
+     */
+    public static final double HEAL_SECONDS = 90;
+
+    /**
+     * How long after being hit before it starts coming back, in seconds.
+     *
+     * <p>Without this the bar refills <em>during</em> a chase, and a mutant that
+     * is landing a blow every two seconds is fighting the regeneration rather
+     * than the player. Six seconds is longer than any of the three take between
+     * blows, so nothing heals while it is still being hit.
+     */
+    public static final double HEAL_DELAY = 6;
+
     private double x, y, z;
     private double yaw, pitch;
     private double stillness = 1;
@@ -53,6 +81,32 @@ public final class WatchPlayer {
 
     /** How much air is left, {@code 0}–{@code 1}. */
     private double breath = 1;
+
+    /** How much health is left, {@code 0}–{@code 1}. */
+    private double health = 1;
+
+    /** How long since the last blow landed, in seconds. */
+    private double sinceHurt = HEAL_DELAY;
+
+    /**
+     * How many times this walker has been killed and put back at the spawn.
+     *
+     * <p><b>A counter rather than a message, and that is the whole of how a
+     * respawn reaches the screen.</b> The client is authoritative about where it
+     * is standing — it sends a position and the server records it — so the
+     * server cannot move somebody by writing a new position into the snapshot:
+     * the next {@code move} would simply put them back. A "you have been moved"
+     * message would work and would have to be acknowledged, resent when lost,
+     * and ignored when duplicated.
+     *
+     * <p>This is none of that. The number goes up when the host respawns
+     * somebody, it rides in every snapshot beside their position, and a client
+     * that sees a bigger number than the one it last acted on teleports to the
+     * position in that same snapshot. Lost packets do not matter (the next
+     * snapshot carries it), duplicates do not matter (the number is unchanged),
+     * and a client that joins late is simply already in the right place.
+     */
+    private int respawns;
 
     /** Whether the player's head is under the water this tick. */
     private boolean submerged;
@@ -120,13 +174,84 @@ public final class WatchPlayer {
     /**
      * How much air is left, {@code 1} full to {@code 0} out.
      *
-     * <p>The only resource in this game, and it is deliberately not a health
-     * bar: running out surfaces you, it does not kill you. The sea floor is
-     * somewhere to look at things, and a game about looking at things should
-     * not punish you for looking too long — it should just make you come up for
-     * air, which is what a person diving on a reef does anyway.
+     * <p><b>Not a health bar, even now that there is one.</b> Running out
+     * surfaces you; it does not hurt you. The lake bed is somewhere to look at
+     * things, and a game about looking at things should not punish you for
+     * looking too long — it should just make you come up for air, which is what
+     * a person diving on a reef does anyway. {@link #health()} is the bar that
+     * can end a walk, and only three things in the world can spend it.
      */
     public double breath() { return breath; }
+
+    /**
+     * How much health is left, {@code 1} whole to {@code 0} dead.
+     *
+     * <p>The second resource, and the first one that can end a walk. It exists
+     * because three things in the world now hunt people — see
+     * {@link com.larsons.engine.watch.life.Mutants} — and a chase with no stake
+     * in it is a cutscene. It is deliberately <em>not</em> a combat stat: there
+     * is nothing to hit back with, no armour to raise it and no potion to
+     * refill it. What it measures is how many more seconds you can afford to
+     * spend in front of the thing, and the answer is meant to be "not many".
+     */
+    public double health() { return health; }
+
+    /** Whether they are still on their feet. */
+    public boolean alive() { return health > 0; }
+
+    /** How long since something last hit them, in seconds. */
+    public double sinceHurt() { return sinceHurt; }
+
+    /** Whether they were hit recently enough that the bar is not yet refilling. */
+    public boolean bleeding() { return sinceHurt < HEAL_DELAY; }
+
+    /** How many times they have been killed on this walk. See {@link #respawns}. */
+    public int respawns() { return respawns; }
+
+    /**
+     * Take a wound.
+     *
+     * <p>Returns whether this was the blow that did it, so the caller — which
+     * is {@code WatchGame}, the only thing allowed to decide what happens next
+     * — can drop the satchel and put them back at the spawn without having to
+     * compare the bar against zero itself.
+     *
+     * @param amount a share of a full bar, {@code 0.24} being about a quarter
+     * @return {@code true} if they went down
+     */
+    public boolean wound(double amount) {
+        if (amount <= 0 || health <= 0) return false;
+        sinceHurt = 0;
+        health = Math.max(0, health - amount);
+        return health <= 0;
+    }
+
+    /**
+     * Put them back on their feet at a point — what a respawn is, from here.
+     *
+     * <p>Bumps {@link #respawns}, which is what tells their own client to
+     * teleport. Everything else about them is left alone: the satchel has
+     * already been emptied onto the ground by the caller, and their stillness,
+     * their breath and their glass are all facts about a person who is now
+     * standing somewhere else.
+     */
+    public void respawnAt(double x, double y, double z) {
+        this.x = x;
+        this.y = y;
+        this.z = z;
+        this.health = 1;
+        this.sinceHurt = HEAL_DELAY;
+        this.breath = 1;
+        this.submerged = false;
+        this.boatId = 0;
+        this.glassPower = Spyglass.NONE;
+        // Arriving winded rather than settled: a walk that resumes with the
+        // wood already ignoring you loses the minute of standing still that is
+        // the price of everything else in this game.
+        this.stillness = 0;
+        this.lastSpeed = 0;
+        this.respawns++;
+    }
 
     /** Whether their head is under water. */
     public boolean submerged() { return submerged; }
@@ -218,10 +343,27 @@ public final class WatchPlayer {
         updateStillness(dt);
     }
 
-    /** Advance stillness for a tick in which no new position arrived. */
+    /** Advance stillness and healing for a tick in which no new position arrived. */
     public void tick(double dt) {
         lastSpeed *= Math.max(0, 1 - dt * 4);
         updateStillness(dt);
+        mend(dt);
+    }
+
+    /**
+     * Let the bar come back, once nothing has hit them for a while.
+     *
+     * <p>Not scaled by stillness, deliberately. Tying healing to holding
+     * position would be the obvious flourish and it is the wrong one: standing
+     * still is what makes animals come to you, and making it also the way to
+     * heal would turn the game's one voluntary, patient verb into a chore you
+     * perform after every chase. You heal while walking home.
+     */
+    private void mend(double dt) {
+        if (dt <= 0) return;
+        sinceHurt += dt;
+        if (health >= 1 || health <= 0 || sinceHurt < HEAL_DELAY) return;
+        health = Math.min(1, health + dt / HEAL_SECONDS);
     }
 
     private void updateStillness(double dt) {
@@ -268,6 +410,12 @@ public final class WatchPlayer {
         if (crouching) m.put("c", true);
         if (submerged) m.put("uw", true);
         if (breath < 1) m.put("air", breath);
+        // Health goes out for the whole party, not only for its owner: seeing
+        // that somebody else's bar is a third full is how eight people spread
+        // over a valley find out that one of them has met something. It costs
+        // one field per player per snapshot and only while they are hurt.
+        if (health < 1) m.put("hp", health);
+        if (respawns > 0) m.put("rs", respawns);
         if (boatId != 0) m.put("boat", boatId);
         if (glassing()) m.put("gl", glassPower);
         // In the snapshot as well as the save: a client has to know its own
@@ -294,6 +442,14 @@ public final class WatchPlayer {
         crouching = WatchJson.bool(m, "c", false);
         submerged = WatchJson.bool(m, "uw", false);
         breath = WatchJson.num(m, "air", 1);
+        // A walk reopened is a walk begun: whatever was chasing you last night
+        // is not there now, and starting a session on a sliver of health that
+        // takes ninety seconds to come back is a punishment for having stopped
+        // playing. What does survive is the count of how many times it has
+        // happened, because that is a fact about the walk.
+        health = 1;
+        sinceHurt = HEAL_DELAY;
+        respawns = WatchJson.integer(m, "rs", 0);
         boatId = WatchJson.big(m, "boat", 0);
         // A glass is not left up across a save: you put it in the satchel when
         // you stop for the night like everybody else.
