@@ -8,6 +8,7 @@ import com.larsons.engine.graphics.draw.RecordingTarget;
 import com.larsons.engine.input.InputManager;
 import com.larsons.engine.scene.SceneManager;
 import com.larsons.engine.watch.build.BuildPiece;
+import com.larsons.engine.watch.life.Animal;
 import com.larsons.engine.watch.net.WatchSession;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.Timeout;
@@ -18,6 +19,7 @@ import java.awt.event.KeyEvent;
 import java.nio.file.Path;
 import java.util.List;
 import java.util.Map;
+import java.util.Set;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
@@ -342,6 +344,80 @@ class DebugModeTest {
         typeCode(scenes, input);
         assertFalse(me.debugging(), "the code would not switch it off from the walk");
         session.close();
+    }
+
+    /**
+     * K summons a mutant in the walk, and only once the code has been typed.
+     *
+     * <p>Through the real scene because that is where the whole of this power
+     * lives on the client: K is a <em>raw</em> key rather than a
+     * {@link com.larsons.engine.input.GameAction}, deliberately — see
+     * {@code WatchScene.summonMutant} — so nothing about it appears in the
+     * bindings, and a test that called {@code WatchGame.summon} directly would
+     * be testing everything except the part that could be wrong.
+     */
+    @Test
+    void kSummonsTheThreeMutantsInTurnAndOnlyInDebugMode(@TempDir Path dir) {
+        GameContext ctx = new GameContext(null, new GameTypeStore(dir.toString()));
+        WatchStore store = new WatchStore(dir.resolve("walks").toString());
+        WatchScene walk = new WatchScene(ctx);
+        SceneManager scenes = new SceneManager();
+        scenes.setViewport(800, 480);
+        scenes.register(WatchLobbyScene.NAME, new WatchLobbyScene(ctx, store));
+        scenes.register(WatchScene.NAME, walk);
+
+        WatchGame game = new WatchGame(new WatchGame.Config(1234L, "Summoned", 1));
+        WatchPlayer me = game.join(1, "Kara");
+        WatchSession session = WatchSession.solo(game);
+        session.setSelfId(1);
+        walk.adopt(session, store);
+        scenes.setScene(WatchScene.NAME);
+
+        InputManager input = new InputManager();
+        for (int i = 0; i < 3; i++) {
+            input.newFrame();
+            scenes.update(1 / 60.0, input);
+        }
+        // Before the code, K is an unbound key like any other.
+        pressKey(scenes, input, KeyEvent.VK_K);
+        assertEquals(0, hostileCount(game),
+                "K summoned something without the code being typed");
+
+        typeCode(scenes, input);
+        assertTrue(me.debugging());
+
+        // Three presses, three creatures, and each of the three is a different
+        // one — the cycle is what makes one key enough for all of them.
+        Set<String> summoned = new java.util.TreeSet<>();
+        for (int i = 0; i < 3; i++) {
+            pressKey(scenes, input, KeyEvent.VK_K);
+            for (Animal animal : game.animals()) {
+                if (animal.hostile()) summoned.add(animal.def().key());
+            }
+        }
+        assertEquals(3, summoned.size(),
+                "three presses of K produced " + summoned.size() + " different mutants: "
+                        + summoned);
+        assertEquals(3, hostileCount(game), "the summons did not all survive");
+        session.close();
+    }
+
+    private static int hostileCount(WatchGame game) {
+        int n = 0;
+        for (Animal animal : game.animals()) {
+            if (animal.hostile()) n++;
+        }
+        return n;
+    }
+
+    /** One key, pressed and released, with a frame in between. See {@link #typeCode}. */
+    private static void pressKey(SceneManager scenes, InputManager input, int key) {
+        input.keyPressed(new KeyEvent(new JPanel(), KeyEvent.KEY_PRESSED, 0, 0, key,
+                KeyEvent.CHAR_UNDEFINED));
+        input.newFrame();
+        scenes.update(1 / 60.0, input);
+        input.keyReleased(new KeyEvent(new JPanel(), KeyEvent.KEY_RELEASED, 0, 0, key,
+                KeyEvent.CHAR_UNDEFINED));
     }
 
     /**

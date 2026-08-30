@@ -568,6 +568,74 @@ public final class WatchGame implements Animal.Surroundings {
     }
 
     /**
+     * How far in front of a player a summoned animal is put down, in metres.
+     *
+     * <p>Twenty, and the number is chosen from the three mutants' own senses
+     * rather than for the view: it is inside the notice range of all three — the
+     * mirewraith's is the shortest at twenty-two — so a summon is a thing that
+     * <em>starts happening</em> rather than a statue to walk around. Far enough
+     * that a five-and-a-half-metre model is on screen whole at a normal field of
+     * view, near enough that it is on you in four seconds.
+     */
+    private static final double SUMMON_AHEAD = 20;
+
+    /**
+     * Put an animal on the ground in front of a player — <b>debug mode only.</b>
+     *
+     * <p>The shape {@link Debug}'s class note prescribes for a power the satchel
+     * lens cannot reach: a row in {@link Debug.Power} and one
+     * {@code if (player.debugging())} where it acts. This is that {@code if}.
+     *
+     * <p><b>It asks none of the questions {@link #populate} asks</b>, and that
+     * is the whole feature rather than a shortcut. A mutant is behind a region,
+     * an hour, a cap of one alive and a ten-minute cooldown, and every one of
+     * those is working correctly when it refuses — which leaves somebody testing
+     * a wendigo's gait with no way to see one except to walk a taiga at night
+     * and wait. So a summon skips the species table, the medium check, the cap
+     * and the cooldown, and puts down exactly what it was asked for exactly
+     * where it was asked for it.
+     *
+     * <p>Any species, not only the three. The code is the same either way and a
+     * restriction that existed only to restrict would be one more rule to
+     * explain; what makes this a mutant feature is which keys the walk offers,
+     * and that is a decision for the client — see
+     * {@code WatchScene.summonMutant}. A heron you can find by walking to a
+     * marsh. A wendigo you cannot.
+     *
+     * @param speciesKey the key from {@link AnimalRegistry}
+     * @return the animal, or {@code null} if the player may not, or there is no
+     *         such species
+     */
+    public synchronized Animal summon(int playerId, String speciesKey) {
+        WatchPlayer player = players.get(playerId);
+        if (player == null || !player.debugging()) return null;
+        AnimalDef def = AnimalRegistry.byKey(speciesKey);
+        if (def == null) return null;
+
+        // Straight out from the eye, on the flat: the engine's forward is
+        // (sin yaw, −cos yaw), and a summon that appeared where the player was
+        // *looking* would put a wendigo in a treetop whenever somebody had
+        // glanced up.
+        double x = player.x() + Math.sin(player.yaw()) * SUMMON_AHEAD;
+        double y = player.y() - Math.cos(player.yaw()) * SUMMON_AHEAD;
+        double ground = field.heightAt(x, y);
+        double depth = field.waterDepth(ground);
+        // The one thing a summon does still respect, because it is about where
+        // the animal can be rather than about whether it is allowed to exist: a
+        // swimmer goes under the surface and everything else stands on the bed
+        // or the ground. Nothing is ever spawned inside the terrain.
+        double z = def.aquatic()
+                ? ground + Math.max(0, depth - Math.min(depth * 0.5, 0.6))
+                : ground;
+
+        long id = nextAnimalId++;
+        Animal summoned = new Animal(id, def, x, y, z, config.seed() ^ id);
+        animals.put(id, summoned);
+        say(player.name() + " summoned a " + def.name());
+        return summoned;
+    }
+
+    /**
      * Whether a player is the one whose walk this is.
      *
      * <p>Alone, there is only one of you. In a party it is whoever arrived

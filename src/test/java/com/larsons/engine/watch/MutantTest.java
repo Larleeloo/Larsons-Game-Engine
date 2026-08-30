@@ -528,6 +528,87 @@ class MutantTest {
         assertEquals(1, player.health(), 1e-9);
     }
 
+    // --- summoning one on purpose ---------------------------------------------------------
+
+    /**
+     * The debug summon exists because every filter in front of a mutant is
+     * working correctly when it refuses to produce one, which leaves anybody
+     * testing the three of them with nothing to do but walk a taiga at night and
+     * wait. See {@code Debug.Power.SUMMON}.
+     */
+    @Test
+    void summoningNeedsTheCode() {
+        WatchGame game = game();
+        game.join(1, "Kara");
+        assertNull(game.summon(1, wendigo().key()),
+                "a player who has not typed the code summoned a wendigo");
+        assertEquals(0, game.animals().size());
+
+        game.debug(1, Debug.CODE);
+        assertNotNull(game.summon(1, wendigo().key()), "the code did not grant the summon");
+        assertEquals(1, game.animals().size());
+    }
+
+    @Test
+    void anUnknownSpeciesSummonsNothing() {
+        WatchGame game = game();
+        game.join(1, "Kara");
+        game.debug(1, Debug.CODE);
+        assertNull(game.summon(1, "tyrannosaurus"));
+        assertNull(game.summon(1, null));
+        assertEquals(0, game.animals().size(), "something was summoned out of nothing");
+    }
+
+    /**
+     * <b>It asks none of the four questions a natural spawn asks.</b> A tester
+     * standing in the wrong biome at the wrong hour, with a mutant already
+     * alive and the cooldown unspent, still gets one — which is the entire
+     * point of the power, and each clause of it is a thing that would otherwise
+     * quietly refuse.
+     */
+    @Test
+    void aSummonIgnoresTheRegionTheHourTheCapAndTheCooldown() {
+        WatchGame game = game();
+        WatchPlayer me = game.join(1, "Kara");
+        game.debug(1, Debug.CODE);
+        // Noon, which is the one hour at which no mutant is offered anywhere.
+        game.clock().adopt(0.5);
+
+        for (Mutants.Kind kind : Mutants.all()) {
+            assertNotNull(game.summon(1, kind.key()),
+                    kind.key() + " refused a summon at midday");
+        }
+        assertEquals(3, game.animals().size(),
+                "the cap of one alive was applied to a summon");
+        for (Animal animal : game.animals()) {
+            assertTrue(animal.hostile());
+            // Twenty metres out, on the ground, in front of where they look.
+            double away = Math.hypot(animal.x() - me.x(), animal.y() - me.y());
+            assertEquals(20, away, 1.0, animal.def().name() + " arrived " + away + " m off");
+            assertEquals(game.groundAt(animal.x(), animal.y()), animal.z(), 0.01,
+                    animal.def().name() + " is not standing on the ground");
+        }
+    }
+
+    /** And what turns up is hunting, rather than standing there to be looked at. */
+    @Test
+    void aSummonedMutantComesForYou() {
+        WatchGame game = game();
+        WatchPlayer me = game.join(1, "Kara");
+        game.debug(1, Debug.CODE);
+        Animal beast = game.summon(1, wendigo().key());
+        assertNotNull(beast);
+        double startedAt = Math.hypot(beast.x() - me.x(), beast.y() - me.y());
+
+        for (int i = 0; i < 200; i++) {
+            game.move(1, me.x(), me.y(), me.z(), 0, 0, false, 0.05);
+            game.tick(0.05);
+        }
+        assertEquals("Kara", beast.quarry(), "it was summoned and took no interest");
+        assertTrue(Math.hypot(beast.x() - me.x(), beast.y() - me.y()) < startedAt,
+                "it did not close at all in ten seconds");
+    }
+
     // --- how often one turns up -----------------------------------------------------------
 
     /**

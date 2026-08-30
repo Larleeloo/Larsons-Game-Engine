@@ -141,6 +141,36 @@ public final class Debug {
                         + "maps together on a board."),
 
         /**
+         * Summon a mutant, here, now.
+         *
+         * <p><b>The third row that had to be added, and the class note above
+         * named it before it existed</b> — "a spawn" is the first example it
+         * gives of a thing the {@link Satchel} lens cannot reach. It is a
+         * different shape again from the two before it: {@link #POINTS} covers a
+         * cost that escaped the satchel and {@link #MAPS} gates a feature that
+         * is not priced yet, and this one grants something <b>no player will
+         * ever have</b>. It is not a verb waiting for a gate to lift; it is a
+         * tool for testing three creatures you cannot otherwise arrange to meet.
+         *
+         * <p>That is also why the key it is on is not on the controls screen —
+         * see {@code WatchScene.summonMutant}. {@code WATCH_MAP} is listed there
+         * on the argument that a key nobody can find is a key nobody will use
+         * the day it stops being special; this key is never going to stop being
+         * special, and advertising a verb that will always be refused is the
+         * exact thing the class note above says a menu item would do wrong.
+         *
+         * <p>What it grants is deliberately <em>every</em> filter at once. The
+         * three mutants are behind a region, an hour, a cap of one alive and a
+         * ten-minute cooldown — see {@code Mutants} — and each of those is
+         * working correctly when it stops one appearing. A tester standing in a
+         * desert at noon needs all four out of the way, so a summon asks none of
+         * them.
+         */
+        SUMMON("Summon mutants",
+                "Put a wendigo, a werewolf or a mirewraith on the ground in "
+                        + "front of you — any biome, any hour, however many."),
+
+        /**
          * The readout: what the world is doing, in numbers, over the top left.
          *
          * <p>The other half of what "debug mode" means. It is also where a new

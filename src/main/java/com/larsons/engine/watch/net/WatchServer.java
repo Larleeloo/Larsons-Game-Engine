@@ -480,6 +480,16 @@ public final class WatchServer implements WatchGame.Sink {
                 bagChanged(id, null);
             }
 
+            case "summon" -> {
+                // Nothing is sent back and nothing needs to be: an animal is a
+                // snapshot field, so a summoned one is on every client's screen
+                // on the next tick like any other. The host refuses anybody not
+                // in debug mode — see WatchGame.summon — and a refusal is
+                // silence, which is the same answer every other debug-gated verb
+                // gives a client that should not have asked.
+                game.summon(id, WatchJson.str(message, "sp", ""));
+            }
+
             case "cast" -> game.castRod(id);
 
             case "strike" -> {

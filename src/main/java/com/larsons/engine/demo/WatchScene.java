@@ -35,6 +35,7 @@ import com.larsons.engine.watch.Weather;
 import com.larsons.engine.watch.build.BuildPiece;
 import com.larsons.engine.watch.build.Structure;
 import com.larsons.engine.watch.life.AnimalModels;
+import com.larsons.engine.watch.life.Mutants;
 import com.larsons.engine.watch.net.WatchSession;
 import com.larsons.engine.watch.render.BoardImage;
 import com.larsons.engine.watch.render.BoatModel;
@@ -893,7 +894,16 @@ public class WatchScene extends AbstractScene {
         // "7799 steps to the ford" on a map turns debug mode off underneath the
         // player, which is the one thing that would take the map screen away
         // while they were using it.
-        if (!typingText()) readCode(dt, input);
+        if (!typingText()) {
+            readCode(dt, input);
+            // Anywhere in the walk, panels included, for the code's own reason:
+            // somebody testing a mutant against the satchel screen is exactly
+            // the person who wants one. And behind `debugging()`, so K is an
+            // ordinary unbound key to everybody else.
+            if (debugging() && input.isKeyJustPressed(java.awt.event.KeyEvent.VK_K)) {
+                summonMutant();
+            }
+        }
 
         if (panel != Panel.NONE) {
             Pointer.restore();
@@ -1343,6 +1353,53 @@ public class WatchScene extends AbstractScene {
             }
         }
     }
+
+    /**
+     * K, in debug mode: put the next of the three mutants in front of us.
+     *
+     * <p><b>A raw key rather than a {@link GameAction}</b>, and the difference
+     * from {@code WATCH_MAP} is the whole argument. A map is a game verb behind
+     * a gate that will one day lift, so it is on the controls screen where a
+     * player will find it the day it stops being special. Summoning a wendigo is
+     * never going to be a player verb: putting "Summon Mutant" on the controls
+     * screen would advertise a thing that is always refused, which is exactly
+     * what {@link Debug}'s class note says a menu item would do wrong. So it is
+     * read here, off the keyboard, the way the code itself is — and to anybody
+     * who has not typed {@link Debug#CODE}, K does nothing at all.
+     *
+     * <p><b>One key, and it cycles.</b> Three keys for three creatures would be
+     * three bindings to remember and two of them wrong most of the time; a key
+     * that summons a <em>random</em> one is a key you press five times to see
+     * the one you are working on. Round the three in order, and the log line
+     * says which arrived.
+     *
+     * <p>Which one is next is kept on this side rather than sent, because it is
+     * a fact about the keyboard in front of one person — see
+     * {@link com.larsons.engine.watch.net.WatchProto#summon}.
+     */
+    private void summonMutant() {
+        List<Mutants.Kind> kinds = Mutants.all();
+        Mutants.Kind kind = kinds.get(Math.floorMod(summonNext++, kinds.size()));
+        String key = kind.key();
+        if (session.local() != null) {
+            // Solo there is no sink for the host's own chat, so the line is
+            // raised here — the same arrangement readCode uses, and for the same
+            // reason: a debug verb that appears to do nothing is worse than none.
+            if (session.local().summon(session.selfId(), key) != null) {
+                picked("Summoned a " + kind.def().name());
+            }
+        } else if (session.client() != null) {
+            // The host answers by putting it in the next snapshot, or by
+            // refusing in silence. Saying anything here would risk saying the
+            // opposite of what happened, which is readCode's rule too.
+            session.client().sendSummon(key);
+        }
+    }
+
+    /**
+     * Which of the three the next press of K produces. See {@link #summonMutant}.
+     */
+    private int summonNext;
 
     /** Whether this player is in debug mode, as the last snapshot has it. */
     private boolean debugging() {
@@ -3750,7 +3807,7 @@ public class WatchScene extends AbstractScene {
             // Only once the mode is on, because it is the only verb on this
             // line that would otherwise refuse — and a hint for a key that does
             // nothing is worse than no hint. See Debug.Power.MAPS.
-            if (debugging()) keys += " · M map";
+            if (debugging()) keys += " · M map · K summon";
             label(target, keys, pad, viewportHeight - pad - 22, HUD_SMALL,
                     new Color(150, 168, 152));
         }

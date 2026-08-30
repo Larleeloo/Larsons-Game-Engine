@@ -425,7 +425,9 @@ twelve rows:
 |---|---|
 | **Unlimited items** | Every recipe, every build piece, every feeder, every seed, every tool. |
 | **Unlimited points** | Anything on any keeper's shelf, at any price. *(Added in §7f — see below for why it had to be.)* |
-| **Readout** | Position, chunk and LOD, biome and material underfoot, streaming, triangles, what is alive, the glass, the guide, the nearest trading post. |
+| **Maps** | Draw a map, mark it, pin it to a board. *(Added in §7h — a gate on an unpriced feature rather than an abundance.)* |
+| **Summon mutants** | **K** puts a wendigo, a werewolf or a mirewraith on the ground twenty metres in front of you — any biome, any hour, however many. *(Added in §7i.)* |
+| **Readout** | Position, chunk and LOD, biome and material underfoot, streaming, triangles, what is alive and what is hunting, the glass, the guide, the nearest trading post. |
 
 **A short list because the first row is structural.** Debug mode does not hand
 out a list of items — it makes the player's satchel `bottomless`, and *almost
@@ -460,6 +462,14 @@ balance rather than out of a satchel, so the lens does not reach them and no
 amount of cleverness would make it. Which is the honest version of "the list is
 short": it is short because the structural row covers so much, not because
 nothing will ever fall outside it.
+
+**Summon mutants** is the third, and the class note had named it before it
+existed — "a spawn" is its first example of a thing the satchel lens cannot
+reach. It is a different shape again from the two before it. *Unlimited points*
+covers a cost that escaped the satchel and *Maps* gates a feature that is not
+priced yet; this one grants something **no player will ever have**. It is not a
+verb waiting for a gate to lift, and that is why its key is the one thing in the
+walk that is not on the controls screen — see §7i.
 
 ### 4.5 Building (`watch/build`)
 
@@ -1819,6 +1829,44 @@ one frame that acts on it, and it also ends the boat, the glass, the panel and
 the tracks — a walker at the spawn point still rowing a boat four hundred metres
 away would be the obvious bug.
 
+### Summoning one on purpose
+
+Every filter in §"Four filters" is working correctly when it refuses to produce
+a mutant, which leaves anybody testing the three of them with nothing to do but
+walk a taiga at night and wait. So debug mode gained the row its own class note
+had predicted years of features ago — "a spawn" is the first example it gives of
+something the satchel lens cannot reach — and it cost what that note says it
+should: one row in `Debug.Power`, and one `if (player.debugging())` in
+`WatchGame.summon`.
+
+**K, in debug mode, cycles the three.** Press it once for a wendigo, again for a
+werewolf, again for a mirewraith, and round. One key rather than three because
+two of three bindings would be wrong most of the time, and a cycle rather than a
+random pick because the whole use of the thing is looking at the one you are
+working on.
+
+It lands twenty metres ahead, on the ground, facing you. Twenty is taken from
+the creatures' own senses rather than chosen for the view: the shortest notice
+range of the three is the mirewraith's twenty-two, so a summon is something that
+*starts happening* rather than a statue to walk around.
+
+**It asks none of the four filters** — not the region, not the hour, not the cap
+of one alive, not the cooldown. That is the feature and not a shortcut: a tester
+standing in a desert at noon needs all four out of the way at once, and each of
+them refusing is each of them working. The verb summons any species in the
+registry, because the code is identical either way and a restriction that exists
+only to restrict is one more rule to explain; what makes it a *mutant* feature is
+which keys the walk offers, which is the client's decision. A heron you can find
+by walking to a marsh.
+
+**The key is not on the controls screen, and `WATCH_MAP` is** — which looks
+inconsistent and is the point. A map is a game verb behind a gate that will one
+day lift, so it is listed where a player will find it the day it stops being
+special. Summoning a wendigo is never going to be a player verb, and advertising
+one that is always refused is the exact thing `Debug`'s class note says a menu
+item would do wrong. So K is read raw off the keyboard, the way the code itself
+is, and to anybody who has not typed 7799 it does nothing at all.
+
 ### One thing that changed for everybody
 
 `AnimalPortrait` framed every subject so that its largest extent filled a fixed
@@ -1867,7 +1915,14 @@ written to avoid is still a metre away at the closest corner.
   fell rather than deleted, they wake whole at the spawn point with the respawn
   counted once, gathering it two hundred metres away is refused and gathering it
   at the heap gives everything back, an empty bag leaves no heap, and a heap
-  survives a save.
+  survives a save. **That a tester can get one on demand**: a summon is refused
+  without the code and granted with it, an unknown species summons nothing, all
+  three arrive at midday twenty metres out standing on the ground with the cap
+  and the cooldown ignored, and what arrives is hunting rather than posing.
+  `DebugModeTest` adds the other end of that, through the real scene: K does
+  nothing before the code is typed, and three presses after it produce three
+  different mutants — which is the only place the raw key binding and the cycle
+  can be tested at all, since neither exists anywhere else.
 * `AnimalModelTest` — every species builds a model with boxes and a skin; every
   animation state resolves to a pose.
 * `BlockbenchTest` — a small `.bbmodel` parses to the right boxes, bones and

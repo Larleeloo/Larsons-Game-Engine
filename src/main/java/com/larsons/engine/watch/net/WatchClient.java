@@ -150,6 +150,9 @@ public final class WatchClient implements AutoCloseable {
     /** Offer the host a code somebody typed. It decides what it means. */
     public void sendDebug(String code) { send(WatchProto.debug(code)); }
 
+    /** Ask the host to put a species on the ground in front of us. Debug only. */
+    public void sendSummon(String species) { send(WatchProto.summon(species)); }
+
     /** Ask for a map of everything this machine can see. */
     public void sendChart(double reach) { send(WatchProto.chart(reach)); }
 

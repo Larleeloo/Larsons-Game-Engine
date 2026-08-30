@@ -41,6 +41,7 @@ import java.util.Map;
  *   client → server   {"t":"cast"} {"t":"strike"}
  *   client → server   {"t":"glass","m":8}            (1 = put it away)
  *   client → server   {"t":"debug","c":"7799"}       (the host's walk only)
+ *   client → server   {"t":"summon","sp":"wendigo_wendigo_hollow"}   (debug only)
  *   client → server   {"t":"buy","s":shopId,"k":"plank"}   {"t":"stamp","s":shopId}
  *
  *   client → server   {"t":"chart","r":512}           (a map of what I can see)
@@ -285,6 +286,23 @@ public final class WatchProto {
     public static Map<String, Object> debug(String code) {
         Map<String, Object> m = msg("debug");
         m.put("c", code);
+        return m;
+    }
+
+    /**
+     * Put an animal on the ground in front of me — <b>debug mode only.</b>
+     *
+     * <p>The species travels rather than "the next mutant", for
+     * {@link #debug}'s reason turned around: which of the three a key cycles to
+     * is a fact about the keyboard in front of one person and no business of the
+     * host's, and a host that had to keep its own idea of where each client had
+     * got to in the cycle would be keeping state for nothing. The client names
+     * what it wants; the host decides whether that client may have it. See
+     * {@code WatchGame.summon}, which refuses anybody not in debug mode.
+     */
+    public static Map<String, Object> summon(String species) {
+        Map<String, Object> m = msg("summon");
+        m.put("sp", species);
         return m;
     }
 
