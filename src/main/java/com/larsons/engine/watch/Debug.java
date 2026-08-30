@@ -117,6 +117,30 @@ public final class Debug {
                         + "what the guide earned."),
 
         /**
+         * Maps: draw one, mark it, and hang it on a board.
+         *
+         * <p><b>The second row that had to be added, and it is a different
+         * shape from the first two.</b> {@link #POINTS} exists because a cost
+         * escaped the satchel; this exists because a whole <em>feature</em> is
+         * not finished. Maps ({@link Chart}, {@link Cartography}) are built and
+         * playable, and what has not been decided is what a map should cost a
+         * player who is not in debug mode — a pass at a trading post, a recipe
+         * at a bench, or nothing at all. Rather than guess at a price and ship
+         * it, the whole verb is behind this row: {@code WatchGame.drawMap} and
+         * every other map verb begins with the same
+         * {@code if (player.debugging())} the class note above describes, and
+         * lifting the gate later is deleting those lines and adding a cost.
+         *
+         * <p>It is worth saying what that means for the readout: a row here is
+         * a promise that the mode <em>grants</em> something, and this one grants
+         * access rather than abundance. That is the only row of the four that
+         * would disappear rather than becoming free if the feature landed.
+         */
+        MAPS("Maps",
+                "Draw a map of everything in view, mark it with a pen, and pin "
+                        + "maps together on a board."),
+
+        /**
          * The readout: what the world is doing, in numbers, over the top left.
          *
          * <p>The other half of what "debug mode" means. It is also where a new

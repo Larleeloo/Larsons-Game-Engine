@@ -264,6 +264,13 @@ public enum GameAction {
             InputBinding.mouse(MouseEvent.BUTTON3), InputBinding.key(KeyEvent.VK_Z)),
     WATCH_TURN_PIECE("watch_turn_piece", "Turn Build Piece", Category.WATCH,
             InputBinding.key(KeyEvent.VK_X)),
+    // M, which is where every game has put a map for thirty years. It is on the
+    // controls screen like any other verb even though the feature behind it is
+    // still {@code Debug.Power.MAPS} — a key that does nothing until you know a
+    // code is a key you would never find, and the whole point of putting it here
+    // is that it stops being special the day the gate lifts.
+    WATCH_MAP("watch_map", "Draw Map", Category.WATCH,
+            InputBinding.key(KeyEvent.VK_M)),
     WATCH_BOAT("watch_boat", "Board / Leave Boat", Category.WATCH,
             InputBinding.key(KeyEvent.VK_Y)),
     WATCH_LEAVE("watch_leave", "Leave Walk (while paused)", Category.WATCH,

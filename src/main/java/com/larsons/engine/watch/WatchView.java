@@ -85,6 +85,18 @@ public final class WatchView {
     private final Grove grove = new Grove();
     private final Cultivation crops = new Cultivation();
     private final Structure structure = new Structure();
+
+    /**
+     * The party's maps and boards.
+     *
+     * <p>Here rather than beside the satchel even though a map lives in one,
+     * because a map is a thing in the world that happens to be in somebody's
+     * bag: the board across the valley has maps on it that are nobody's, and the
+     * screen has to draw them. Which satchel a given map is in is a field on the
+     * map — see {@link Chart#owner()}.
+     */
+    private final Cartography cartography = new Cartography();
+
     private Weather weather = new Weather(0);
     private Boats boats = new Boats(0);
     private Shops shops = new Shops(0);
@@ -158,6 +170,9 @@ public final class WatchView {
     public Cultivation crops() { return crops; }
 
     public Structure structure() { return structure; }
+
+    /** Every map anybody drew, and every board they went up on. */
+    public Cartography maps() { return cartography; }
 
     /** The last few things that happened. */
     public List<String> log() { return List.copyOf(log); }
@@ -260,6 +275,7 @@ public final class WatchView {
         grove.load(game.grove().toMap());
         crops.load(game.crops().toMap());
         structure.load(game.structure().toMap());
+        cartography.load(game.maps().toMap());
         takenLitter.clear();
         takenLitter.addAll(game.takenLitter());
     }

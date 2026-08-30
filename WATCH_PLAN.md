@@ -1405,6 +1405,133 @@ sweep beside it.
 
 ---
 
+## 7h. Maps, and the board they join on
+
+> Asked for: maps a player can mark with a pen, spanning the render distance
+> from where they were drawn, with icons for shops and other points of
+> interest, filled in on creation, kept in the inventory, opened by clicking,
+> renameable at will, always showing every player's position relative to the
+> map even from off its bounds — and a map board that can be built to combine
+> maps and display them for everyone. Debug mode only, for now.
+
+### A map is four numbers, and no picture
+
+The one decision the whole feature rests on. The ground here is a pure function
+of `(seed, x, y)`, so a picture of a square of it is a pure function of the same
+three numbers — which means a map does not need to carry its own paper. A
+`Chart` is a centre, a radius, a name, the icons that were standing when it was
+drawn, and whatever somebody has since written on it; `ChartImage` paints the
+rest from the seed on whichever machine is looking.
+
+That is the argument `Shops` makes about trading posts, taken one step further,
+and it pays three times over:
+
+* **On the wire and on disk.** A walk with fifty maps in it costs a few
+  kilobytes of save and rides in the world sync beside the grove.
+* **Between players.** Two copies of one map agree *pixel for pixel*, because
+  both were painted by the same function of the same ground rather than
+  transmitted.
+* **On a board.** Two maps of neighbouring country meet with no seam, for the
+  same reason — there is no join to blend, only two windows onto one function.
+
+The cost is a fifth of a second of noise per map, which is why `ChartImage`
+bakes on a daemon worker and the panel draws "Surveying…" for a frame or two.
+That is the bargain `ChunkStreamer` already makes with the ground itself.
+
+### The size is the machine's to know, and the grid is not
+
+"Span the render distance" is a fact about the *client*: how far a machine can
+see is its graphics card and its detail slider, and `applyDistanceSettings` is
+where that number is decided. No host can discover it, so it travels with the
+request and `WatchGame.drawMap` clamps it.
+
+Clamps it, specifically, up a **ladder of doublings** (`Chart.RADII`), and then
+snaps the centre to the grid that size defines (`Chart.snap`). Both exist for
+the board:
+
+* maps whose spans are the same or a whole multiple of each other can tile;
+* centres on a common grid make them actually meet, rather than land a hand's
+  width apart, which is the one arrangement that looks like a mistake.
+
+Snapping moves the centre by up to half a radius, so `radiusFor` asks for
+**twice** the reach before rounding up. The arithmetic is worth stating because
+it is the whole of the promise: the nearest edge is never closer than
+`radius − radius/2 = radius/2`, and with `radius ≥ 2 × reach` that half-radius
+is itself at least the reach. Everything the machine currently has loaded is
+inside the square, in every direction, from wherever the key was pressed — and
+`MapsTest` sweeps a player right across a grid cell to say so rather than
+checking the middle and hoping.
+
+### Filled in means finished, not revealed
+
+There is no fog to walk off, and that is a design decision rather than an
+omission. Fog of war belongs to a game where the map is the reward for
+exploring; this is a game where exploring is the reward for exploring, and what
+a map is *for* here is finding your way back.
+
+So `Survey` runs once, at the moment the key is pressed, over everything the
+world already has — the generated trading posts (on the map whether or not
+anybody has found one, because a map that only shows the posts you have already
+walked to cannot tell you where to walk), the buildings clustered so a treehouse
+is one icon, the feeders, the plantings, the boats, the first sighting of each
+species, and the local maxima of a coarse height grid for the high ground. Then
+it is frozen.
+
+Which makes a map **age**: the post is on it for ever, the feeder is on it long
+after it rotted, and next week's camp is not on it at all. That is the
+difference between a map and a minimap, and it is the only reason to draw a
+second map of the same place.
+
+### Ink is in metres
+
+Every stroke and every note is stored in world coordinates rather than as a
+fraction of the paper. It costs nothing — the panel converts once either way —
+and it is what lets a board draw six maps' worth of annotation in one space
+without transforming anything by whichever map it came from. A stroke is also
+sent whole, when the pen comes up, rather than a point per frame: a stroke is
+*one thing a person did*, so it is one thing to rub out and one thing to
+attribute.
+
+### Combining maps is laying them out
+
+A board does not merge its maps into a new map, and there is nothing for the
+player to line up. Its paper is the union of the squares pinned to it, every map
+is drawn where it *is*, and the picture that comes out is continuous. Pin a
+second map and the board is bigger. That is the entire interaction — no join,
+no orientation, no order — and it works because none of the maps was ever drawn
+relative to itself.
+
+`MAP_BOARD` is the eleventh `BuildPiece` and the first that is more than its
+box: building one registers a `Cartography.Board` twinned with the placement, so
+a board is a *place that holds something* rather than a wall the maps happen to
+be near.
+
+### Off the map is still on the map
+
+Every walker gets a pin turned to their heading; a walker outside the paper is
+clamped to the border, drawn as a smaller arrow pointing after them, and
+labelled with how far away they are. The Minecraft rule, and the one that makes
+a map useful to a party rather than to a person — a map whose markers vanish the
+moment somebody walks off it cannot answer the only question a party asks it.
+
+### Why it is a debug power, and what happens when it stops being one
+
+`Debug.Power.MAPS` is the second row the mode has had to grow, and it is a
+different shape from the first. `POINTS` exists because a cost escaped the
+satchel; this exists because a *decision* has not been made — what a map should
+cost a player who is not in debug mode. Rather than guess at a price and ship
+it, every map verb opens with the same `if (player.debugging())`, which is
+exactly the shape `Debug`'s class note prescribes. Lifting the gate is deleting
+one line from each of six methods and adding a cost; the row is the only one of
+the four that would *disappear* rather than become free.
+
+One consequence worth writing down: the code is four digits read anywhere in the
+walk, and a map's name is text with digits in it. `WatchScene.typingText()` is
+what stops renaming a map to "7799 steps to the ford" from turning the whole
+feature off mid-keystroke.
+
+---
+
 ## 8. Tests
 
 `src/test/java/com/larsons/engine/watch/`
@@ -1594,3 +1721,36 @@ sweep beside it.
   through the real `WatchScene`, because every remaining way this breaks is a
   wiring fault: hold the forward key and the ground you started on is trodden
   behind you, and start another walk and it is not.
+* `MapsTest` — seven claims, and an eighth that will be deleted rather than
+  kept. **It is as wide as you can see**: a player is swept right across a
+  snapping grid cell drawing a map at every step, and at the worst position the
+  nearest edge is still a full render distance away — checking the middle would
+  have proved nothing, since the middle is the one place the snap cannot hurt.
+  Then that a longer ring draws a bigger map, that both land on the ladder and
+  are whole multiples of each other, and that a client claiming a
+  million-metre view gets the clamp. **It arrives finished**: two `TerrainField`s
+  built from one seed paint the identical paper and two different seeds do not,
+  the paper is terrain rather than a wash, and a camp built *after* a map was
+  drawn is on the next map and not on that one. **It has the country on it**:
+  the post underfoot with its own sign, the feeder and the floor just laid, and
+  six pieces in one clearing drawn as one camp rather than six. **You can write
+  on it**: a stroke goes on in world metres, one point is refused as not being a
+  line, the eraser names one mark by id out of a space shared with the notes,
+  and all of it survives a save and crosses the wire with the map. **It is in
+  the satchel**: carried by whoever drew it, renamed, refused a blank name, and
+  cut to length. **It shows everybody**: a walker in the middle is on it, one
+  four map-widths east is pinned to the border rather than dropped, and pinning
+  is to the east edge rather than to a corner. **Maps combine**: two drawn a
+  span apart meet exactly, pinning the second widens the board by a whole map
+  and does not make it taller, taking one back shrinks it and returns the map to
+  the satchel, and a walker four hundred metres away cannot pin anything.
+  Finally through the real `WatchScene`, because most of this feature is a
+  panel: M draws a map, opens it *and it is still open five frames later* —
+  which is the assertion that catches a panel opened on a view that has not been
+  told about the map yet — the satchel lists it above the items and opens it,
+  F2 renames it, a drag across the paper draws a line that runs the way the hand
+  did and lands inside the map, the eraser takes it off again, the note tool
+  writes words, E at a board opens it, and clicking down the board's own list
+  puts a map up. And the eighth: every one of the six verbs is refused to a
+  player who has not typed the code, the build menu does not list the board to
+  them, and the readout says maps are one of the powers.

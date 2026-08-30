@@ -10,6 +10,8 @@ import com.larsons.engine.input.KeyBinds;
 import com.larsons.engine.input.Pointer;
 import com.larsons.engine.scene.AbstractScene;
 import com.larsons.engine.watch.Boats;
+import com.larsons.engine.watch.Cartography;
+import com.larsons.engine.watch.Chart;
 import com.larsons.engine.watch.Cultivation;
 import com.larsons.engine.watch.Debug;
 import com.larsons.engine.watch.FieldGuide;
@@ -34,6 +36,7 @@ import com.larsons.engine.watch.build.Structure;
 import com.larsons.engine.watch.life.AnimalModels;
 import com.larsons.engine.watch.net.WatchSession;
 import com.larsons.engine.watch.render.BoatModel;
+import com.larsons.engine.watch.render.ChartImage;
 import com.larsons.engine.watch.render.FloraMesher;
 import com.larsons.engine.watch.render.Gait;
 import com.larsons.engine.watch.render.ItemModel;
@@ -58,6 +61,7 @@ import com.larsons.engine.watch.world.WatchMaterials;
 
 import java.awt.Color;
 import java.awt.Font;
+import java.awt.image.BufferedImage;
 import java.util.ArrayList;
 import java.util.LinkedHashMap;
 import java.util.List;
@@ -276,7 +280,7 @@ public class WatchScene extends AbstractScene {
     private static final long TRACKS_KEY = Long.MIN_VALUE + 2;
 
     /** Which overlay is up, if any. */
-    private enum Panel { NONE, SATCHEL, BUILD, SHOP, PAUSED }
+    private enum Panel { NONE, SATCHEL, BUILD, SHOP, MAP, PAUSED }
 
     private final GameContext ctx;
 
@@ -541,6 +545,84 @@ public class WatchScene extends AbstractScene {
 
     private int shopIndex;
 
+    /**
+     * The map screen, which draws both a single map and a board.
+     *
+     * <p>Its own class rather than another six hundred lines here, and it earns
+     * that: it has a coordinate system of its own (metres, north up), a tool in
+     * hand, and a picture that arrives a frame or two late. See
+     * {@link MapPanel}. What stays on this side is what stays on this side for
+     * every other panel — which key opens it, and where its requests go.
+     */
+    private final MapPanel mapPanel = new MapPanel();
+
+    /**
+     * Where the map screen's requests go, on whichever path this session is.
+     *
+     * <p>One object rather than four lambdas built per frame, and it is the same
+     * two-branch shape as every other verb in this scene: solo it goes straight
+     * into the local game, online it goes on the wire. See {@link #request}.
+     */
+    private final MapPanel.Sink mapSink = new MapPanel.Sink() {
+
+        @Override public void mark(long chartId, int ink, double[] xs, double[] ys) {
+            if (session.local() != null) {
+                session.local().markMap(session.selfId(), chartId, ink, xs, ys);
+            } else {
+                session.client().sendMark(chartId, ink, xs, ys);
+            }
+        }
+
+        @Override public void note(long chartId, int ink, double x, double y, String text) {
+            if (session.local() != null) {
+                session.local().noteMap(session.selfId(), chartId, ink, x, y, text);
+            } else {
+                session.client().sendNote(chartId, ink, x, y, text);
+            }
+        }
+
+        @Override public void erase(long chartId, long markId) {
+            if (session.local() != null) {
+                session.local().eraseMark(session.selfId(), chartId, markId);
+            } else {
+                session.client().sendErase(chartId, markId);
+            }
+        }
+
+        @Override public void pin(long chartId, long boardId) {
+            if (session.local() != null) {
+                session.local().pinMap(session.selfId(), chartId, boardId);
+            } else {
+                session.client().sendPin(chartId, boardId);
+            }
+        }
+    };
+
+    /**
+     * The highest map id we had when we last asked the host for one, or
+     * {@code 0} when we are not waiting.
+     *
+     * <p>Online a map is a request like any other: nothing exists until the host
+     * says so, and it arrives in the next world sync rather than as an answer.
+     * Opening the panel optimistically would be opening it on a map the host may
+     * have refused; not opening it at all would mean pressing M and watching
+     * nothing happen. So the id we would have beaten is remembered, and the
+     * first map above it that turns up in our own satchel is the one we asked
+     * for.
+     */
+    private long awaitingMapAfter;
+
+    /** How long we wait for a map before deciding the host refused it, in seconds. */
+    private static final double MAP_WAIT_SECONDS = 6;
+
+    private double awaitingMapFor;
+
+    /** Which map row of the satchel is being renamed, or {@code 0}. */
+    private long renamingId;
+
+    /** What has been typed into the rename field. */
+    private final StringBuilder renameText = new StringBuilder();
+
     /** The last thing the keeper said, and how long it stays on the panel. */
     private String keeperLine = "";
 
@@ -744,7 +826,13 @@ public class WatchScene extends AbstractScene {
         // Before the panel branch, so the code can be typed anywhere in the
         // walk — including on the satchel screen, which is exactly where
         // somebody testing a recipe is standing when they want it.
-        readCode(dt, input);
+        //
+        // …but not while a field has the keyboard. A note on a map or a map's
+        // new name is text, and text has digits in it: without this, writing
+        // "7799 steps to the ford" on a map turns debug mode off underneath the
+        // player, which is the one thing that would take the map screen away
+        // while they were using it.
+        if (!typingText()) readCode(dt, input);
 
         if (panel != Panel.NONE) {
             Pointer.restore();
@@ -793,6 +881,11 @@ public class WatchScene extends AbstractScene {
         }
         if (KeyBinds.pressed(input, GameAction.WATCH_BUILD)) {
             panel = Panel.BUILD;
+            pieceIndex = 0;
+            return;
+        }
+        if (KeyBinds.pressed(input, GameAction.WATCH_MAP)) {
+            drawMap();
             return;
         }
         if (KeyBinds.pressed(input, GameAction.TOGGLE_VIEW)) thirdPerson = !thirdPerson;
@@ -821,6 +914,8 @@ public class WatchScene extends AbstractScene {
         session.update(dt);
         syncClock();
         noticePickups();
+        // After the sync, because the sync is what a map arrives in.
+        awaitMap(dt);
 
         // Where the glass is pointed decides which chunks this call asks for,
         // so it is set first.
@@ -1632,6 +1727,13 @@ public class WatchScene extends AbstractScene {
                     openShop();
                     return;
                 }
+                // A map board, for the same reason: reading one is a screen,
+                // and everything the screen then does is a request like any
+                // other.
+                if (inReach != null && inReach.kind() == WatchGame.Pickable.Kind.BOARD) {
+                    openBoard();
+                    return;
+                }
                 // The reach gesture plays whether or not anything came of it:
                 // reaching out and finding nothing is information too.
                 reach = 1;
@@ -1865,9 +1967,15 @@ public class WatchScene extends AbstractScene {
     // --- panels ----------------------------------------------------------------------
 
     private void updatePanel(double dt, InputManager input) {
-        if (KeyBinds.pressed(input, GameAction.MENU_BACK)
-                || KeyBinds.pressed(input, GameAction.PAUSE)) {
+        // Escape belongs to whatever has the keyboard: a half-typed note or a
+        // half-typed name is cancelled by it, and only then does it close the
+        // screen. Without this, pressing Escape to abandon a note you had begun
+        // would abandon the map as well.
+        boolean back = KeyBinds.pressed(input, GameAction.MENU_BACK)
+                || KeyBinds.pressed(input, GameAction.PAUSE);
+        if (back && !typingText()) {
             panel = Panel.NONE;
+            mapPanel.close();
             return;
         }
         keeperFor = Math.max(0, keeperFor - dt);
@@ -1875,8 +1983,130 @@ public class WatchScene extends AbstractScene {
             case SATCHEL -> updateSatchel(input);
             case BUILD -> updateBuild(input);
             case SHOP -> updateShop(input);
+            case MAP -> updateMap(input);
             case PAUSED -> updatePaused(input);
             case NONE -> { }
+        }
+    }
+
+    /** Whether a text field somewhere has the keyboard. */
+    private boolean typingText() {
+        return renamingId != 0 || mapPanel.typing();
+    }
+
+    // --- maps ------------------------------------------------------------------------
+
+    /**
+     * How far this machine can see, in metres — which is how wide a map it can
+     * draw.
+     *
+     * <p>The streamer's ring, in chunks, times the size of one. Read here rather
+     * than sent as a setting because it is what the ring <em>is</em> right now:
+     * {@link #applyDistanceSettings} sizes it from whether a card turned up and
+     * from the player's own detail slider, so this is the only honest answer and
+     * it changes when either of those does.
+     */
+    private double mapReach() {
+        return streamer == null ? 0 : streamer.viewRadius() * (double) WatchChunk.SIZE;
+    }
+
+    /** Draw a map of everything in view, and open it. */
+    private void drawMap() {
+        if (!debugging()) {
+            say("Maps are still behind debug mode — type " + Debug.CODE);
+            return;
+        }
+        WatchGame local = session.local();
+        if (local != null) {
+            Chart chart = local.drawMap(session.selfId(), mapReach());
+            if (chart == null) {
+                say("No room for another map");
+                return;
+            }
+            // Copy the game into the view before opening on it. Everything the
+            // panel draws comes from the view, and the view is refreshed at the
+            // <em>end</em> of a frame — so a panel opened on a map made halfway
+            // through this one would spend its first frame looking at a world
+            // that has never heard of it, and close itself.
+            session.update(0);
+            picked("Drew " + chart.name());
+            openChart(chart.id());
+            return;
+        }
+        // Online the map comes back with the next world sync, which the host
+        // sends the instant it makes one. Nothing is opened optimistically: a
+        // panel showing a map the host may have refused is a panel that would
+        // have to close itself under the player's hand. See awaitingMapAfter,
+        // which is what opens it when it actually arrives.
+        awaitingMapAfter = highestMapId();
+        awaitingMapFor = MAP_WAIT_SECONDS;
+        session.client().sendChart(mapReach());
+        say("Drawing a map…");
+    }
+
+    /** The newest map id anybody in this world has, or {@code 0}. */
+    private long highestMapId() {
+        long highest = 0;
+        for (Chart chart : view().maps().charts()) {
+            highest = Math.max(highest, chart.id());
+        }
+        return highest;
+    }
+
+    /** Open the map we asked the host for, the frame it turns up. */
+    private void awaitMap(double dt) {
+        if (awaitingMapAfter == 0) return;
+        awaitingMapFor -= dt;
+        for (Chart chart : view().maps().carriedBy(session.selfId())) {
+            if (chart.id() <= awaitingMapAfter) continue;
+            awaitingMapAfter = 0;
+            picked("Drew " + chart.name());
+            openChart(chart.id());
+            return;
+        }
+        if (awaitingMapFor <= 0) {
+            awaitingMapAfter = 0;
+            say("The host did not draw a map");
+        }
+    }
+
+    /** Open one map. */
+    private void openChart(long chartId) {
+        mapPanel.openChart(chartId);
+        panel = Panel.MAP;
+    }
+
+    /** Walk up to a board and read what is on it. */
+    private void openBoard() {
+        Cartography.Board board = view().maps().boardAt(px, py);
+        if (board == null) return;
+        mapPanel.openBoard(board.id());
+        panel = Panel.MAP;
+    }
+
+    /**
+     * The map screen.
+     *
+     * <p>Almost all of it is {@link MapPanel}'s: what stays here is the two
+     * things a panel in this scene owes the scene, which are closing on its own
+     * key and letting the strip see a click before the paper does.
+     */
+    private void updateMap(InputManager input) {
+        if (!mapPanel.open()) {
+            panel = Panel.NONE;
+            return;
+        }
+        pointerMoved(input);
+        if (input.isMouseJustPressed()
+                && mapPanel.clickStrip(pointerX, pointerY, viewportWidth, viewportHeight,
+                        mapSink)) {
+            return;
+        }
+        mapPanel.update(input, view(), streamer == null ? null : streamer.field(),
+                viewportWidth, viewportHeight, mapSink);
+        if (!mapPanel.typing() && KeyBinds.pressed(input, GameAction.WATCH_MAP)) {
+            mapPanel.close();
+            panel = Panel.NONE;
         }
     }
 
@@ -2041,7 +2271,16 @@ public class WatchScene extends AbstractScene {
      * for a whole session.
      */
     private void updateSatchel(InputManager input) {
+        // A name being typed owns the keyboard until it is finished — nothing
+        // below this line should read a key while it is.
+        if (renamingId != 0) {
+            typeName(input);
+            return;
+        }
+
+        List<Chart> maps = carriedMaps();
         List<String> items = view().satchel().keys();
+        int carrying = maps.size() + items.size();
         List<Recipes.Recipe> recipes = Recipes.all();
         SatchelBox box = satchelBox();
 
@@ -2058,9 +2297,9 @@ public class WatchScene extends AbstractScene {
                 recipeScroll = clampScroll(recipeScroll, recipeIndex, recipes.size(),
                         box.rows());
             } else {
-                satchelIndex = items.isEmpty() ? 0
-                        : Math.floorMod(satchelIndex + step, items.size());
-                satchelScroll = clampScroll(satchelScroll, satchelIndex, items.size(),
+                satchelIndex = carrying == 0 ? 0
+                        : Math.floorMod(satchelIndex + step, carrying);
+                satchelScroll = clampScroll(satchelScroll, satchelIndex, carrying,
                         box.rows());
             }
         }
@@ -2070,7 +2309,7 @@ public class WatchScene extends AbstractScene {
         int mx = pointerX, my = pointerY;
         int over = box.columnAt(mx, my);
 
-        if (dragging(input, box, items.size(), recipes.size())) return;
+        if (dragging(input, box, carrying, recipes.size())) return;
 
         int wheel = input.getWheelRotation();
         if (wheel != 0) {
@@ -2080,14 +2319,14 @@ public class WatchScene extends AbstractScene {
                         recipes.size(), box.rows());
             } else {
                 satchelScroll = boundScroll(satchelScroll + wheel * WHEEL_ROWS,
-                        items.size(), box.rows());
+                        carrying, box.rows());
             }
         }
 
         int hovered = -1;
         if (over >= 0) {
             int row = box.rowAt(my);
-            int total = over == 1 ? recipes.size() : items.size();
+            int total = over == 1 ? recipes.size() : carrying;
             int scroll = over == 1 ? recipeScroll : satchelScroll;
             if (row >= 0 && scroll + row < total) hovered = scroll + row;
         }
@@ -2109,7 +2348,8 @@ public class WatchScene extends AbstractScene {
                     craft(recipes.get(hovered));
                 } else {
                     satchelIndex = hovered;
-                    useFromSatchel(items.get(hovered));
+                    useCarried(maps, items, hovered);
+                    return;
                 }
             }
         }
@@ -2117,11 +2357,109 @@ public class WatchScene extends AbstractScene {
         if (KeyBinds.pressed(input, GameAction.MENU_SELECT)) {
             if (recipeColumn && !recipes.isEmpty()) {
                 craft(recipes.get(Math.min(recipeIndex, recipes.size() - 1)));
-            } else if (!items.isEmpty()) {
-                useFromSatchel(items.get(Math.min(satchelIndex, items.size() - 1)));
+            } else if (carrying > 0) {
+                useCarried(maps, items, Math.min(satchelIndex, carrying - 1));
+                return;
             }
         }
+        // F2, which is what renames a thing in a list everywhere else. The map
+        // screen deliberately has no rename on it: a name is a property of the
+        // map as an object, so it is changed where the object is kept.
+        if (!recipeColumn && input.isKeyJustPressed(java.awt.event.KeyEvent.VK_F2)
+                && satchelIndex < maps.size()) {
+            beginRename(maps.get(satchelIndex));
+            return;
+        }
         if (KeyBinds.pressed(input, GameAction.WATCH_SATCHEL)) panel = Panel.NONE;
+    }
+
+    /**
+     * The maps in this player's satchel — empty unless they are in debug mode.
+     *
+     * <p>The gate is here as well as on the host, and not because the host
+     * needs help: a client that drew rows for maps it may not have would be a
+     * client whose inventory changed shape the moment somebody else typed a
+     * code. See {@link Debug.Power#MAPS}.
+     */
+    private List<Chart> carriedMaps() {
+        if (!debugging()) return List.of();
+        return view().maps().carriedBy(session.selfId());
+    }
+
+    /**
+     * Do the obvious thing with the row under the cursor — where the row may be
+     * a map.
+     *
+     * <p>Maps sit at the top of the carrying column rather than in a column of
+     * their own, and the reason is that they belong there: a map is a thing in
+     * your satchel, and a third column would say it was a different sort of
+     * possession. It also keeps the panel's arithmetic to one index over one
+     * list, which is the arithmetic {@code SatchelBox} exists to protect.
+     */
+    private void useCarried(List<Chart> maps, List<String> items, int index) {
+        if (index < maps.size()) {
+            openChart(maps.get(index).id());
+            return;
+        }
+        useFromSatchel(items.get(index - maps.size()));
+    }
+
+    /**
+     * Start renaming a map: the field opens on the name it already has, with
+     * that name <em>selected</em>.
+     *
+     * <p>Selected in the sense every rename in every file manager means: the
+     * first character typed replaces the whole of it, and a backspace instead
+     * puts the caret at the end and edits it. That is the behaviour of the only
+     * gesture this is — renaming a thing in a list — and without it the field
+     * opens on "Deciduous Woods 0E 0N" and the only way to get rid of that is
+     * twenty-one presses of backspace.
+     */
+    private void beginRename(Chart chart) {
+        renamingId = chart.id();
+        renameText.setLength(0);
+        renameText.append(chart.name());
+        renameSelected = true;
+    }
+
+    /** Whether the name in the field is still the old one, waiting to be typed over. */
+    private boolean renameSelected;
+
+    /**
+     * A map's name being typed.
+     *
+     * <p>Enter commits it, Escape drops it, and a blank name is refused rather
+     * than accepted — a map called nothing cannot be picked out of a list, and
+     * "" is what you get by holding backspace while you think.
+     */
+    private void typeName(InputManager input) {
+        if (input.isKeyJustPressed(java.awt.event.KeyEvent.VK_ESCAPE)) {
+            renamingId = 0;
+            return;
+        }
+        if (input.isKeyJustPressed(java.awt.event.KeyEvent.VK_BACK_SPACE)) {
+            renameSelected = false;
+            if (renameText.length() > 0) renameText.deleteCharAt(renameText.length() - 1);
+        }
+        for (char c : input.consumeTypedChars().toCharArray()) {
+            if (c < ' ') continue;
+            if (renameSelected) {
+                renameText.setLength(0);
+                renameSelected = false;
+            }
+            if (renameText.length() >= Chart.MAX_NAME_LENGTH) break;
+            renameText.append(c);
+        }
+        if (!input.isKeyJustPressed(java.awt.event.KeyEvent.VK_ENTER)) return;
+        String name = renameText.toString().trim();
+        if (!name.isEmpty()) {
+            if (session.local() != null) {
+                session.local().renameMap(session.selfId(), renamingId, name);
+            } else {
+                session.client().sendRenameChart(renamingId, name);
+            }
+        }
+        renamingId = 0;
     }
 
     /** How many rows one notch of the wheel moves a list. */
@@ -2236,7 +2574,10 @@ public class WatchScene extends AbstractScene {
      * needed was a pointer that selects a row, a click that builds it, and a ✕.
      */
     private void updateBuild(InputManager input) {
-        List<BuildPiece> pieces = BuildPiece.all();
+        // What this player may build, which is everything unless debug mode is
+        // still holding a piece back. The list decides the row count, so the
+        // screen and this must ask the same question — see buildBox.
+        List<BuildPiece> pieces = BuildPiece.available(debugging());
         SatchelBox box = buildBox();
         if (KeyBinds.pressed(input, GameAction.MENU_DOWN)) pieceIndex++;
         if (KeyBinds.pressed(input, GameAction.MENU_UP)) pieceIndex--;
@@ -2292,7 +2633,8 @@ public class WatchScene extends AbstractScene {
         int h = Math.min(460, Math.max(240, viewportHeight - 80));
         int x = (viewportWidth - w) / 2, y = (viewportHeight - h) / 2;
         int listTop = y + 62;
-        return new SatchelBox(x, y, w, h, listTop, BuildPiece.all().size(), w - 40);
+        return new SatchelBox(x, y, w, h, listTop, BuildPiece.available(debugging()).size(),
+                w - 40);
     }
 
     private void updatePaused(InputManager input) {
@@ -2417,6 +2759,8 @@ public class WatchScene extends AbstractScene {
             case SATCHEL -> drawSatchel(target);
             case BUILD -> drawBuild(target);
             case SHOP -> drawShop(target);
+            case MAP -> mapPanel.draw(target, view(), streamer.field(), viewportWidth,
+                    viewportHeight);
             case PAUSED -> drawPaused(target);
             case NONE -> { }
         }
@@ -3080,6 +3424,10 @@ public class WatchScene extends AbstractScene {
             if (view.satchel().has(Spyglass.ITEM)) {
                 keys += " · Right-click glass";
             }
+            // Only once the mode is on, because it is the only verb on this
+            // line that would otherwise refuse — and a hint for a key that does
+            // nothing is worse than no hint. See Debug.Power.MAPS.
+            if (debugging()) keys += " · M map";
             label(target, keys, pad, viewportHeight - pad - 22, HUD_SMALL,
                     new Color(150, 168, 152));
         }
@@ -3649,12 +3997,14 @@ public class WatchScene extends AbstractScene {
         drawCloseButton(target, box);
 
         Satchel satchel = view().satchel();
+        List<Chart> maps = carriedMaps();
         List<String> items = satchel.keys();
+        int carried = maps.size() + items.size();
         List<Recipes.Recipe> recipes = Recipes.all();
         // Only bounded here, never pulled back to the cursor: the wheel and the
         // bar move the window on its own, and a draw that dragged it back to
         // wherever the cursor happened to be would undo the scroll every frame.
-        satchelScroll = boundScroll(satchelScroll, items.size(), box.rows());
+        satchelScroll = boundScroll(satchelScroll, carried, box.rows());
         recipeScroll = boundScroll(recipeScroll, recipes.size(), box.rows());
 
         // --- carrying ------------------------------------------------------
@@ -3663,19 +4013,26 @@ public class WatchScene extends AbstractScene {
                 ? "Carrying  (everything — debug)"
                 : "Carrying  (" + satchel.kinds() + " kinds, "
                         + satchel.total() + " things)";
+        if (!maps.isEmpty()) {
+            carrying = maps.size() + (maps.size() == 1 ? " map · " : " maps · ") + carrying;
+        }
         target.drawText(carrying, col, y + 68, HUD_BOLD,
                 recipeColumn ? HUD_DIM : HUD_ACCENT);
         for (int i = 0; i < box.rows(); i++) {
             int index = satchelScroll + i;
-            if (index >= items.size()) break;
-            String key = items.get(index);
-            Forage.Item item = Forage.byKey(key);
+            if (index >= carried) break;
             int top = box.rowTop(i);
             int text = top + ROW_HEIGHT - 9;
             if (index == satchelIndex && !recipeColumn) {
                 target.fillRect(col - 8, top, box.colWidth(), ROW_HEIGHT - 2,
                         new Color(60, 110, 70, 160));
             }
+            if (index < maps.size()) {
+                drawMapRow(target, box, maps.get(index), col, top, text);
+                continue;
+            }
+            String key = items.get(index - maps.size());
+            Forage.Item item = Forage.byKey(key);
             // Its own model, not a coloured square: forty rows of "Berry" and
             // "Seed" tell you what category a thing is and nothing about what
             // it is. See ItemPortrait.
@@ -3689,12 +4046,12 @@ public class WatchScene extends AbstractScene {
                         HUD_SMALL, HUD_DIM);
             }
         }
-        if (items.isEmpty()) {
+        if (carried == 0) {
             target.drawText("Nothing yet — press E out there", col,
                     box.rowTop(0) + 18, HUD_SMALL, HUD_DIM);
         }
         scrollbar(target, box.barX(0), box.barTop(), box.barHeight(), satchelScroll,
-                box.rows(), items.size());
+                box.rows(), carried);
 
         // --- recipes -------------------------------------------------------
         int rx = box.rightX();
@@ -3733,6 +4090,38 @@ public class WatchScene extends AbstractScene {
     }
 
     /**
+     * One map's row in the satchel.
+     *
+     * <p><b>The icon is the map itself.</b> Every other row in this list draws
+     * the thing it is a row for ({@link ItemPortrait}), and a map's picture is
+     * already a square of paper painted from the seed — so the honest icon for
+     * one is a thumbnail of it, and eight maps in a satchel are told apart by
+     * looking rather than by reading eight names.
+     *
+     * <p>It may not be painted yet ({@link ChartImage} bakes on a worker), in
+     * which case the row draws an empty sheet for a frame or two. That is the
+     * same bargain the world itself makes while chunks arrive.
+     */
+    private void drawMapRow(DrawTarget target, SatchelBox box, Chart chart, int col,
+                            int top, int text) {
+        BufferedImage paper = streamer == null ? null
+                : ChartImage.of(streamer.field(), chart);
+        if (paper != null) {
+            target.drawImage(paper, col, top + 3, ICON, ICON);
+        } else {
+            target.fillRect(col, top + 3, ICON, ICON, new Color(198, 183, 152));
+        }
+        target.drawRect(col, top + 3, ICON, ICON, new Color(120, 102, 74));
+        boolean renaming = renamingId == chart.id();
+        String name = renaming ? renameText + "▏" : chart.name();
+        target.drawText("MAP", col + ICON + 8, text, HUD_SMALL, HUD_WARN);
+        target.drawText(fitted(target, name, box.colWidth() - ICON - 130),
+                col + ICON + 44, text, HUD_FONT, renaming ? HUD_WARN : HUD_INK);
+        target.drawText(renaming ? "Enter" : Math.round(chart.span()) + " m",
+                col + box.colWidth() - 96, text, HUD_SMALL, HUD_DIM);
+    }
+
+    /**
      * The footer: a big picture of whatever the cursor is on, and what it is
      * for.
      *
@@ -3749,6 +4138,38 @@ public class WatchScene extends AbstractScene {
         String key = null;
         String title = "";
         String note = "";
+        List<Chart> maps = carriedMaps();
+        if (!recipeColumn && satchelIndex < maps.size()) {
+            // A map's own footer, drawn here rather than through the item path
+            // because a map is not a Forage key and has no portrait: the big
+            // picture is the map, and the line under it says how to work it.
+            Chart chart = maps.get(satchelIndex);
+            BufferedImage paper = streamer == null ? null
+                    : ChartImage.of(streamer.field(), chart);
+            if (paper != null) {
+                target.drawImage(paper, x + 20, top, DETAIL_ICON, DETAIL_ICON);
+            } else {
+                target.fillRect(x + 20, top, DETAIL_ICON, DETAIL_ICON,
+                        new Color(198, 183, 152));
+            }
+            target.drawRect(x + 20, top, DETAIL_ICON, DETAIL_ICON, new Color(120, 102, 74));
+            int mapX = x + 28 + DETAIL_ICON;
+            int mapWidth = x + w - 20 - mapX;
+            target.drawText(fitted(target, chart.name(), mapWidth), mapX, top + 20,
+                    HUD_BOLD, HUD_INK);
+            target.drawText(fitted(target, chart.describe(), mapWidth), mapX, top + 40,
+                    HUD_SMALL, HUD_DIM);
+            String hint = renamingId == chart.id()
+                    ? (renameSelected
+                            ? "Type to replace the name, or backspace to edit it"
+                            : "Enter keeps the new name, Esc leaves it alone")
+                    : "Enter or click opens it  ·  F2 renames it  ·  "
+                            + chart.marks() + " marks on it";
+            target.drawText(fitted(target, hint, mapWidth), mapX, top + 58, HUD_SMALL,
+                    renamingId == chart.id() ? HUD_WARN : HUD_ACCENT);
+            return;
+        }
+        int itemIndex = satchelIndex - maps.size();
         if (recipeColumn && !recipes.isEmpty()) {
             Recipes.Recipe recipe = recipes.get(Math.min(recipeIndex, recipes.size() - 1));
             key = recipe.output();
@@ -3758,7 +4179,7 @@ public class WatchScene extends AbstractScene {
             // cut to fit the column.
             note = recipe.costLine() + "  —  " + recipe.note();
         } else if (!items.isEmpty()) {
-            key = items.get(Math.min(satchelIndex, items.size() - 1));
+            key = items.get(Math.max(0, Math.min(itemIndex, items.size() - 1)));
             Forage.Item item = Forage.byKey(key);
             title = Forage.nameOf(key)
                     + (item == null ? "" : "  ·  " + item.kind().label());
@@ -3839,7 +4260,8 @@ public class WatchScene extends AbstractScene {
         drawCloseButton(target, box);
 
         Satchel satchel = view().satchel();
-        List<BuildPiece> pieces = BuildPiece.all();
+        List<BuildPiece> pieces = BuildPiece.available(debugging());
+        pieceIndex = Math.floorMod(pieceIndex, pieces.size());
         for (int i = 0; i < pieces.size(); i++) {
             BuildPiece piece = pieces.get(i);
             boolean can = piece.affordable(satchel);
@@ -4058,13 +4480,26 @@ public class WatchScene extends AbstractScene {
             return recipes.isEmpty() ? null
                     : recipes.get(Math.min(recipeIndex, recipes.size() - 1)).output();
         }
+        // Maps sit above the items in the carrying column, so the cursor's row
+        // may be one — named "map:<id>" rather than by an item key, because a
+        // map is not one and a test that could not tell them apart would pass
+        // while the rows were in the wrong order.
+        List<Chart> maps = carriedMaps();
+        if (satchelIndex < maps.size()) return "map:" + maps.get(satchelIndex).id();
         List<String> items = view().satchel().keys();
-        return items.isEmpty() ? null
-                : items.get(Math.min(satchelIndex, items.size() - 1));
+        if (items.isEmpty()) return null;
+        int at = Math.max(0, Math.min(satchelIndex - maps.size(), items.size() - 1));
+        return items.get(at);
     }
 
     /** How far down its list the column with the cursor is scrolled — for tests. */
     public int panelScroll() { return recipeColumn ? recipeScroll : satchelScroll; }
+
+    /** The map screen, so a test can ask what it is showing — for tests. */
+    public MapPanel mapPanel() { return mapPanel; }
+
+    /** How far this walk can see, which is how wide a map it draws — for tests. */
+    public double mapReachMetres() { return mapReach(); }
 
     /** What is in reach of the local player this frame, or {@code null} — for tests. */
     public WatchGame.Pickable inReach() { return inReach; }

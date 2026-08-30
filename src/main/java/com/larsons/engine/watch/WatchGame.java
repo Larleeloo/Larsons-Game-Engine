@@ -188,6 +188,17 @@ public final class WatchGame implements Animal.Surroundings {
     private final Grove grove = new Grove();
     private final Cultivation crops = new Cultivation();
     private final Structure structure = new Structure();
+
+    /**
+     * Every map the party has drawn, and every board they have hung one on.
+     *
+     * <p>World state like the grove and the buildings, and shared for the same
+     * reason the book is: eight people walking one wood keep one set of maps
+     * between them, so a map somebody drew of the far valley is a map anybody
+     * can be handed. What is per-player is only which satchel a given map is
+     * currently in — see {@link Chart#owner()}.
+     */
+    private final Cartography cartography = new Cartography();
     private final Weather weather;
     private final Boats boats;
 
@@ -263,6 +274,9 @@ public final class WatchGame implements Animal.Surroundings {
 
     /** Everything anybody built. */
     public Structure structure() { return structure; }
+
+    /** Every map anybody drew, and every board they went up on. */
+    public Cartography maps() { return cartography; }
 
     /** What the sky is doing, for everybody. */
     public Weather weather() { return weather; }
@@ -647,6 +661,19 @@ public final class WatchGame implements Animal.Surroundings {
                     shop.z() + Shops.COUNTER_TOP + 0.25, 0.5);
         }
 
+        // A map board somebody built. Beside the counter in this list and for
+        // the same reason: it is a thing you walk up to and read, and a pebble
+        // at your feet must not be what the key takes instead.
+        Cartography.Board board = cartography.boardAt(player.x(), player.y());
+        if (board != null) {
+            List<Chart> pinned = cartography.pinnedTo(board.id());
+            return new Pickable(Pickable.Kind.BOARD, String.valueOf(board.id()),
+                    pinned.isEmpty() ? "the empty map board"
+                            : "the map board  ·  " + pinned.size()
+                                    + (pinned.size() == 1 ? " map" : " maps"),
+                    board.x(), board.y(), board.z() + 1.0, 1.5);
+        }
+
         // Last, because everything above it is something somebody put there or
         // grew, and a stone on the shingle must not stop you taking the oars.
         Litter.Piece piece = nearestLitter(player.x(), player.y());
@@ -714,6 +741,14 @@ public final class WatchGame implements Animal.Surroundings {
              * standing at is a shop nobody finds twice.
              */
             SHOP("Trade at"),
+            /**
+             * A map board somebody built. See {@link Cartography}.
+             *
+             * <p>{@link #SHOP}'s twin, and here for {@link #SHOP}'s reason: the
+             * verb is a screen rather than a message, and a board you cannot
+             * tell you are standing at is a board nobody uses twice.
+             */
+            BOARD("Read"),
             /** Something lying on the ground. See {@link Litter}. */
             GROUND("Pick up");
 
@@ -938,6 +973,16 @@ public final class WatchGame implements Animal.Surroundings {
                 yield shop == null ? null
                         : shop.keeper().name() + ": " + shop.keeper().greeting();
             }
+            case BOARD -> {
+                // Also a panel, for Kind.SHOP's reason. What the host can say is
+                // what is on the board, which is what somebody walking up to one
+                // wants to know before they open it.
+                Cartography.Board board = boardAt(playerId);
+                if (board == null) yield null;
+                int pinned = cartography.pinnedTo(board.id()).size();
+                yield pinned == 0 ? "An empty map board"
+                        : pinned + (pinned == 1 ? " map on the board" : " maps on the board");
+            }
         };
     }
 
@@ -1015,6 +1060,129 @@ public final class WatchGame implements Animal.Surroundings {
         say(shop.keeper().name() + " stamped " + player.name() + "'s guide — "
                 + page.describe());
         return shop.keeper().stampLine();
+    }
+
+    // --- maps ------------------------------------------------------------------------
+    //
+    // Every verb below opens with the same `if (!player.debugging())`, and that
+    // repetition is the feature rather than a smell: it is exactly the shape
+    // Debug's class note prescribes for a power, and lifting the gate is
+    // deleting one line from each of six methods. A single check somewhere
+    // clever would be a check somebody has to find.
+
+    /**
+     * Draw a map of the country round a player.
+     *
+     * <p><b>The size comes from the machine, and the machine has to say so.</b>
+     * A map spans the render distance of whoever drew it — that is the whole
+     * promise — and how far a client can see is a property of its own graphics
+     * card and its own detail setting, not of the world. The host has no way to
+     * know it and no business guessing, so the reach travels with the request
+     * and is clamped here: {@link Chart#radiusFor} rounds it up the ladder of
+     * sizes, which both bounds it and makes it tile with everybody else's.
+     *
+     * <p>Everything on the paper is settled in this one call — see
+     * {@link Survey}. Nothing about a map is ever filled in later.
+     *
+     * @param reach how far the drawing machine can see, in metres
+     * @return the new map, or {@code null} if it was refused
+     */
+    public synchronized Chart drawMap(int playerId, double reach) {
+        WatchPlayer player = players.get(playerId);
+        if (player == null) return null;
+        if (!player.debugging()) return null;
+        // Where the paper will be, worked out before it exists, because the
+        // survey has to be of the square the map will actually cover rather than
+        // of the ground the player is standing on. Both this and
+        // Cartography.draw go through Chart.radiusFor and Chart.snap, which is
+        // the one place either answer is decided.
+        double radius = Chart.radiusFor(reach);
+        double cx = Chart.snap(player.x(), radius);
+        double cy = Chart.snap(player.y(), radius);
+        List<Chart.Landmark> icons = Survey.survey(field, shops, structure,
+                List.copyOf(lures.values()), grove, boats, guide, cx, cy, radius);
+        Chart chart = cartography.draw(Survey.nameFor(field, cx, cy), player.x(),
+                player.y(), reach, player.name(), playerId, System.currentTimeMillis(),
+                icons);
+        if (chart == null) {
+            say(player.name() + " has no room for another map");
+            return null;
+        }
+        say(player.name() + " drew " + chart.name() + " — " + chart.describe());
+        return chart;
+    }
+
+    /** Rename a map. Anybody may rename any map: the set of them is the party's. */
+    public synchronized boolean renameMap(int playerId, long chartId, String name) {
+        WatchPlayer player = players.get(playerId);
+        if (player == null || !player.debugging()) return false;
+        return cartography.rename(chartId, name);
+    }
+
+    /**
+     * Lay a pen stroke on a map, in world metres.
+     *
+     * <p>The points arrive already in the world's own coordinates rather than
+     * as a fraction of a panel: see {@link Chart}, which explains why ink is
+     * kept that way. The host does not check that they land inside the map —
+     * a line drawn off the edge is simply a line nobody can see, and refusing
+     * it would mean adjudicating a scribble.
+     */
+    public synchronized Chart.Stroke markMap(int playerId, long chartId, int ink,
+                                             double[] xs, double[] ys) {
+        WatchPlayer player = players.get(playerId);
+        if (player == null || !player.debugging()) return null;
+        return cartography.mark(chartId, Chart.Ink.at(ink), player.name(), xs, ys);
+    }
+
+    /** Write a few words on a map. */
+    public synchronized Chart.Note noteMap(int playerId, long chartId, int ink, double x,
+                                           double y, String text) {
+        WatchPlayer player = players.get(playerId);
+        if (player == null || !player.debugging()) return null;
+        return cartography.note(chartId, Chart.Ink.at(ink), player.name(), x, y, text);
+    }
+
+    /** Rub one mark off a map. */
+    public synchronized boolean eraseMark(int playerId, long chartId, long markId) {
+        WatchPlayer player = players.get(playerId);
+        if (player == null || !player.debugging()) return false;
+        return cartography.erase(chartId, markId);
+    }
+
+    /**
+     * Pin a map to a board, or take one back off it.
+     *
+     * <p>The board has to be one the player is standing at, for the reason a
+     * purchase has to be at a counter: the id in the message disambiguates
+     * between boards, it does not address one across the world. Taking a map
+     * <em>back</em> is checked the same way, against the board it is currently
+     * on — reaching over a valley to unpin somebody's map is the same move as
+     * reaching over one to pin your own.
+     *
+     * @param boardId the board to pin to, or {@code 0} to take the map back
+     */
+    public synchronized boolean pinMap(int playerId, long chartId, long boardId) {
+        WatchPlayer player = players.get(playerId);
+        if (player == null || !player.debugging()) return false;
+        Chart chart = cartography.chart(chartId);
+        if (chart == null) return false;
+        Cartography.Board here = cartography.boardAt(player.x(), player.y());
+        if (here == null) return false;
+        long wanted = boardId == 0 ? chart.boardId() : boardId;
+        if (wanted != here.id()) return false;
+        boolean done = cartography.pin(chartId, boardId, playerId);
+        if (done) {
+            say(player.name() + (boardId == 0 ? " took " + chart.name() + " down"
+                    : " pinned " + chart.name() + " up"));
+        }
+        return done;
+    }
+
+    /** The board a player is standing at, or {@code null}. */
+    public synchronized Cartography.Board boardAt(int playerId) {
+        WatchPlayer player = players.get(playerId);
+        return player == null ? null : cartography.boardAt(player.x(), player.y());
     }
 
     private Lure nearestLureTo(int playerId) {
@@ -1184,6 +1352,10 @@ public final class WatchGame implements Animal.Surroundings {
                                      boolean inTree) {
         WatchPlayer player = players.get(playerId);
         if (player == null || piece == null) return null;
+        // A piece the mode is still holding back — today only the map board.
+        // Checked here rather than only in the build screen, because the screen
+        // is a client and a client is a thing that asks.
+        if (piece.debugOnly() && !player.debugging()) return null;
         if (!piece.affordable(player.satchel())) return null;
 
         // Two metres in front, so a piece appears where you are looking rather
@@ -1206,8 +1378,17 @@ public final class WatchGame implements Animal.Surroundings {
             return null;
         }
         if (!piece.pay(player.satchel())) return null;
-        return structure.place(piece, x, y, z, turn, treeId, player.name(),
-                System.currentTimeMillis());
+        Structure.Placement placement = structure.place(piece, x, y, z, turn, treeId,
+                player.name(), System.currentTimeMillis());
+        // A map board is timber and a place maps can be pinned; the timber is
+        // the placement above and the place is this. Raised here rather than
+        // lazily on first use, so a board that nobody has walked up to yet is
+        // still a board in the save and on everybody else's copy of the world.
+        if (piece == BuildPiece.MAP_BOARD) {
+            cartography.raise(placement.id(), placement.x(), placement.y(),
+                    placement.z(), placement.yaw(), player.name());
+        }
+        return placement;
     }
 
     /** The planted tree nearest a point that is big enough to hold a platform. */
@@ -1666,6 +1847,11 @@ public final class WatchGame implements Animal.Surroundings {
         m.put("grove", grove.toMap());
         m.put("crops", crops.toMap());
         m.put("built", structure.toMap());
+        // The maps, which are the one piece of world state that is mostly
+        // somebody's handwriting: where each one is and what has been drawn on
+        // it. The paper itself is not here — see Chart — so a walk with fifty
+        // maps in it costs a few kilobytes of save.
+        m.put("maps", cartography.toMap());
         m.put("sky", weather.toMap());
         m.put("boats", boats.toMap());
         List<Object> lureRows = new ArrayList<>();
@@ -1699,6 +1885,7 @@ public final class WatchGame implements Animal.Surroundings {
         grove.load(WatchJson.map(m, "grove"));
         crops.load(WatchJson.map(m, "crops"));
         structure.load(WatchJson.map(m, "built"));
+        cartography.load(WatchJson.map(m, "maps"));
         weather.load(WatchJson.map(m, "sky"));
         boats.load(WatchJson.map(m, "boats"));
         lures.clear();
