@@ -4,7 +4,7 @@ package com.larsons.engine.watch.life;
  * The animation states every animal in the game has.
  *
  * <p><b>This is the contract with Blockbench.</b> A placeholder model poses
- * these nine states procedurally; an imported {@code .bbmodel} supplies a clip
+ * these ten states procedurally; an imported {@code .bbmodel} supplies a clip
  * for each of them by name ({@link #clipNames()}), and anything it does not
  * supply falls back to the procedural pose rather than to nothing. So a model
  * with only {@code idle} and {@code walk} animations still works everywhere,
@@ -41,7 +41,25 @@ public enum AnimState {
     CALL("call", "call", "sing", "display"),
 
     /** Being carried, ridden, or perched on a hand: a tame animal at home. */
-    TAME("tame", "tame", "sit", "perch");
+    TAME("tame", "tame", "sit", "perch"),
+
+    /**
+     * Swinging at somebody — <b>the only state in this file that nothing in the
+     * original game could reach.</b>
+     *
+     * <p>Added with the mutants ({@link Mutants}), and deliberately added
+     * <em>here</em> rather than as a special case inside them. Nine states were
+     * the contract with Blockbench and ten is the same contract: an imported
+     * model that supplies a {@code strike} clip gets it, one that does not falls
+     * back to the procedural pose, and the field guide's own placeholder wendigo
+     * is posed by the same table as its wrens. A tenth animation is an
+     * improvement, not a prerequisite, which was the property the other nine
+     * were designed for.
+     *
+     * <p>Nothing but a hostile species ever enters it, so every one of the
+     * thirteen hundred ordinary animals is unaffected by its existence.
+     */
+    STRIKE("strike", "strike", "attack", "bite", "lunge", "swipe");
 
     private final String key;
     private final String[] clipNames;
@@ -72,6 +90,11 @@ public enum AnimState {
             case ALERT -> 0.3;
             case SLEEP -> 0.18;
             case CALL -> 2.2;
+            // One swing per cycle, and the cycle is short: a blow you can see
+            // coming and cannot quite get out of the way of. It is faster than
+            // a run cycle on purpose — a mutant winding up is the moment the
+            // player is meant to react to.
+            case STRIKE -> 1.4;
         };
     }
 

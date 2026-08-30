@@ -122,11 +122,22 @@ class AnimalRegistryTest {
         }
     }
 
+    /**
+     * <b>Scoped to the generated families.</b> The invariant is about the
+     * crossing that builds the book — twenty-six families times seven lineages
+     * times seven epithets — and the three hostile families are not built that
+     * way: they are the hand-written mutants, one species each, for the reasons
+     * {@code Mutants} sets out. Applying "at least twenty of each" to them would
+     * be asserting that there are forty-nine wendigos, which is the thing that
+     * design deliberately refuses. What still holds for every family, mutant or
+     * not, is that its members say they are in it and that the parts sum to the
+     * whole.
+     */
     @Test
     void everyFamilyHasItsShareAndEveryOneIsListedUnderIt() {
         for (AnimalFamily family : AnimalFamily.values()) {
             List<AnimalDef> members = AnimalRegistry.inFamily(family);
-            assertTrue(members.size() >= 20,
+            assertTrue(members.size() >= (family.natural() ? 20 : 1),
                     family + " has only " + members.size() + " species in it");
             for (AnimalDef def : members) assertEquals(family, def.family());
         }
@@ -209,10 +220,15 @@ class AnimalRegistryTest {
     /**
      * A family's species have to differ from each other, or forty-nine "finches"
      * are one finch printed forty-nine times.
+     *
+     * <p>Generated families only, for the reason above: a family of one cannot
+     * be a colour printed twice, and the three mutants are checked against each
+     * other instead in {@link MutantTest}.
      */
     @Test
     void speciesWithinAFamilyLookDifferentFromEachOther() {
         for (AnimalFamily family : AnimalFamily.values()) {
+            if (!family.natural()) continue;
             Set<Integer> bodies = new TreeSet<>();
             for (AnimalDef def : AnimalRegistry.inFamily(family)) bodies.add(def.body());
             assertTrue(bodies.size() >= 6, family + " has "

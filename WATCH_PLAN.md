@@ -7,7 +7,9 @@
 A fourth mini game, sitting beside the Auto Battler, Council of Six and
 Evolution on the launch screen's corner strip. You and up to seven friends walk
 an endless, procedurally generated wilderness, find animals, and write them into
-a shared field guide. Nothing in it is a fight.
+a shared field guide. Nothing in it is a fight — there is nothing to fight with,
+and the three things that hunt you (§7i) are something to get away from rather
+than something to beat.
 
 ```
   Launch screen  →  [ Field Guide ]  →  watchlobby  →  watch
@@ -423,7 +425,9 @@ twelve rows:
 |---|---|
 | **Unlimited items** | Every recipe, every build piece, every feeder, every seed, every tool. |
 | **Unlimited points** | Anything on any keeper's shelf, at any price. *(Added in §7f — see below for why it had to be.)* |
-| **Readout** | Position, chunk and LOD, biome and material underfoot, streaming, triangles, what is alive, the glass, the guide, the nearest trading post. |
+| **Maps** | Draw a map, mark it, pin it to a board. *(Added in §7h — a gate on an unpriced feature rather than an abundance.)* |
+| **Summon mutants** | **K** puts a wendigo, a werewolf or a mirewraith on the ground twenty metres in front of you — any biome, any hour, however many. *(Added in §7i.)* |
+| **Readout** | Position, chunk and LOD, biome and material underfoot, streaming, triangles, what is alive and what is hunting, the glass, the guide, the nearest trading post. |
 
 **A short list because the first row is structural.** Debug mode does not hand
 out a list of items — it makes the player's satchel `bottomless`, and *almost
@@ -458,6 +462,14 @@ balance rather than out of a satchel, so the lens does not reach them and no
 amount of cleverness would make it. Which is the honest version of "the list is
 short": it is short because the structural row covers so much, not because
 nothing will ever fall outside it.
+
+**Summon mutants** is the third, and the class note had named it before it
+existed — "a spawn" is its first example of a thing the satchel lens cannot
+reach. It is a different shape again from the two before it. *Unlimited points*
+covers a cost that escaped the satchel and *Maps* gates a feature that is not
+priced yet; this one grants something **no player will ever have**. It is not a
+verb waiting for a gate to lift, and that is why its key is the one thing in the
+walk that is not on the controls screen — see §7i.
 
 ### 4.5 Building (`watch/build`)
 
@@ -1579,6 +1591,298 @@ feature off mid-keystroke.
 
 ---
 
+## 7i. Three things that hunt you
+
+Everything above this line is a game in which nothing can hurt you. Section 4
+opens by saying so, and it was true: the whole difficulty curve was one
+relationship — an animal decides how close it will let you get, you hold still,
+it lets you closer. There was no failure state, and deliberately not.
+
+This is the round that added one, and the design problem was not "how do we do
+combat" (we do not — there is nothing to fight back with). It was: **how do you
+put something dangerous in a game about walking around looking at birds without
+turning it into a game about danger?**
+
+The answer this round settles on is that the wood has to stay safe. Not *mostly*
+safe — safe, for hours, in almost every direction, so that a player gets
+comfortable, learns the biomes, forgets to look behind them, and is then very
+occasionally not safe at all.
+
+---
+
+### The three (`watch/life/Mutants`)
+
+| | Where | When | How it hunts |
+|---|---|---|---|
+| **Hollow Wendigo** — 5.6 m | boreal taiga, tundra barrens, crystal highlands | night | `STALK`: notices at 78 m, follows to 190, 4.9 m/s for ever, six blows to kill |
+| **Moonfell Werewolf** — 4.4 m | deciduous woods, autumn birchwood, pine forest | dawn and dusk | `LUNGE`: 1.8 s bursts at 7.8 m/s, 2.9 m/s for the 3.2 s between them, five blows |
+| **Drowned Mirewraith** — 5.0 m | reed marsh, mangrove coast, mushroom hollow | night | `AMBUSH`: stands up at 22 m, slowest at 4.6 m/s, hardest blow — three of them |
+
+The wendigo's 4.9 m/s is the load-bearing number of the three: it sits between a
+player's walk (4.4) and their run (8.0), so walking away from one does not work
+and running does — and running costs every scrap of the stillness that the rest
+of this game is played through.
+
+No two of them share a biome, so a region has at most one horror in it and it is
+always the same one. Between them they haunt nine of the twenty biomes; the
+other eleven have nothing.
+
+**They are written out, and that is the whole argument of the file.** Every
+other animal in this game is generated — twenty-seven families crossed with a
+hundred and eighty-nine lineages and a pool of epithets, 1 323 species, and that
+is the right way to fill a book nobody could write by hand. It is the wrong way
+to make something frightening. A generated horror is a *category* of horror, and
+forty-nine wendigos with rolled colours and rolled sizes is a weather condition
+rather than an event. So `AnimalRegistry.build` skips the three
+`hostile()` families and appends `Mutants.species()` instead.
+
+They are ordinary `AnimalDef`s from that point on: the guide pages them, a
+texture pack redresses them, the wire names them, `AnimalSkins` paints them. A
+mutant is a page in the book like any other page, which is exactly what makes
+walking up to one worth doing.
+
+### Four filters, and only one of them is a dice roll
+
+1. **Region** — three biomes each, above, and no two of them share one. Eleven
+   of the twenty biomes have nothing in them at all.
+2. **Hour** — and this one is a *hard* edge, which nothing else in the game has.
+   `Activity.activityAt` never quite returns zero on purpose (a nocturnal
+   warbler disturbed at noon does move, and a page nobody can finish is a bad
+   page). `AnimalDef.encounterWeight` returns a flat zero for a hostile species
+   outside its hours, so "the taiga is safe until dark" is true rather than
+   nearly true, and a player can plan a day around it.
+3. **The world's state**, in `WatchGame.populate`, which is not about odds at
+   all: at most **one** alive anywhere, and a **ten-minute** cooldown after one
+   is put down — so walking away from a wendigo cannot be answered by the next
+   spawn tick handing you another, which would read as it teleporting.
+4. **`Rarity.MYTHIC`**, last, because it is the one that matters least and the
+   one that was got wrong.
+
+### The frequency was the wrong lever, and measuring said so
+
+The obvious reading of "a tier above legendary" is a vanishing frequency, and
+0.0006 — a twentieth of a legendary — is what this was built with. Then it was
+measured. A biome holds two to five hundred species whose encounter weights sum
+to about a hundred and fifty, so that frequency comes out at **one pick in two
+hundred thousand**: fifty simulated minutes of night walking across four seeds,
+about 2 300 spawns with 44% of them on mutant ground, met nothing at all. On
+that setting a player meets a mutant about once every three thousand hours,
+which is a feature that does not exist.
+
+It is at **0.30** now — roughly one pick in five hundred — and the tier's job is
+correspondingly smaller than it looked: *given* that you are on one of three
+biomes out of twenty, in the right hour band, with nothing else alive and the
+cooldown spent, how soon. The rarity comes from the other three filters. Half an
+hour of walking the right country at the right hour is about right, and it is
+deliberately rarer than the cooldown so meetings are not metronomic.
+
+Measured after the change, on fifty-minute night walks: one seed met two, two
+met one, one met none; the day walks met nothing on any seed, which is the hard
+hour edge doing its job.
+
+### And the spawn ring had to come from the creature, not from a constant
+
+A fixed 90–140 m ring is the obvious way to say "you should see it coming", and
+it produced spawns that nothing came of: a wendigo notices at 78 m, so it
+arrived **outside its own senses**, wandered, and was left behind by a walker at
+4.4 m/s who never knew it was there. Two spawns in fifty minutes and not one
+second of being hunted.
+
+So `WatchGame.placeMutant` draws the distance from a band inside *that
+creature's* notice range, floored at 45 m — near enough that it takes an
+interest at once, far enough that a five-metre silhouette is seen first, and
+about ten seconds at a walk in which to decide what to do. The number that is a
+warning for one of the three is out of earshot for another, which is exactly
+what a constant cannot express.
+
+The ambusher is the exception and is placed the other way round: it is meant
+*not* to notice you at spawn, so it goes 45–63 m ahead within a ±28° cone of
+where its quarry is walking, and the encounter begins when they walk into it.
+(That cone had `atan2`'s two arguments the wrong way round at first, which put
+every ambusher exactly behind the person it was waiting for — a bug that
+presents identically to "ambushers never trigger". `MutantTest` now walks a
+night and asserts something finds somebody, which is the assertion neither of
+these two worlds could pass.)
+
+A mutant spawn also says one line into the log — the only spawn in the game that
+announces itself — because a player looking the other way when a wendigo walks
+out of the treeline otherwise gets no warning at all.
+
+### The models are bipeds, and nothing else is
+
+`AnimalModel` has five parameterised plans covering twenty-one builds: a heron
+and a sparrow are the same eleven boxes with different numbers. That is how you
+get a hundred animals that belong to one world, and it is exactly why the
+mutants cannot be a setting on it — something that should look *wrong* in a
+world cannot be drawn by the thing that world is drawn by.
+
+So `wendigo()`, `werewolf()` and `mirewraith()` are written box by box, they
+share no plan with anything, and each is the only species in its build. Every
+other model here stands a horizontal body on legs; these stand a torso on end
+with arms hanging off it, at four to six metres, which reads as not-an-animal
+from across a valley and before it has moved.
+
+**The arms are the front legs.** An upright thing needs two limbs that swing
+opposite the two it walks on, which is what `LEG_FL`/`LEG_FR` already are and
+how `WALK` and `RUN` already pose them. So a mutant's arms swing when it walks
+and pump when it runs with no new pose table at all. Using `WING_L`/`WING_R`
+would be the obvious reading of "arms" and is wrong: the wing poses fold
+themselves flat against the flank in half the states, which is right for a bird
+standing about and is amputation for anything else.
+
+One more thing came out of looking at them rather than at the code. The
+mirewraith was first built as a barrel wider than the arms hanging beside it,
+with near-black limbs (`detail` is the `LIMB` and `HARD` colour) on a dark green
+body — and at any distance, at night, in the biomes it lives in, all four of its
+arms vanished into its own trunk and the silhouette was a slab. A waist narrower
+than the shoulders above it, and pale bloated limbs against the drowned green,
+are what turn four dangling arms into something a player can see are four
+dangling arms. Both are also what the creature is, which is usually how that
+goes.
+
+`AnimState` gained a tenth state, `STRIKE`, rather than the mutants special-casing
+one: ten states are the same contract with Blockbench that nine were — a model
+that supplies a `strike` clip gets it, one that does not falls back to the
+procedural pose, and the three placeholders are posed by the same table as the
+wrens.
+
+### Health (`watch/WatchPlayer`)
+
+A second resource, and the first that can end a walk. Ninety seconds from empty,
+six seconds of delay after the last blow, and no medicine, no bandage, no
+crafting tree ending in a poultice. What it measures is how many more seconds
+you can afford to be in front of the thing.
+
+It regenerates **without** being tied to stillness, which was the obvious
+flourish and is the wrong one: holding still is what makes animals come to you,
+and making it also the way to heal would turn the game's one voluntary patient
+verb into a chore performed after every chase. You heal while walking home.
+
+The bar goes out for the whole party, not only its owner: seeing that somebody
+else is on a third is how eight people spread over a valley learn that one of
+them has walked into something.
+
+### Stillness does not work on them, and that is the point
+
+`Animal.hunt` is a separate four-state loop reached by the first branch of
+`step`, not a clause inside `decide`. A mutant has no flush distance, no lure it
+comes to, no trust, and no ALERT — it has decided.
+
+The load-bearing difference is one method. Every other question an animal asks
+about people goes through `disturbanceAt`, which is not distance but *loudness*:
+a settled player counts as three times further away than they are. That is the
+approach mechanic, and it must not apply here — if it did, the way to be safe
+from a wendigo would be to stand still in front of it, and the single thing this
+game asks a player to do would become the thing that kills them. So
+`nearestQuarry` is the plain distance. Nothing you do about your footsteps
+changes the answer; where you are standing is the answer.
+
+There is a test that stands a player perfectly still in a clearing whose
+`disturbanceAt` returns "nobody, at any distance", and asserts that the wendigo
+comes anyway.
+
+### Dying drops the bag (`watch/Spill`)
+
+Death has to cost something or the three of them are a light show. It must not
+cost anything *permanent*, because this is a game about picking things up and a
+satchel deleted by a bad thirty seconds in the dark is half an afternoon deleted
+with it.
+
+So it drops. Everything you were carrying is in one heap at the place it
+happened, anybody can pick it up (a friend fetching your bag off the fen while
+you take the long way round is the best thing this feature does), and nothing
+decays — a save reopened a week later still has it. The penalty is the walk
+back, and it is a penalty made of the thing the game is already about: walking
+somewhere you know for a fact there is something dangerous.
+
+`Spill` is **stored** state, unlike `Litter`, and the difference is worth being
+explicit about. A piece of litter is a function of the cell it is in; both ends
+of a connection derive it and only "who has taken what" travels. A spill is a
+thing that *happened* — there is no seed from which "Kara died at the ford with
+eleven blackberries" can be derived — so it is in the save and it rides the world
+sync beside the grove and the boats.
+
+A heap is **first** in `WatchGame.pickTarget`, above the bushes and the boats and
+everything else the key can reach. It was fourth, and a test that walked somebody
+back to their own satchel got a handful of fruit off the tree beside it — which
+is the whole feature failing at the last step. It costs nothing to put first:
+there is usually no spilled satchel anywhere in the world, and its reach is
+2.6 m against the key's 4.5, so it only wins when you are standing on one.
+
+There is no death screen and no timer. You stand up at the spawn point with a
+long walk ahead of you, which is punishment enough.
+
+### How a respawn reaches the client
+
+The client is authoritative about where it is standing — it sends a position and
+the host records it — so the host **cannot** move somebody by writing a position
+into the snapshot: the next `move` would put the old one straight back. A "you
+have been moved" message would work and would have to be acknowledged, resent
+when lost and ignored when duplicated.
+
+Instead `WatchPlayer` publishes a **respawn counter** in every snapshot beside
+its position, and a client that sees its own number go up teleports to the
+position in that same snapshot. Lost packets do not matter (the next snapshot
+carries it), duplicates do not matter (the number is unchanged), and a client
+that joins late is already in the right place. `WatchScene.syncVitals` is the
+one frame that acts on it, and it also ends the boat, the glass, the panel and
+the tracks — a walker at the spawn point still rowing a boat four hundred metres
+away would be the obvious bug.
+
+### Summoning one on purpose
+
+Every filter in §"Four filters" is working correctly when it refuses to produce
+a mutant, which leaves anybody testing the three of them with nothing to do but
+walk a taiga at night and wait. So debug mode gained the row its own class note
+had predicted years of features ago — "a spawn" is the first example it gives of
+something the satchel lens cannot reach — and it cost what that note says it
+should: one row in `Debug.Power`, and one `if (player.debugging())` in
+`WatchGame.summon`.
+
+**K, in debug mode, cycles the three.** Press it once for a wendigo, again for a
+werewolf, again for a mirewraith, and round. One key rather than three because
+two of three bindings would be wrong most of the time, and a cycle rather than a
+random pick because the whole use of the thing is looking at the one you are
+working on.
+
+It lands twenty metres ahead, on the ground, facing you. Twenty is taken from
+the creatures' own senses rather than chosen for the view: the shortest notice
+range of the three is the mirewraith's twenty-two, so a summon is something that
+*starts happening* rather than a statue to walk around.
+
+**It asks none of the four filters** — not the region, not the hour, not the cap
+of one alive, not the cooldown. That is the feature and not a shortcut: a tester
+standing in a desert at noon needs all four out of the way at once, and each of
+them refusing is each of them working. The verb summons any species in the
+registry, because the code is identical either way and a restriction that exists
+only to restrict is one more rule to explain; what makes it a *mutant* feature is
+which keys the walk offers, which is the client's decision. A heron you can find
+by walking to a marsh.
+
+**The key is not on the controls screen, and `WATCH_MAP` is** — which looks
+inconsistent and is the point. A map is a game verb behind a gate that will one
+day lift, so it is listed where a player will find it the day it stops being
+special. Summoning a wendigo is never going to be a player verb, and advertising
+one that is always refused is the exact thing `Debug`'s class note says a menu
+item would do wrong. So K is read raw off the keyboard, the way the code itself
+is, and to anybody who has not typed 7799 it does nothing at all.
+
+### One thing that changed for everybody
+
+`AnimalPortrait` framed every subject so that its largest extent filled a fixed
+box, with the camera 1.7 of those boxes back. That had never been looked at
+because nothing in the registry was thin: measured across the book, a heron
+covered 3% of its own portrait, an elk 5%, a grizzly — the broadest thing in the
+game — 8%. Every page was a small figure in a large empty square.
+
+A gaunt biped made it obvious: a wendigo came out as a 2% sliver, which is a
+blank page with a scratch on it. The fix is not a special case for three species
+but the camera coming in to 1.25, so the subject fills its own portrait — about
+twice the area, for all 1 326 of them. The near-plane clipping this class was
+written to avoid is still a metre away at the closest corner.
+
+---
+
 ## 8. Tests
 
 `src/test/java/com/larsons/engine/watch/`
@@ -1588,7 +1892,37 @@ feature off mid-keystroke.
 * `WatchBiomesTest` — twenty biomes, unique keys, the seven named ones present,
   every one reachable from some climate.
 * `AnimalRegistryTest` — ≥ 1000 species, unique keys and names, deterministic
-  rebuild, rarity and biome coverage, tameable subset non-empty.
+  rebuild, rarity and biome coverage, tameable subset non-empty. Its two
+  per-family invariants ("at least twenty of each", "at least six colours") are
+  scoped to the *generated* families: a hostile family holding twenty species
+  would be the exact failure `Mutants` exists to prevent.
+* `MutantTest` — the three of them, end to end. **That there are three**: hostile
+  families are one species each rather than forty-nine, nothing else in the book
+  hunts anybody, they are mythic and worth five legendaries. **That the wood is
+  safe**: no two share a biome, most of the world has none, a mutant is offered
+  at a flat zero outside its own hours while an ordinary species keeps its soft
+  edge at every hour, at most one is alive across four thousand ticks of a
+  four-player walk, and fewer than one animal in fifty a walking player meets is
+  one. **That they differ**: three powers, three body plans, three colours,
+  three damages, each between three and eight blows from a full bar, and each
+  giving up further out than it notices. **That they hunt**: a wendigo sixty
+  metres from a player who is standing perfectly still — in a world whose
+  `disturbanceAt` says nobody is anywhere near — closes twenty metres in thirty
+  seconds, lands blows, is drawn mid-swing, and gives up when the player is
+  properly clear; a wren in the same clearing hunts nobody. **That health is a
+  bar**: nothing heals inside the delay, it comes back slowly afterwards, and it
+  fills. **That dying costs the walk back**: the satchel is dropped where they
+  fell rather than deleted, they wake whole at the spawn point with the respawn
+  counted once, gathering it two hundred metres away is refused and gathering it
+  at the heap gives everything back, an empty bag leaves no heap, and a heap
+  survives a save. **That a tester can get one on demand**: a summon is refused
+  without the code and granted with it, an unknown species summons nothing, all
+  three arrive at midday twenty metres out standing on the ground with the cap
+  and the cooldown ignored, and what arrives is hunting rather than posing.
+  `DebugModeTest` adds the other end of that, through the real scene: K does
+  nothing before the code is typed, and three presses after it produce three
+  different mutants — which is the only place the raw key binding and the cycle
+  can be tested at all, since neither exists anywhere else.
 * `AnimalModelTest` — every species builds a model with boxes and a skin; every
   animation state resolves to a pose.
 * `BlockbenchTest` — a small `.bbmodel` parses to the right boxes, bones and

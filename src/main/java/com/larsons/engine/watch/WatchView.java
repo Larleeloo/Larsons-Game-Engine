@@ -39,17 +39,27 @@ public final class WatchView {
      * @param debug whether they are in {@link Debug} mode; on this player's own
      *              row it is what turns their satchel bottomless on this side
      *              of the wire
+     * @param health how much of their bar is left, {@code 1} whole to {@code 0}
+     *              down — drawn for everybody, because a party spread over a
+     *              valley finds out that one of them has met something by
+     *              seeing it
+     * @param respawns how many times they have been killed. See
+     *              {@link WatchPlayer#respawns()}: this is how a respawn
+     *              reaches the screen that has to act on it
      */
     public record Walker(int id, String name, double x, double y, double z,
                          double yaw, double pitch, double stillness, boolean crouching,
                          boolean submerged, double breath, long boatId, double glass,
-                         boolean debug) {
+                         boolean debug, double health, int respawns) {
 
         /** Whether they are rowing rather than walking. */
         public boolean inBoat() { return boatId != 0; }
 
         /** Whether they have a glass to their eye. */
         public boolean glassing() { return glass > 1.02; }
+
+        /** Whether they are hurt at all. */
+        public boolean hurt() { return health < 0.999; }
     }
 
     /** One animal, as drawn. */
@@ -100,6 +110,15 @@ public final class WatchView {
     private Weather weather = new Weather(0);
     private Boats boats = new Boats(0);
     private Shops shops = new Shops(0);
+
+    /**
+     * The satchels lying where somebody died.
+     *
+     * <p>Beside the grove and the buildings rather than beside the litter,
+     * because that is what it is: world state the host owns, sent whole on the
+     * world sync. See {@link Spill}.
+     */
+    private final Spill spills = new Spill();
 
     /** How many lines of party chatter are kept. */
     private static final int LOG_LIMIT = 40;
@@ -174,6 +193,9 @@ public final class WatchView {
     /** Every map anybody drew, and every board they went up on. */
     public Cartography maps() { return cartography; }
 
+    /** Every satchel lying where somebody died. */
+    public Spill spills() { return spills; }
+
     /** The last few things that happened. */
     public List<String> log() { return List.copyOf(log); }
 
@@ -247,7 +269,8 @@ public final class WatchView {
             walkers.add(new Walker(player.id(), player.name(), player.x(), player.y(),
                     player.z(), player.yaw(), player.pitch(), player.stillness(),
                     player.crouching(), player.submerged(), player.breath(),
-                    player.boatId(), player.glassPower(), player.debugging()));
+                    player.boatId(), player.glassPower(), player.debugging(),
+                    player.health(), player.respawns()));
         }
         creatures.clear();
         for (Animal animal : game.animals()) {
@@ -276,6 +299,7 @@ public final class WatchView {
         crops.load(game.crops().toMap());
         structure.load(game.structure().toMap());
         cartography.load(game.maps().toMap());
+        spills.load(game.spills().toMap());
         takenLitter.clear();
         takenLitter.addAll(game.takenLitter());
     }
@@ -301,7 +325,8 @@ public final class WatchView {
                     WatchJson.num(row, "st", 1), WatchJson.bool(row, "c", false),
                     WatchJson.bool(row, "uw", false), WatchJson.num(row, "air", 1),
                     WatchJson.big(row, "boat", 0), WatchJson.num(row, "gl", 1),
-                    WatchJson.bool(row, "dbg", false)));
+                    WatchJson.bool(row, "dbg", false), WatchJson.num(row, "hp", 1),
+                    WatchJson.integer(row, "rs", 0)));
         }
         Walker me = self();
         satchel.setBottomless(me != null && me.debug());

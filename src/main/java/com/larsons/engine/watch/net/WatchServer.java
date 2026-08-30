@@ -74,6 +74,14 @@ public final class WatchServer implements WatchGame.Sink {
     private final ConcurrentLinkedQueue<Request> pendingRequests = new ConcurrentLinkedQueue<>();
     private final AtomicInteger nextPlayerId = new AtomicInteger(1);
 
+    /**
+     * The respawn count last seen for each player, so a death can be noticed.
+     *
+     * <p>Tick-thread state, like everything else here that is not a queue. See
+     * {@link #announceDeaths}.
+     */
+    private final Map<Integer, Integer> respawnsSeen = new java.util.HashMap<>();
+
     private record Request(Connection conn, Map<String, Object> message) {}
 
     public WatchServer(WatchGame.Config config) {
@@ -185,6 +193,7 @@ public final class WatchServer implements WatchGame.Sink {
                 drainRequests();
                 dropSilent(now);
                 game.tick(1.0 / WatchProto.TICK_RATE);
+                announceDeaths();
                 broadcastState();
                 tick++;
             } catch (RuntimeException e) {
@@ -227,6 +236,38 @@ public final class WatchServer implements WatchGame.Sink {
         }
     }
 
+    /**
+     * Push the consequences of anybody having been killed during that tick.
+     *
+     * <p>A death happens deep inside the simulation — an animal decides it is
+     * close enough, the game takes the last of somebody's health — and two
+     * things it changes are on channels that do not go out every tick: the
+     * victim's satchel is now empty (a private {@code bag}) and their heap is
+     * now on the ground (the world sync). Neither would otherwise reach anybody
+     * for up to five seconds, which is five seconds of a client drawing a bag
+     * its owner no longer has and no satchel where they fell.
+     *
+     * <p>Noticed rather than announced, by watching the respawn counter each
+     * player already publishes. The alternative is a callback out of the game
+     * into the server, and {@link WatchGame} deliberately reports what happened
+     * through its {@link WatchGame.Sink} and its state rather than by knowing
+     * who is listening.
+     */
+    private void announceDeaths() {
+        boolean died = false;
+        for (WatchPlayer player : game.players()) {
+            int seen = respawnsSeen.getOrDefault(player.id(), -1);
+            if (seen == player.respawns()) continue;
+            respawnsSeen.put(player.id(), player.respawns());
+            // A player joining for the first time arrives with whatever count
+            // their save left them; that is not a death that happened here.
+            if (seen < 0) continue;
+            died = true;
+            bagChanged(player.id(), null);
+        }
+        if (died) sendWorld();
+    }
+
     /** The first player to have joined; whoever is "the host" for the lobby's list. */
     private int hostId() {
         for (WatchPlayer p : game.players()) return p.id();
@@ -258,7 +299,7 @@ public final class WatchServer implements WatchGame.Sink {
     private void sendWorld() {
         toAll(WatchProto.world(game.grove().toMap(), game.crops().toMap(),
                 game.structure().toMap(), game.maps().toMap(), game.boats().toMap(),
-                game.takenLitter()));
+                game.spills().toMap(), game.takenLitter()));
     }
 
     // --- requests -------------------------------------------------------------------
@@ -330,7 +371,11 @@ public final class WatchServer implements WatchGame.Sink {
                             // Something taken off the floor has to go out too:
                             // every client is drawing it, and none of them can
                             // work out on its own that it is gone.
-                            || target.kind() == WatchGame.Pickable.Kind.GROUND)) {
+                            || target.kind() == WatchGame.Pickable.Kind.GROUND
+                            // …and a dropped satchel most of all: it is the
+                            // largest thing on the ground and somebody may be
+                            // walking across a valley to it.
+                            || target.kind() == WatchGame.Pickable.Kind.SATCHEL)) {
                         sendWorld();
                     }
                 }
@@ -339,6 +384,17 @@ public final class WatchServer implements WatchGame.Sink {
             case "log" -> {
                 String got = game.turnOverLog(id);
                 if (got != null) bagChanged(id, "Found " + nameOf(got));
+            }
+
+            case "gather" -> {
+                // A whole dropped satchel, taken in one gesture. Both channels
+                // have to go out: the taker's bag is fuller and the heap is
+                // gone from everybody's ground.
+                String line = game.gather(id);
+                if (line != null) {
+                    bagChanged(id, line);
+                    sendWorld();
+                }
             }
 
             case "lure" -> {
@@ -422,6 +478,16 @@ public final class WatchServer implements WatchGame.Sink {
                 // rather than on the next thing that happens to be picked up.
                 game.debug(id, WatchJson.str(message, "c", ""));
                 bagChanged(id, null);
+            }
+
+            case "summon" -> {
+                // Nothing is sent back and nothing needs to be: an animal is a
+                // snapshot field, so a summoned one is on every client's screen
+                // on the next tick like any other. The host refuses anybody not
+                // in debug mode — see WatchGame.summon — and a refusal is
+                // silence, which is the same answer every other debug-gated verb
+                // gives a client that should not have asked.
+                game.summon(id, WatchJson.str(message, "sp", ""));
             }
 
             case "cast" -> game.castRod(id);

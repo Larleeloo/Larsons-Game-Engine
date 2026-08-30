@@ -22,6 +22,7 @@ import com.larsons.engine.watch.Lure;
 import com.larsons.engine.watch.Recipes;
 import com.larsons.engine.watch.Satchel;
 import com.larsons.engine.watch.Shops;
+import com.larsons.engine.watch.Spill;
 import com.larsons.engine.watch.Spotlight;
 import com.larsons.engine.watch.Spyglass;
 import com.larsons.engine.watch.Trading;
@@ -34,6 +35,7 @@ import com.larsons.engine.watch.Weather;
 import com.larsons.engine.watch.build.BuildPiece;
 import com.larsons.engine.watch.build.Structure;
 import com.larsons.engine.watch.life.AnimalModels;
+import com.larsons.engine.watch.life.Mutants;
 import com.larsons.engine.watch.net.WatchSession;
 import com.larsons.engine.watch.render.BoardImage;
 import com.larsons.engine.watch.render.BoatModel;
@@ -434,6 +436,58 @@ public class WatchScene extends AbstractScene {
     /** How much air is left locally, so the meter is smooth between snapshots. */
     private double breath = 1;
 
+    /**
+     * How much health is left, eased toward whatever the host last said.
+     *
+     * <p>Eased for {@link #breath}'s reason and one of its own: a bar that
+     * stepped down by a fifth on the frame a snapshot arrived would read as a
+     * rendering glitch, and a bar that slides down over a third of a second
+     * reads as being hit. The number the game acts on is always the host's; this
+     * is only what is drawn.
+     */
+    private double health = 1;
+
+    /**
+     * How much of the red is still on the screen, {@code 1} on the blow down to
+     * {@code 0}.
+     *
+     * <p>The one piece of feedback in this game that is not a line of text, and
+     * the only one that had to be: a player being hit from behind by something
+     * they have not seen needs to know it in the frame it happens, and the log
+     * in the bottom right is the last place their eye is.
+     */
+    private double hurtFlash;
+
+    /** How long a blow's flash lasts, in seconds. */
+    private static final double HURT_FLASH_SECONDS = 0.55;
+
+    /**
+     * How many of a dropped satchel's items are drawn around it.
+     *
+     * <p>Six. A satchel can hold forty kinds of thing and drawing forty of them
+     * would be a bonfire rather than a bag; six is enough to tell one heap from
+     * another across a clearing, which is all the picture has to do — the
+     * highlight under the crosshair says whose it is and how much is in it.
+     */
+    private static final int SPILL_ITEMS = 6;
+
+    /**
+     * The respawn count this screen has already acted on.
+     *
+     * <p>See {@link WatchPlayer#respawns()}: the host cannot move a client by
+     * writing a position into the snapshot, because the client is the authority
+     * on where it is standing and would simply send the old position back. So a
+     * death arrives as this number going up, and the frame that notices
+     * teleports to the position in that same snapshot.
+     */
+    private int respawnsSeen = -1;
+
+    /** How long the "you died" notice stays up, in seconds. */
+    private static final double DEATH_NOTICE_SECONDS = 5;
+
+    /** How much of that is left. */
+    private double deathNotice;
+
     /** The boat being rowed, or {@code 0}. */
     private long boatId;
 
@@ -703,6 +757,13 @@ public class WatchScene extends AbstractScene {
         airPose = 0;
         settle = 0;
         drawnAt = -1;
+        // The bar starts whole and the respawn counter starts unread, so the
+        // first snapshot adopts whatever the save says without teleporting
+        // anybody. See syncVitals.
+        health = 1;
+        hurtFlash = 0;
+        deathNotice = 0;
+        respawnsSeen = -1;
         if (session == null) return;
 
         // Solo: join our own game. Joining is what resumes a save — a walker a
@@ -833,7 +894,16 @@ public class WatchScene extends AbstractScene {
         // "7799 steps to the ford" on a map turns debug mode off underneath the
         // player, which is the one thing that would take the map screen away
         // while they were using it.
-        if (!typingText()) readCode(dt, input);
+        if (!typingText()) {
+            readCode(dt, input);
+            // Anywhere in the walk, panels included, for the code's own reason:
+            // somebody testing a mutant against the satchel screen is exactly
+            // the person who wants one. And behind `debugging()`, so K is an
+            // ordinary unbound key to everybody else.
+            if (debugging() && input.isKeyJustPressed(java.awt.event.KeyEvent.VK_K)) {
+                summonMutant();
+            }
+        }
 
         if (panel != Panel.NONE) {
             Pointer.restore();
@@ -857,6 +927,8 @@ public class WatchScene extends AbstractScene {
             if (session == null) return;
             session.update(dt);
             syncClock();
+            // Being mauled does not stop for a satchel screen. See syncVitals.
+            syncVitals(dt);
             return;
         }
 
@@ -914,6 +986,7 @@ public class WatchScene extends AbstractScene {
         }
         session.update(dt);
         syncClock();
+        syncVitals(dt);
         noticePickups();
         // After the sync, because the sync is what a map arrives in.
         awaitMap(dt);
@@ -1045,6 +1118,92 @@ public class WatchScene extends AbstractScene {
         } else {
             clock.tick(0);
         }
+    }
+
+    /**
+     * Take the host's word for how hurt we are, and act on a death.
+     *
+     * <p>Two things happen here and they are both consequences of the same rule:
+     * <b>the host owns the health bar and this screen owns the position.</b>
+     *
+     * <p>The bar is simply read and eased toward — nothing on this side may
+     * decide it, because what spends it is a mutant's blow and a mutant lives
+     * on the host. A drop since the last frame is a blow that landed, which is
+     * what puts the red on the screen; the flash comes from noticing the fall
+     * rather than from a message, so it works identically alone and online with
+     * no verb of its own.
+     *
+     * <p>The position is the other half. The host <em>cannot</em> move us by
+     * writing a position into the snapshot — {@link #sendMove} would put the old
+     * one straight back — so a respawn arrives as a counter, and this is the
+     * frame that acts on it. See {@link WatchPlayer#respawns()}.
+     *
+     * <p>Called from both branches of {@link #update}, panel open or not: a
+     * player reading a recipe while something walks up behind them still gets
+     * hit, still dies, and still has to be standing at the spawn afterwards.
+     */
+    private void syncVitals(double dt) {
+        hurtFlash = Math.max(0, hurtFlash - dt / HURT_FLASH_SECONDS);
+        deathNotice = Math.max(0, deathNotice - dt);
+        WatchView view = view();
+        if (view == null) return;
+        WatchView.Walker me = view.self();
+        if (me == null) return;
+
+        if (me.health() < health - 0.004) hurtFlash = 1;
+        // Toward rather than to. A tenth of a second of slide is the difference
+        // between "the bar moved" and "the bar glitched"; a respawn's jump back
+        // to full is not worth easing, so it is taken whole.
+        health = me.health() > health
+                ? me.health()
+                : health + (me.health() - health) * Math.min(1, dt * 9);
+
+        if (respawnsSeen < 0) {
+            // The first snapshot of a session: adopt whatever the count is
+            // without teleporting anybody. A save that remembers three deaths
+            // is not a fourth one happening now.
+            respawnsSeen = me.respawns();
+            return;
+        }
+        if (me.respawns() == respawnsSeen) return;
+        respawnsSeen = me.respawns();
+        respawnTo(me);
+    }
+
+    /**
+     * Stand back up at the spawn, wherever the host says that is.
+     *
+     * <p>Everything the walk was in the middle of has to end with it: a glass at
+     * the eye, a boat under you, a panel open, a jump half-finished. Leaving any
+     * of them would put the player at the spawn point still rowing a boat that
+     * is four hundred metres away.
+     */
+    private void respawnTo(WatchView.Walker me) {
+        px = me.x();
+        py = me.y();
+        pz = streamer != null ? streamer.groundAt(px, py) : me.z();
+        smoothedGround = pz;
+        dive = 0;
+        climb = 0;
+        airborne = false;
+        settle = 0;
+        boatId = 0;
+        breath = 1;
+        health = 1;
+        hurtFlash = 0;
+        deathNotice = DEATH_NOTICE_SECONDS;
+        glass.tick(0, false, 1);
+        panel = Panel.NONE;
+        // The ground under the spawn may not be built — it can be a kilometre
+        // from wherever the walk had got to — and a frame drawn before it is
+        // there is a frame of hanging in the air over an empty world.
+        if (streamer != null) streamer.loadNow(px, py, 1);
+        // Tracks are a record of where this walker has been, and they must not
+        // draw a line from the fen to the spawn point.
+        tracks.clear();
+        trackMesh = Mesh.empty(0, 0, 0);
+        trackFromX = Double.NaN;
+        say("You were killed — your satchel is where you fell");
     }
 
     /**
@@ -1194,6 +1353,53 @@ public class WatchScene extends AbstractScene {
             }
         }
     }
+
+    /**
+     * K, in debug mode: put the next of the three mutants in front of us.
+     *
+     * <p><b>A raw key rather than a {@link GameAction}</b>, and the difference
+     * from {@code WATCH_MAP} is the whole argument. A map is a game verb behind
+     * a gate that will one day lift, so it is on the controls screen where a
+     * player will find it the day it stops being special. Summoning a wendigo is
+     * never going to be a player verb: putting "Summon Mutant" on the controls
+     * screen would advertise a thing that is always refused, which is exactly
+     * what {@link Debug}'s class note says a menu item would do wrong. So it is
+     * read here, off the keyboard, the way the code itself is — and to anybody
+     * who has not typed {@link Debug#CODE}, K does nothing at all.
+     *
+     * <p><b>One key, and it cycles.</b> Three keys for three creatures would be
+     * three bindings to remember and two of them wrong most of the time; a key
+     * that summons a <em>random</em> one is a key you press five times to see
+     * the one you are working on. Round the three in order, and the log line
+     * says which arrived.
+     *
+     * <p>Which one is next is kept on this side rather than sent, because it is
+     * a fact about the keyboard in front of one person — see
+     * {@link com.larsons.engine.watch.net.WatchProto#summon}.
+     */
+    private void summonMutant() {
+        List<Mutants.Kind> kinds = Mutants.all();
+        Mutants.Kind kind = kinds.get(Math.floorMod(summonNext++, kinds.size()));
+        String key = kind.key();
+        if (session.local() != null) {
+            // Solo there is no sink for the host's own chat, so the line is
+            // raised here — the same arrangement readCode uses, and for the same
+            // reason: a debug verb that appears to do nothing is worse than none.
+            if (session.local().summon(session.selfId(), key) != null) {
+                picked("Summoned a " + kind.def().name());
+            }
+        } else if (session.client() != null) {
+            // The host answers by putting it in the next snapshot, or by
+            // refusing in silence. Saying anything here would risk saying the
+            // opposite of what happened, which is readCode's rule too.
+            session.client().sendSummon(key);
+        }
+    }
+
+    /**
+     * Which of the three the next press of K produces. See {@link #summonMutant}.
+     */
+    private int summonNext;
 
     /** Whether this player is in debug mode, as the last snapshot has it. */
     private boolean debugging() {
@@ -1631,6 +1837,16 @@ public class WatchScene extends AbstractScene {
     private WatchGame.Pickable guessReach() {
         WatchView view = view();
         double reachLimit = WatchGame.REACH;
+
+        // First, exactly as on the host — see WatchGame.pickTarget, where the
+        // argument for the order is set out. The two walks have to agree or the
+        // ring says "blackberry" and the key gathers a satchel.
+        Spill.Pile pile = view.spills().nearest(px, py, Spill.REACH);
+        if (pile != null) {
+            return new WatchGame.Pickable(WatchGame.Pickable.Kind.SATCHEL,
+                    String.valueOf(pile.id()), pile.label(), pile.x(), pile.y(),
+                    pile.z() + 0.25, Spill.RADIUS);
+        }
 
         WatchChunk chunk = streamer.chunkAt(px, py);
         if (chunk != null) {
@@ -2765,6 +2981,10 @@ public class WatchScene extends AbstractScene {
             case PAUSED -> drawPaused(target);
             case NONE -> { }
         }
+        // Last, and deliberately over the panels as well: being hit while
+        // reading a recipe is still being hit, and a satchel screen must not be
+        // the thing that hides the only warning this game gives.
+        drawHurt(target);
     }
 
     /**
@@ -2975,6 +3195,31 @@ public class WatchScene extends AbstractScene {
                 // metres away, because it decides what turns up at it.
                 ItemModel.item(mesh, lure.food(), lure.x() - ox, lure.y() - oy,
                         lure.z() + 1.20, 1.1, drawClock * LURE_SPIN);
+            }
+        }
+
+        // Every satchel somebody has dropped by dying, within sight. In the
+        // moving mesh for the litter's reason below, turned up a notch: a heap
+        // appears the instant somebody is killed and is gone the instant
+        // somebody gathers it, and neither event has anything to do with a
+        // chunk's level of detail changing.
+        //
+        // Drawn as the things that are actually in it, in a ring, with a sack
+        // in the middle: an anonymous crate would be findable and would tell
+        // you nothing, and being able to see your own spyglass lying on the fen
+        // from thirty metres away is the whole reason to walk back for it.
+        for (Spill.Pile pile : view.spills().near(px, py, litterRange + LITTER_RESTEP)) {
+            double sz = streamer.groundAt(pile.x(), pile.y());
+            WatchMaterials.uv(WatchMaterial.PLANK, uv);
+            Shapes.box(mesh, pile.x() - ox, pile.y() - oy, sz + 0.16, 0.24, 0.24, 0.16,
+                    drawClock * 0.12, uv, WatchMaterials.shade(WatchMaterial.DARK_BARK));
+            int shown = 0;
+            for (String key : pile.items().keySet()) {
+                if (shown >= SPILL_ITEMS) break;
+                double a = shown * Math.PI * 2 / SPILL_ITEMS + drawClock * 0.25;
+                ItemModel.item(mesh, key, pile.x() - ox + Math.cos(a) * 0.34,
+                        pile.y() - oy + Math.sin(a) * 0.34, sz + 0.05, 1.0, a);
+                shown++;
             }
         }
 
@@ -3484,8 +3729,17 @@ public class WatchScene extends AbstractScene {
         for (WatchView.Walker walker : view.walkers()) {
             String label = walker.name()
                     + (walker.id() == view.selfId() ? " (you)" : "");
+            // Somebody else's health, as a fraction beside their name and only
+            // while they are hurt. A party spread over a valley finds out that
+            // one of them has walked into something this way and no other, and
+            // "Kara is on a third" is the sentence that turns three people
+            // watching birds into three people going to help.
+            if (walker.hurt()) {
+                label += "  " + Math.max(1, (int) Math.round(walker.health() * 100)) + "%";
+            }
             label(target, label, right - target.textWidth(label, HUD_FONT), row,
-                    HUD_FONT, walker.id() == view.selfId() ? HUD_ACCENT : HUD_DIM);
+                    HUD_FONT, walker.hurt() ? HUD_WARN
+                            : walker.id() == view.selfId() ? HUD_ACCENT : HUD_DIM);
             row += 18;
         }
 
@@ -3512,6 +3766,14 @@ public class WatchScene extends AbstractScene {
         // is full and always on screen is a bar nobody reads; one that appears
         // the moment you put your head under is one nobody can miss.
         if (breath < 0.999) drawBreath(target, barX, barY - 24, barW, barH);
+
+        // The health, above both — and by the same argument, only once
+        // something has taken some. This is the one bar in the game that can
+        // run out for good, so it is drawn wider and brighter than the other
+        // two the moment it is not full, and it stays up the whole time it is
+        // refilling: the ninety seconds of walking home is exactly when a
+        // player wants to know how far along it is. See WatchPlayer.health.
+        if (health < 0.999) drawHealth(target, barY - (breath < 0.999 ? 48 : 24));
 
         // Bottom left: the satchel, briefly.
         drawSatchelStrip(target, view.satchel(), pad, viewportHeight - pad);
@@ -3545,7 +3807,7 @@ public class WatchScene extends AbstractScene {
             // Only once the mode is on, because it is the only verb on this
             // line that would otherwise refuse — and a hint for a key that does
             // nothing is worse than no hint. See Debug.Power.MAPS.
-            if (debugging()) keys += " · M map";
+            if (debugging()) keys += " · M map · K summon";
             label(target, keys, pad, viewportHeight - pad - 22, HUD_SMALL,
                     new Color(150, 168, 152));
         }
@@ -3593,6 +3855,19 @@ public class WatchScene extends AbstractScene {
                 + renderer.culledTriangles() + " culled");
         lines.add("alive  " + view.creatures().size() + " animals · "
                 + view.lures().size() + " feeders · " + view.walkers().size() + " walking");
+        // What is hunting, and what is lying on the ground because it caught
+        // somebody. Both are rare enough that these two numbers are zero nearly
+        // always, and are exactly what somebody testing the mutants wants when
+        // they are not. See Mutants.
+        WatchView.Creature hunting = null;
+        for (WatchView.Creature creature : view.creatures()) {
+            if (creature.def().hostile()) hunting = creature;
+        }
+        lines.add("hunted  " + (hunting == null ? "nothing about"
+                : hunting.def().name() + " · "
+                        + Math.round(Math.hypot(hunting.x() - px, hunting.y() - py))
+                        + " m · " + hunting.state().key())
+                + " · " + view.spills().count() + " dropped");
         lines.add("tracks  " + tracks.prints() + " prints · " + tracks.trailCount()
                 + " trails · " + trackMesh.triangleCount() + " tri · "
                 + Math.round(tracks.strengthAt(px, py) * 100) + "% underfoot");
@@ -3713,6 +3988,91 @@ public class WatchScene extends AbstractScene {
                     HUD_SMALL, cardinal ? HUD_INK : HUD_DIM);
         }
         target.fillRect(x + width / 2, y - height + 4, 1, height, HUD_ACCENT);
+    }
+
+    /**
+     * The health bar, and the state of the wound under it.
+     *
+     * <p>Wider and taller than the stillness and breath bars, and its own
+     * colour, because the three of them live in one column at the bottom of the
+     * screen and a player glancing down at a dead run has to be able to tell
+     * which is which without reading a word. Green while there is plenty, amber
+     * on the way down, red at the end.
+     *
+     * <p>The line under it is the one number that is not on the bar: whether it
+     * is coming back yet. {@link WatchPlayer#HEAL_DELAY} seconds after the last
+     * blow it starts refilling, and until then a player standing in a hollow
+     * counting to six wants to be told that is what they are doing.
+     */
+    private void drawHealth(DrawTarget target, int y) {
+        int width = 190, height = 9;
+        int x = viewportWidth / 2 - width / 2;
+        target.fillRect(x - 1, y - 1, width + 2, height + 2, new Color(0, 0, 0, 170));
+        Color ink = health > 0.6 ? new Color(126, 200, 122)
+                : health > 0.3 ? HUD_WARN : new Color(224, 96, 84);
+        target.fillRect(x, y, (int) (width * Math.max(0, health)), height, ink);
+        // A tick at each quarter, so "two more of those" is something a player
+        // can read off the bar rather than having to feel out.
+        for (int i = 1; i < 4; i++) {
+            target.fillRect(x + width * i / 4, y, 1, height, new Color(0, 0, 0, 120));
+        }
+        WatchView.Walker me = view() == null ? null : view().self();
+        boolean mending = me != null && me.health() < 1 && health > 0;
+        String text = mending ? "Health  ·  mending" : "Health";
+        label(target, text, x + width / 2 - target.textWidth(text, HUD_SMALL) / 2,
+                y - 5, HUD_SMALL, health > 0.3 ? HUD_DIM : HUD_WARN);
+    }
+
+    /**
+     * Red at the edges when something hits you, and a line across the middle
+     * when it kills you.
+     *
+     * <p>Every other thing that happens in this game is reported in the log in
+     * the bottom right, which is the correct place for it: nothing there is
+     * urgent. A blow from behind is the exception and the only one — a player
+     * looking at a bird has no way of knowing they are being hit unless the
+     * screen tells them where they are already looking.
+     *
+     * <p>A vignette rather than a full wash, so it never hides the thing that is
+     * about to hit you again.
+     */
+    private void drawHurt(DrawTarget target) {
+        if (hurtFlash > 0) {
+            double strength = hurtFlash * hurtFlash;
+            int bands = 7;
+            int thickness = Math.max(6, Math.min(viewportWidth, viewportHeight) / 22);
+            for (int i = 0; i < bands; i++) {
+                int alpha = (int) (strength * 46 * (1 - i / (double) bands));
+                if (alpha <= 0) continue;
+                Color wash = new Color(180, 24, 20, alpha);
+                int inset = i * thickness / bands;
+                int band = Math.max(1, thickness / bands);
+                target.fillRect(0, inset, viewportWidth, band, wash);
+                target.fillRect(0, viewportHeight - inset - band, viewportWidth, band,
+                        wash);
+                target.fillRect(inset, 0, band, viewportHeight, wash);
+                target.fillRect(viewportWidth - inset - band, 0, band, viewportHeight,
+                        wash);
+            }
+        }
+        if (deathNotice <= 0) return;
+        // And the notice, which says the two things a player needs after dying
+        // and cannot work out for themselves: where they are now, and that
+        // their things are still somewhere.
+        String head = "You were killed";
+        String body = "Your satchel is lying where you fell — it will wait for you";
+        int cy = viewportHeight / 2 - 70;
+        int width = Math.max(target.textWidth(head, TITLE_FONT),
+                target.textWidth(body, HUD_FONT)) + 44;
+        int x = viewportWidth / 2 - width / 2;
+        // Fading out over its last second, so it leaves rather than vanishing.
+        int alpha = (int) (Math.min(1, deathNotice) * 220);
+        target.fillRect(x, cy - 30, width, 66, new Color(28, 10, 10, alpha));
+        target.drawRect(x, cy - 30, width, 66, new Color(200, 90, 80, alpha));
+        label(target, head, viewportWidth / 2 - target.textWidth(head, TITLE_FONT) / 2,
+                cy - 4, TITLE_FONT, new Color(238, 176, 168));
+        label(target, body, viewportWidth / 2 - target.textWidth(body, HUD_FONT) / 2,
+                cy + 22, HUD_FONT, HUD_DIM);
     }
 
     /** The breath meter — blue while there is air, amber while there is not. */

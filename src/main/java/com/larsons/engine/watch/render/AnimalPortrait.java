@@ -84,6 +84,30 @@ public final class AnimalPortrait {
      */
     private static final double FRAMED_EXTENT = 2.0;
 
+    /**
+     * How far back the camera stands, in {@link #FRAMED_EXTENT}s.
+     *
+     * <p><b>Brought in from 1.7, because the pages were mostly background.</b>
+     * Measured across the book: a heron covered three per cent of its own
+     * portrait, an elk five, a grizzly — the broadest thing in the game — eight.
+     * Every one of them was a small figure in the middle of a large empty
+     * square, and the framing had never been looked at because nothing in the
+     * registry was thin enough to make it obvious.
+     *
+     * <p>The three mutants are. A gaunt biped is nearly all air: scaled so its
+     * <em>height</em> fills the framed extent, a wendigo is a sliver two per
+     * cent of the page wide, which is a blank page with a scratch on it. The
+     * answer is not a special case for three species — it is that the subject
+     * should fill its own portrait, which is now roughly twice the area it was
+     * for all thirteen hundred.
+     *
+     * <p>The floor on this number is {@link EyeCamera#NEAR}: at 1.25 the nearest
+     * corner of a framed subject is about 1.5 m from the eye and the near plane
+     * is at 0.8, so there is still most of a metre of margin before the clipping
+     * bug this class was written to avoid comes back.
+     */
+    private static final double FRAMED_DISTANCE = 1.25;
+
     private static void paint(DrawTarget target, AnimalDef def, int edge, int background) {
         AnimalModels.Loaded model = AnimalModels.of(def);
         Mesh measured = build(model, def, 1);
@@ -98,7 +122,7 @@ public final class AnimalPortrait {
         Mesh built = build(model, def, FRAMED_EXTENT / extent);
 
         double centreZ = (built.minZ() + built.maxZ()) / 2;
-        double distance = FRAMED_EXTENT * 1.7;
+        double distance = FRAMED_EXTENT * FRAMED_DISTANCE;
         double lift = FRAMED_EXTENT * 0.30;
 
         // Stand somewhere on a circle about the origin and look back at it.

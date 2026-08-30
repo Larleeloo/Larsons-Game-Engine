@@ -3,7 +3,8 @@ package com.larsons.engine.watch.life;
 import java.util.List;
 
 /**
- * The twenty-six body plans every animal in the world is built from.
+ * The twenty-seven body plans every animal in the world is built from — and, at
+ * the bottom of the file, the three it is hunted by.
  *
  * <p><b>A family is the half of a species that is shared.</b> It carries the
  * shape ({@link Build}), how the thing gets about ({@link Motion}), when it is
@@ -11,7 +12,7 @@ import java.util.List;
  * flushes, and which biomes it lives in. What it does not carry is a name, a
  * colour or a rarity — those come from the lineage and the epithet that
  * {@link AnimalRegistry} crosses it with, and that crossing is what turns
- * twenty-six rows into more than a thousand species.
+ * twenty-seven rows into more than a thousand species.
  *
  * <p><b>Why the lineages are here.</b> A lineage ("Finch", "Goshawk") is what
  * makes a species sound like a real animal rather than like a generated one,
@@ -20,6 +21,11 @@ import java.util.List;
  * hundred and eighty-two lineage names in this file is used once, which is in
  * turn what guarantees that no two species in the game share a name. There is a
  * test for it.
+ *
+ * <p><b>Three of these families are not like the others.</b> The last three
+ * rows are {@linkplain #hostile() hostile}: one species each, hand-written in
+ * {@link Mutants} rather than crossed with the epithet pool, and they hunt the
+ * people who came to watch them. Everything above them flees.
  */
 public enum AnimalFamily {
 
@@ -230,14 +236,53 @@ public enum AnimalFamily {
             Diet.NECTAR, 0.22, 0.88, 0xA88CE0, 0.28,
             biomes("amethyst_grove", "mushroom_hollow", "crystal_highlands"),
             lineages("Wisp", "Glimmerling", "Moonhare", "Crystal Stag", "Spore Drake",
-                    "Lantern Moth", "Dusk Sprite"));
+                    "Lantern Moth", "Dusk Sprite")),
+
+    // --- the mutants ------------------------------------------------------------------
+    //
+    // Three families of one species each, and the only ones in this file that
+    // are not crossed with a pool of epithets to make forty-nine of them. See
+    // Mutants for what a mutant is and why there are exactly three; see
+    // #hostile for what the registry does differently with these rows.
+    //
+    // They are families all the same, because a family is a body plan and a
+    // behaviour and each of these has both, of its own, shared with nothing.
+
+    /** The gaunt antlered thing of the cold north. See {@link Mutants}. */
+    WENDIGO("wendigo", "Wendigos", Build.GAUNT_GIANT, Motion.WALK, Activity.NOCTURNAL,
+            Diet.CARRION, 5.6, 0.0, 0x9AA4A8, 0,
+            biomes("boreal_taiga", "tundra_barrens", "crystal_highlands"),
+            lineages("Wendigo")),
+
+    /** The hulking lupine of the temperate woods at half-light. */
+    WEREWOLF("werewolf", "Werewolves", Build.HULKING_LUPINE, Motion.WALK,
+            Activity.CREPUSCULAR, Diet.CARRION, 4.4, 0.0, 0x4A3E38, 0,
+            biomes("deciduous_forest", "autumn_birchwood", "pine_forest"),
+            lineages("Werewolf")),
+
+    /** The drowned, long-armed horror of the standing water. */
+    MIREWRAITH("mirewraith", "Mirewraiths", Build.DROWNED_HULK, Motion.WALK,
+            Activity.NOCTURNAL, Diet.CARRION, 5.0, 0.0, 0x3E4A44, 0,
+            biomes("wetland_marsh", "mangrove_coast", "mushroom_hollow"),
+            lineages("Mirewraith"));
 
     /** The shape a family is drawn as; see {@link AnimalModel}. */
     public enum Build {
         SMALL_BIRD, LARGE_BIRD, WADING_BIRD, RAPTOR_BIRD, HOOKED_BILL, HOVERER,
         QUADRUPED, DEER_LIKE, CAT_LIKE, SMALL_MAMMAL, LONG_MAMMAL, PRIMATE_LIKE,
         BULKY, HORNED, LAGOMORPH, BAT_LIKE, LIZARD, AMPHIB, WINGED_INSECT,
-        FISH_LIKE, ETHEREAL
+        FISH_LIKE, ETHEREAL,
+
+        /**
+         * The three mutant plans — the only <b>bipeds</b> in the file, which is
+         * most of why they read as wrong.
+         *
+         * <p>Everything else in this world stands on four legs or two bird
+         * legs under a horizontal body. A thing that stands upright, at six
+         * metres, with its arms hanging past its knees, is recognisably not
+         * one of the animals — before it has moved, and at any distance.
+         */
+        GAUNT_GIANT, HULKING_LUPINE, DROWNED_HULK
     }
 
     /** How a family gets about, which decides its gait and where it can be. */
@@ -336,6 +381,34 @@ public enum AnimalFamily {
 
     /** The seven lineage names crossed with epithets to make this family's species. */
     public List<String> lineages() { return lineages; }
+
+    /**
+     * Whether this family hunts people.
+     *
+     * <p><b>The one flag that divides this file in two</b>, and it is asked in
+     * three places that between them are the whole of what a mutant is:
+     *
+     * <ul>
+     *   <li>{@link AnimalRegistry} does <em>not</em> cross a hostile family
+     *       with the epithet pool — there are three mutants, hand-written in
+     *       {@link Mutants}, and not a hundred and forty-seven of them;</li>
+     *   <li>{@link AnimalDef#encounterWeight} refuses to offer one outside its
+     *       own hours at all, rather than at the reduced odds every ordinary
+     *       species keeps;</li>
+     *   <li>{@link Animal} runs a different decision loop for one: it hunts
+     *       instead of fleeing, and nothing a player does frightens it.</li>
+     * </ul>
+     *
+     * <p>Switched on the constant rather than carried as a twelfth constructor
+     * argument, so adding a mutant is adding a row here and a row in
+     * {@code Mutants} and touching none of the twenty-six ordinary families.
+     */
+    public boolean hostile() {
+        return this == WENDIGO || this == WEREWOLF || this == MIREWRAITH;
+    }
+
+    /** Whether this family is one of the twenty-six the registry generates from. */
+    public boolean natural() { return !hostile(); }
 
     /** The texture key a pack reskins this whole family under. */
     public String textureKey() { return "watch/animal/" + key; }

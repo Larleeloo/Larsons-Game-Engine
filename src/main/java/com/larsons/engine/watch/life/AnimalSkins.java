@@ -217,6 +217,53 @@ public final class AnimalSkins {
                             Region.BODY.y + rng.nextInt(Region.BODY.h), 1, 1, star);
                 }
             }
+            // The three mutants, whose epithets are theirs alone. They get
+            // markings for the same reason every other species does — a flat
+            // rectangle looks generated — and the markings are the ones that
+            // read at forty metres in the dark, which is the only range and the
+            // only light anybody will ever see one at.
+            case "Hollow" -> {
+                // Frost on the shoulders, and the bone underneath showing
+                // through: a starved animal in a hard winter.
+                Color rime = new Color(0xE4EEF2);
+                g.fillRect(Region.BODY.x, Region.BODY.y, Region.BODY.w, 5, rime);
+                for (int i = 0; i < 4; i++) {
+                    g.fillRect(Region.BODY.x + 2, Region.BODY.y + 9 + i * 6,
+                            Region.BODY.w - 4, 2, rime);
+                }
+                g.fillRect(Region.HARD.x, Region.HARD.y, Region.HARD.w, Region.HARD.h,
+                        new Color(0xD8D2C0));
+                g.fillRect(Region.HEAD.x, Region.HEAD.y + 9, Region.HEAD.w, 7,
+                        shade(detail, 0.55));
+            }
+            case "Moonfell" -> {
+                // A dark saddle over the shoulders and a pale throat: the
+                // markings a wolf has, on something that is not one.
+                g.fillRect(Region.BODY.x, Region.BODY.y, Region.BODY.w, 14,
+                        shade(body, 0.55));
+                g.fillRect(Region.BELLY.x, Region.BELLY.y + 6, Region.BELLY.w, 10,
+                        shade(accent, 1.15));
+                for (int i = 0; i < 30; i++) {
+                    g.fillRect(Region.BODY.x + rng.nextInt(Region.BODY.w - 1),
+                            Region.BODY.y + 14 + rng.nextInt(Region.BODY.h - 15),
+                            1, 3, shade(body, 0.7));
+                }
+            }
+            case "Drowned" -> {
+                // Waterline stains and weed. The bright band across the middle
+                // is where it last stood still long enough to grow something.
+                for (int i = 0; i < 3; i++) {
+                    g.fillRect(Region.BODY.x, Region.BODY.y + 6 + i * 9,
+                            Region.BODY.w, 3, shade(accent, 0.8));
+                }
+                for (int i = 0; i < 34; i++) {
+                    g.fillRect(Region.BODY.x + rng.nextInt(Region.BODY.w - 2),
+                            Region.BODY.y + rng.nextInt(Region.BODY.h - 3), 2, 4,
+                            shade(accent, 1.2));
+                }
+                g.fillRect(Region.TAIL.x, Region.TAIL.y, Region.TAIL.w, Region.TAIL.h,
+                        shade(accent, 0.7));
+            }
             default -> {
                 // A soft dorsal stripe: enough to keep a plain species from
                 // being a solid rectangle, quiet enough not to claim a pattern
