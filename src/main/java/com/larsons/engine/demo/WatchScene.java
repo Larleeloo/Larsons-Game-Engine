@@ -29,12 +29,17 @@ import com.larsons.engine.watch.Trading;
 import com.larsons.engine.watch.WatchClock;
 import com.larsons.engine.watch.WatchGame;
 import com.larsons.engine.watch.WatchPlayer;
+import com.larsons.engine.watch.WatchSounds;
 import com.larsons.engine.watch.WatchStore;
 import com.larsons.engine.watch.WatchView;
 import com.larsons.engine.watch.Weather;
 import com.larsons.engine.watch.build.BuildPiece;
 import com.larsons.engine.watch.build.Structure;
+import com.larsons.engine.watch.life.AnimalDef;
 import com.larsons.engine.watch.life.AnimalModels;
+import com.larsons.engine.watch.life.AnimalRegistry;
+import com.larsons.engine.watch.life.AnimalSkins;
+import com.larsons.engine.watch.life.Hurl;
 import com.larsons.engine.watch.life.Mutants;
 import com.larsons.engine.watch.net.WatchSession;
 import com.larsons.engine.watch.render.BoardImage;
@@ -393,6 +398,15 @@ public class WatchScene extends AbstractScene {
     private final Debug.Pad pad = new Debug.Pad();
 
     /**
+     * What the walk can hear.
+     *
+     * <p>Driven from the view every frame rather than from events: see
+     * {@link WatchSounds}, which derives every noise the three mutants make from
+     * replicated state so that a sound can never disagree with what is drawn.
+     */
+    private final WatchSounds noises = new WatchSounds();
+
+    /**
      * How far the player's feet are below the waterline, in metres.
      *
      * <p>Zero on land and at the surface; up to the depth of the water when
@@ -470,6 +484,12 @@ public class WatchScene extends AbstractScene {
      * highlight under the crosshair says whose it is and how much is in it.
      */
     private static final int SPILL_ITEMS = 6;
+
+    /** Half the length of a thrown bone shard, in metres. See {@code Hurl}. */
+    private static final double SHARD_LENGTH = 0.32;
+
+    /** …and half the span of the barb across it. */
+    private static final double SHARD_BARB = 0.13;
 
     /**
      * The respawn count this screen has already acted on.
@@ -790,6 +810,10 @@ public class WatchScene extends AbstractScene {
         litterGround = Flora.ground(streamer.field());
         litterNearby.clear();
         litterFromX = Double.NaN;
+        // …and with nothing having been heard yet, so the mutant already out
+        // there when a save is reopened cries once on the frame it is first
+        // seen rather than being silently present.
+        noises.clear();
         // A walk starts with untrodden ground. Tracks are the one thing here
         // that is neither generated from the seed nor sent by the host, so
         // there is nowhere for the last world's to have come from and nowhere
@@ -929,6 +953,9 @@ public class WatchScene extends AbstractScene {
             syncClock();
             // Being mauled does not stop for a satchel screen. See syncVitals.
             syncVitals(dt);
+            // Nor does being heard. A player who opened their satchel while
+            // something was coming should still hear it arrive.
+            noises.update(view(), px, py, aimYaw);
             return;
         }
 
@@ -987,6 +1014,10 @@ public class WatchScene extends AbstractScene {
         session.update(dt);
         syncClock();
         syncVitals(dt);
+        // After the sync, because the sync is what a snapshot arrives in — and
+        // the ear is at the camera, so it hears from where the player is looking
+        // rather than from where their feet point.
+        noises.update(view(), px, py, aimYaw);
         noticePickups();
         // After the sync, because the sync is what a map arrives in.
         awaitMap(dt);
@@ -3196,6 +3227,34 @@ public class WatchScene extends AbstractScene {
                 ItemModel.item(mesh, lure.food(), lure.x() - ox, lure.y() - oy,
                         lure.z() + 1.20, 1.1, drawClock * LURE_SPIN);
             }
+        }
+
+        // Anything a wendigo has in the air. Drawn as what it is — a splinter
+        // of bone, pointed the way it is travelling — with `strut`, which is the
+        // primitive for a thing whose length points somewhere other than
+        // straight up and is exactly what a shard on an arc is.
+        //
+        // Two struts rather than one: a barb crossing the shaft near the front
+        // is what stops a fast-moving pale sliver reading as a dropped frame. At
+        // twenty-four metres a second it crosses the screen in well under a
+        // second, and the eye needs a shape rather than a streak.
+        for (Hurl hurl : view.hurls()) {
+            AnimalDef thrower = AnimalRegistry.byKey(hurl.species());
+            int bone = thrower == null ? 0xD8D2C0
+                    : AnimalSkins.regionColour(thrower, AnimalSkins.Region.HARD);
+            WatchMaterials.uv(WatchMaterial.BARK, uv);
+            double cos = Math.cos(hurl.pitch());
+            double fx = Math.sin(hurl.yaw()) * cos;
+            double fy = -Math.cos(hurl.yaw()) * cos;
+            double fz = Math.sin(hurl.pitch());
+            double hx = hurl.x() - ox, hy = hurl.y() - oy, hz = hurl.z();
+            Shapes.strut(mesh, hx - fx * SHARD_LENGTH, hy - fy * SHARD_LENGTH,
+                    hz - fz * SHARD_LENGTH, hx + fx * SHARD_LENGTH,
+                    hy + fy * SHARD_LENGTH, hz + fz * SHARD_LENGTH,
+                    0.045, 0.045, uv, bone);
+            Shapes.strut(mesh, hx - fy * SHARD_BARB, hy + fx * SHARD_BARB, hz,
+                    hx + fy * SHARD_BARB, hy - fx * SHARD_BARB, hz,
+                    0.030, 0.030, uv, bone);
         }
 
         // Every satchel somebody has dropped by dying, within sight. In the

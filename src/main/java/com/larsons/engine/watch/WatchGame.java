@@ -6,6 +6,7 @@ import com.larsons.engine.watch.life.Animal;
 import com.larsons.engine.watch.life.AnimalDef;
 import com.larsons.engine.watch.life.AnimalRegistry;
 import com.larsons.engine.watch.life.Diet;
+import com.larsons.engine.watch.life.Hurl;
 import com.larsons.engine.watch.life.Mutants;
 import com.larsons.engine.watch.world.Flora;
 import com.larsons.engine.watch.world.Grove;
@@ -240,6 +241,16 @@ public final class WatchGame implements Animal.Surroundings {
     /** Walkers a save left behind, waiting for whoever comes back. See {@link #wake}. */
     private final Map<Integer, WatchPlayer> resting = new LinkedHashMap<>();
     private final Map<Long, Animal> animals = new LinkedHashMap<>();
+
+    /**
+     * Everything currently in the air — which in this game is only ever bone
+     * shards a wendigo has thrown. See {@link Hurl}.
+     *
+     * <p>Beside the animals rather than beside the world state, and not saved,
+     * for the animals' reason: a shard in flight when a walk closes is weather.
+     */
+    private final Map<Long, Hurl> hurls = new LinkedHashMap<>();
+
     private final Map<Long, Lure> lures = new LinkedHashMap<>();
     private final List<Spotlight> spotlights = new ArrayList<>();
 
@@ -286,6 +297,7 @@ public final class WatchGame implements Animal.Surroundings {
 
     private Sink sink;
     private long nextAnimalId = 1;
+    private long nextHurlId = 1;
     private long nextLureId = 1;
     private long lastRealMillis = System.currentTimeMillis();
     private double spawnTimer;
@@ -380,6 +392,9 @@ public final class WatchGame implements Animal.Surroundings {
 
     /** Every feeder standing. */
     public synchronized List<Lure> lures() { return List.copyOf(lures.values()); }
+
+    /** Everything in the air. */
+    public synchronized List<Hurl> hurls() { return List.copyOf(hurls.values()); }
 
     /** The outlines currently up. */
     public synchronized List<Spotlight> spotlights() { return List.copyOf(spotlights); }
@@ -1725,6 +1740,10 @@ public final class WatchGame implements Animal.Surroundings {
             animal.step(dt, this);
             if (animal.behaviour() == Animal.Behaviour.FEED) feedFrom(animal);
         }
+        // After the animals, because a shard thrown this tick should not also
+        // travel this tick: a projectile that appears already a metre out of the
+        // thrower's hand reads as a teleport rather than as a throw.
+        flyHurls(dt);
 
         spotlights.replaceAll(light -> light.aged(dt));
         spotlights.removeIf(light -> !light.alive());
@@ -2117,6 +2136,70 @@ public final class WatchGame implements Animal.Surroundings {
         out[1] = player.y();
         out[2] = player.z();
         return true;
+    }
+
+    /**
+     * A wendigo lets one go.
+     *
+     * <p>The animal decided; the world builds the shard and owns it from here.
+     * See {@link Hurl} for why this game has a projectile at all and why it is
+     * not the block world's.
+     */
+    @Override
+    public synchronized void hurlAt(Animal from, String at, Mutants.Ranged ranged) {
+        WatchPlayer player = playerNamed(at);
+        if (player == null || !player.alive() || ranged == null) return;
+        long id = nextHurlId++;
+        hurls.put(id, Hurl.thrown(id, from, player.x(), player.y(), player.z(), ranged));
+    }
+
+    /**
+     * Advance everything in the air, and see what it hit.
+     *
+     * <p><b>Checked against every player rather than only the one it was aimed
+     * at</b>, which is not a nicety: a party walking together would otherwise
+     * watch shards pass through three people to reach the fourth, and the
+     * obvious tactic against a wendigo would be to stand behind a friend
+     * without it costing them anything.
+     */
+    private void flyHurls(double dt) {
+        if (hurls.isEmpty()) return;
+        for (Hurl hurl : List.copyOf(hurls.values())) {
+            if (!hurl.step(dt, field.heightAt(hurl.x(), hurl.y()))) continue;
+            for (WatchPlayer player : players.values()) {
+                if (!player.alive()) continue;
+                if (!hurl.hits(player.x(), player.y(), player.z())) continue;
+                hurl.expire();
+                // Through the same door a swipe goes through, so a death by
+                // shard drops the satchel and respawns exactly as a death by
+                // claw does. The attacker's name comes off the species the
+                // shard remembers, so the log line reads the same either way.
+                AnimalDef thrower = AnimalRegistry.byKey(hurl.species());
+                wound(player.name(), hurl.damage(),
+                        thrower == null ? null : throwerOf(hurl));
+                break;
+            }
+        }
+        hurls.values().removeIf(Hurl::spent);
+    }
+
+    /**
+     * A stand-in for the animal that threw a shard, for the sake of the log
+     * line.
+     *
+     * <p>The real thrower may be dead, despawned or four hundred metres away by
+     * the time its shard lands — a shard is not owned by the animal that let it
+     * go. What {@link #wound} wants from it is a species name, and the shard
+     * remembers that, so this hands back whichever live animal of that species
+     * is nearest and {@code null} when there is none. {@code wound} says
+     * "Something" for a null, which is the honest answer when the thing that
+     * hurt you is no longer there.
+     */
+    private Animal throwerOf(Hurl hurl) {
+        for (Animal animal : animals.values()) {
+            if (animal.def().key().equals(hurl.species())) return animal;
+        }
+        return null;
     }
 
     /**

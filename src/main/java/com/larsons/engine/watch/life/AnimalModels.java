@@ -71,10 +71,27 @@ public final class AnimalModels {
 
         Loaded loaded = imported != null
                 ? new Loaded(imported.geometry(), imported, true, imported.name())
-                : new Loaded(AnimalModel.of(def), AnimalModel.procedural(), false,
-                        "placeholder");
+                : new Loaded(AnimalModel.of(def), posesFor(def), false, "placeholder");
         CACHE.put(def.key(), loaded);
         return loaded;
+    }
+
+    /**
+     * Where a species' poses come from when nothing has been imported for it.
+     *
+     * <p>The shared animal table for the thirteen hundred, and
+     * {@link MutantGait} for the three — because the shared table is a good
+     * <em>animal</em> walk and running it on a six-metre biped produces a
+     * six-metre biped going for a pleasant walk. See {@code MutantGait} for what
+     * is broken in it deliberately.
+     *
+     * <p>Note where this sits: an imported {@code .bbmodel} still wins, for a
+     * mutant exactly as for a wren. Somebody who animates a wendigo by hand gets
+     * their clips, not these.
+     */
+    private static AnimalModel.PoseSource posesFor(AnimalDef def) {
+        Mutants.Kind mutant = Mutants.of(def);
+        return mutant == null ? AnimalModel.procedural() : MutantGait.of(mutant);
     }
 
     /** Whether a species is being drawn from an imported model. */

@@ -292,7 +292,7 @@ public final class WatchServer implements WatchGame.Sink {
 
     private void broadcastState() {
         toAll(WatchProto.state(tick, game.clock().timeOfDay(), game.players(),
-                game.animals(), game.lures(), game.weather().toMap()));
+                game.animals(), game.lures(), game.hurls(), game.weather().toMap()));
         if (tick % WatchProto.WORLD_SYNC_TICKS == 0) sendWorld();
     }
 

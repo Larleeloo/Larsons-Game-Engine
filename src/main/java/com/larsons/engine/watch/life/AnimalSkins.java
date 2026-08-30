@@ -56,7 +56,44 @@ public final class AnimalSkins {
         /** Beak, horn, antler, claw — the hard parts. */
         HARD(32, 32, 16, 16),
         /** Eyes and any bright display patch. */
-        EYE(48, 32, 16, 16);
+        EYE(48, 32, 16, 16),
+
+        /**
+         * The one part of an animal that is <b>lit from inside</b>: a werewolf's
+         * eyes, the fire in a wendigo's open chest, the lantern where a
+         * mirewraith's face should be.
+         *
+         * <p><b>It cost nothing to add.</b> The eight original regions look like
+         * they tile the sheet and do not quite: {@code HARD} and {@code EYE} stop
+         * at {@code y = 48}, leaving a 32×16 strip along the bottom right that
+         * nothing has ever painted or read. These two live there, so every one of
+         * the thirteen hundred existing species is unchanged to the byte and a
+         * pack author's sheet gains two blocks rather than losing any.
+         *
+         * <p><b>What "glowing" means here, and what it does not.</b> The renderer
+         * multiplies every vertex by the hour's light and there is no emissive
+         * channel in the mesh format; adding one would mean a field on
+         * {@code Mesh}, a branch in the painter's shading and a change to the
+         * card's shaders — a great deal of renderer for two eyes. So this glows
+         * the way a flat-shaded world can: the brightest, most saturated colour
+         * on the creature, set in a {@link #SHADOW} socket, with dimmer shells
+         * around it. The hour's light scales the glow and its socket by the same
+         * factor, so the <em>contrast</em> survives every hour — and at night,
+         * when these three are actually out, ten-to-one against a dark body is
+         * the only thing on them the eye finds.
+         */
+        GLOW(32, 48, 16, 16),
+
+        /**
+         * The dark a glow is read against: an eye socket, the inside of an open
+         * ribcage, the hollow of an ear.
+         *
+         * <p>Its own region rather than "some dark colour", because the whole
+         * trick above is a <em>ratio</em> between two painted colours. Both are
+         * multiplied by the same light, so as long as this one is near black the
+         * glow reads as a glow at noon, at dusk and in the dark.
+         */
+        SHADOW(48, 48, 16, 16);
 
         final int x, y, w, h;
 
@@ -163,6 +200,18 @@ public final class AnimalSkins {
         fill(g, Region.TAIL, shade(body, 0.92));
         fill(g, Region.HARD, detail);
         fill(g, Region.EYE, accent);
+        // Whatever is lit from inside, and the dark it is read against. Only the
+        // three mutants have a part that names either, so for everything else
+        // the colours are never read — but they are painted all the same, so
+        // that a creator opening a sheet finds two labelled blocks rather than
+        // a corner somebody forgot.
+        Mutants.Kind mutant = Mutants.of(def);
+        fill(g, Region.GLOW, mutant == null ? shade(accent, 1.4)
+                : new Color(mutant.glow()));
+        // Near black rather than black: a socket that is pure 0x000000 is
+        // multiplied by the hour's light to pure 0x000000, which is a hole in
+        // the model rather than a shadow in it.
+        fill(g, Region.SHADOW, new Color(0x0E0B0A));
 
         markings(g, def, body, accent, detail, rng);
 

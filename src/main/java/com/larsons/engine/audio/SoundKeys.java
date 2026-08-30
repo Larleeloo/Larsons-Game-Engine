@@ -84,6 +84,16 @@ public final class SoundKeys {
     public static final String DOORS = "doors";
     public static final String CUTSCENES = "cutscenes";
     public static final String MINIGAME = "minigame";
+    /**
+     * The Field Guide's own voices.
+     *
+     * <p>Its own folder rather than {@link #MOBS}, mirroring the texture side's
+     * {@code watch_animals}: the Field Guide has its own registry of thirteen
+     * hundred species, none of which is a {@code MobDef}, and filing a wendigo
+     * under the block world's mobs would be filing it where a creator looking
+     * for it will not look.
+     */
+    public static final String WATCH = "watch";
     /** Where a key from an unrecognised namespace lands. */
     public static final String OTHER = "other";
 
@@ -230,7 +240,7 @@ public final class SoundKeys {
     public static List<String> folders() {
         return List.of(PLAYER, BLOCKS, LIQUIDS, LIGHTS, MOBS, ITEMS, DECOR,
                 BLOCK_DECOR, PROJECTILES, ULTIMATES, VEHICLES, PARTICLES,
-                MUSIC, UI, WORLD, AMBIENT, DOORS, CUTSCENES, MINIGAME);
+                MUSIC, UI, WORLD, AMBIENT, DOORS, CUTSCENES, MINIGAME, WATCH);
     }
 
     /**
@@ -264,6 +274,11 @@ public final class SoundKeys {
             case "door" -> List.of(DOORS + "/" + rest);
             case "cutscene" -> List.of(CUTSCENES + "/" + rest);
             case "minigame" -> List.of(MINIGAME + "/" + rest);
+            // watch/wendigo/call -> watch/wendigo_call, falling back to
+            // watch/wendigo — the same progressive rule mobs use, so one file
+            // can give a creature every one of its voices and a second can
+            // replace just its cry.
+            case "watch" -> progressive(WATCH, parts);
             default -> List.of(OTHER + "/" + key.replace('/', '_'));
         };
     }
@@ -427,6 +442,19 @@ public final class SoundKeys {
         }
         for (String s : UI_SOUNDS) {
             out.add(new Entry("Interface", UI, "ui/" + s, s, "Interface", s));
+        }
+        // The Field Guide's three mutants, and only those three. Thirteen
+        // hundred species times five states would be six and a half thousand
+        // rows in a file that exists to tell a creator what they can record;
+        // the three that hunt people are the ones worth naming, and every other
+        // animal in that game is silent by design.
+        for (var kind : com.larsons.engine.watch.life.Mutants.all()) {
+            String creature = kind.def().family().key();
+            for (String state : com.larsons.engine.watch.life.MutantVoice.statesFor(kind)) {
+                out.add(new Entry("Field Guide mutants", WATCH,
+                        "watch/" + creature + "/" + state, creature + "_" + state,
+                        kind.def().name(), state));
+            }
         }
         return out;
     }

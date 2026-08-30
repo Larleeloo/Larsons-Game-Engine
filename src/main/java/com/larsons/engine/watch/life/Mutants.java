@@ -68,44 +68,71 @@ public final class Mutants {
     public enum Power {
 
         /**
-         * <b>It has all night.</b> Notices from an absurd distance, comes on at
-         * a walk, and does not stop coming: outrunning it works and only works
-         * until you stop, which is a problem in a game where stopping is how
-         * you look at anything.
+         * <b>It has all night, and it does not need to reach you.</b> Notices
+         * from an absurd distance and does not stop coming — but it is the one
+         * of the three a sprint outpaces, and that is deliberate: outrunning it
+         * is easy and does not help, because it throws things.
          *
-         * <p>The counterplay is the map rather than the legs — put water, or a
-         * ridge, or simply a very long walk between you and it, and be
-         * somewhere else by dawn.
+         * <p>The counterplay is cover rather than the legs. Put a ridge, a
+         * stand of trees or a very long walk between you and it — running in a
+         * straight line across open ground is running in front of the thing
+         * that is aiming at you.
          */
         STALK,
 
         /**
-         * <b>It closes in bursts.</b> Ambles, then sprints — several times its
-         * walking speed for a second and a half, then a breather. A straight
-         * line away from it is lost ground every burst; the gaps between them
-         * are the whole of the fight, and they are long enough to get behind
-         * something.
+         * <b>It runs as fast as you do.</b> Holds a sprinting player exactly
+         * level between bursts and gains on every one of them, so a straight
+         * line away is a slow loss and there is no pace that wins.
+         *
+         * <p>The gaps between bursts are still the whole of the fight — they
+         * are what a player uses to get behind something — but they buy cover
+         * now rather than distance.
          */
         LUNGE,
 
         /**
          * <b>It was already there.</b> Lies still and low until somebody comes
          * inside its short notice range — it reads as scenery until then, and
-         * the sound it makes when it stands up is the point of it. Slowest of
-         * the three afterwards, and it hits the hardest.
+         * the sound it makes when it stands up is the point of it.
+         *
+         * <p>Then it sprints, flat, with no bursts and no let-up, and hits
+         * harder than either of the others. It is the plainest of the three and
+         * the most frightening for it: no rhythm to read and no gap to use, only
+         * the twenty-two metres you had before it stood up.
          */
         AMBUSH
     }
+
+    /**
+     * A mutant that throws something — <b>the wendigo, and nothing else.</b>
+     *
+     * <p>Its own record rather than five more fields on {@link Kind}, and
+     * nullable there, because "does this creature have a ranged attack" is a
+     * question with a yes-or-no answer and two of the three answer no. A
+     * {@code null} here is the whole of what "melee only" means, and
+     * {@link Animal} reads it as one branch.
+     *
+     * @param range        how far it can reach with one, in metres
+     * @param minRange     inside this it closes and swings instead — a thing
+     *                     with arms that long does not throw at arm's length
+     * @param everySeconds how long between throws
+     * @param damage       a share of a full health bar, on a hit
+     * @param speed        how fast what it throws travels, in metres a second
+     */
+    public record Ranged(double range, double minRange, double everySeconds,
+                         double damage, double speed) {}
 
     /**
      * One mutant's numbers: what it does to a player and how it gets close
      * enough to do it.
      *
      * <p>Beside the species rather than inside {@link AnimalDef}, because
-     * thirteen hundred animals would otherwise carry six fields about combat
-     * that only three of them use. {@link Animal} asks {@link #of(AnimalDef)}
-     * once per tick for the one it is, and gets {@code null} for everything
-     * that is not a mutant — which is the branch nearly every animal takes.
+     * thirteen hundred animals would otherwise carry a fistful of fields about
+     * combat that only three of them use. {@link Animal} asks
+     * {@link #of(AnimalDef)} once per tick for the one it is, and gets
+     * {@code null} for everything that is not a mutant — which is the branch
+     * nearly every animal takes.
      *
      * @param def            the species itself, as it appears in the book
      * @param power          how it hunts
@@ -116,10 +143,13 @@ public final class Mutants {
      * @param lose           how far a player has to get for it to give up
      * @param chase          how much faster than its walk it pursues
      * @param height         how tall it stands, in metres — the model's scale
+     * @param ranged         what it throws, or {@code null} for melee only
+     * @param glow           what its lit parts burn, {@code 0xRRGGBB} — see
+     *                       {@link AnimalSkins.Region#GLOW}
      */
     public record Kind(AnimalDef def, Power power, double damage, double reach,
                        double strikeSeconds, double notice, double lose, double chase,
-                       double height) {
+                       double height, Ranged ranged, int glow) {
 
         /** The species key, which is what a save and the wire carry. */
         public String key() { return def.key(); }
@@ -127,11 +157,27 @@ public final class Mutants {
         /** How many blows it takes to kill somebody from full health. */
         public int blowsToKill() { return (int) Math.ceil(1.0 / Math.max(1e-6, damage)); }
 
+        /** Whether it can hurt somebody it is not standing next to. */
+        public boolean hurls() { return ranged != null; }
+
+        /**
+         * How fast it pursues, in metres a second — its species' pace times
+         * {@link #chase()}.
+         *
+         * <p>Worth having as a method because it is the number the design is
+         * actually stated in: two of the three are meant to hold
+         * {@link com.larsons.engine.watch.WatchPlayer#RUN_SPEED}, and reading
+         * that off a multiplier and a base speed in two different files is how
+         * a tuning pass silently stops meaning what it meant.
+         */
+        public double pursuitSpeed() { return def.speed() * chase; }
+
         /** What the guide's page says about the danger, in one line. */
         public String warning() {
             return switch (power) {
-                case STALK -> "It does not lose interest. Put a valley between you.";
-                case LUNGE -> "It closes in bursts. The gaps are where you get away.";
+                case STALK -> "It does not lose interest, and it does not need to "
+                        + "reach you to hurt you.";
+                case LUNGE -> "It runs as fast as you can, and faster in bursts.";
                 case AMBUSH -> "It lies still until you are close. Then it does not.";
             };
         }
@@ -194,12 +240,31 @@ public final class Mutants {
                  */
                 new Kind(species(AnimalFamily.WENDIGO, "Hollow", 5.6,
                                 0xB8C0BE, 0xE8F0F4, 0x5A6470, Activity.NOCTURNAL),
-                        // 1.45 × its walk is 4.9 m/s, which sits deliberately
-                        // between a player's walk (4.4) and their run (8.0):
-                        // walking away from a wendigo does not work and running
-                        // does, and running costs every scrap of the stillness
-                        // that everything else in this game is played through.
-                        Power.STALK, 0.17, 3.4, 2.1, 78, 190, 1.45, 5.6),
+                        // 6.6 m/s: faster than a player's walk (4.4) and slower
+                        // than their run (8.0) — the only one of the three a
+                        // sprint outpaces, and the only one that does not need
+                        // to catch you. Sprinting away from a wendigo works and
+                        // does not help, because it throws.
+                        //
+                        // Three seconds between blows, which is the slowest
+                        // melee in the game. A creature this fast has to be
+                        // survivable once it arrives, and the way to make being
+                        // caught survivable rather than fatal is to give the
+                        // player whole seconds between blows to get out again.
+                        Power.STALK, 0.17, 3.4, 3.0, 78, 190, 1.95, 5.6,
+                        // Forty-five metres, no closer than six, one every three
+                        // and a half seconds. The minimum matters as much as the
+                        // maximum: a thing with arms that long does not throw at
+                        // arm's length, so closing to six metres swaps the
+                        // ranged attack for the melee one and there is never a
+                        // moment where it can do both.
+                        new Ranged(45, 6, 3.5, 0.11, 24),
+                        // The fire in its open chest, and the same red in its
+                        // eyes. Fully saturated and at full brightness on
+                        // purpose: the hour's light multiplies it down like
+                        // everything else, so all it can ever be is the
+                        // brightest thing on a very dark animal.
+                        0xFF2E14),
 
                 /*
                  * The Moonfell Werewolf. Four and a half metres of shoulder and
@@ -211,12 +276,32 @@ public final class Mutants {
                  * ordinary walking pace between bursts.
                  */
                 new Kind(species(AnimalFamily.WEREWOLF, "Moonfell", 4.4,
-                                0x6A5A4E, 0xC8B48A, 0x2A2622, Activity.CREPUSCULAR),
-                        // Seventy metres of notice — it smells you — and 2.3 ×
-                        // its walk is 7.8 m/s during a burst, which is faster
-                        // than a player can run. The 2.9 m/s between bursts is
-                        // what makes running work anyway.
-                        Power.LUNGE, 0.24, 3.0, 1.5, 70, 120, 2.30, 4.4),
+                                0x5A4C42, 0x7A6650,
+                                // Dark, and no darker: AnimalRegistryTest holds
+                                // every species' three colours above a
+                                // brightness floor, and it is right to. An
+                                // animal nobody can make out at forty metres in
+                                // the shade is an animal that is not in the
+                                // game, and a werewolf's claws and jaw are the
+                                // parts a player needs to read.
+                                0x332C27, Activity.CREPUSCULAR),
+                        // <b>It runs exactly as fast as you can.</b> 3.25 × its
+                        // walk is 11.1 m/s in a burst and, through
+                        // Animal.LUNGE_REST, 8.0 m/s between them — which is
+                        // WatchPlayer.RUN_SPEED to two decimal places. A player
+                        // at a flat sprint holds it exactly level and loses
+                        // ground on every burst, so the chase is decided by the
+                        // ground rather than by the legs: what saves you is a
+                        // ridge, a lake, or a stand of trees.
+                        //
+                        // 2.4 s between blows, up from 1.5. Something that can
+                        // hold a sprinting player's pace cannot also swing
+                        // quickly, or being caught once is being dead.
+                        Power.LUNGE, 0.24, 3.0, 2.4, 70, 120, 3.25, 4.4, null,
+                        // Eyes only. A deeper red than the wendigo's, so that a
+                        // party who has met both can tell at a glance which pair
+                        // of lights is in the treeline.
+                        0xE81A10),
 
                 /*
                  * The Drowned Mirewraith. Five metres of bloated silhouette in
@@ -244,9 +329,21 @@ public final class Mutants {
                         // to twenty-two before it will stand up. Twenty-two is
                         // "you are about to walk into it" rather than "it saw
                         // you across the fen", and it is the shortest reaction
-                        // window in the game. The slowest pursuit of the three
-                        // afterwards, at 4.6 m/s, and the hardest blow.
-                        Power.AMBUSH, 0.34, 3.8, 2.6, 40, 70, 1.35, 5.0));
+                        // window in the game.
+                        //
+                        // And then 8.0 m/s flat — a dead sprint, held, with no
+                        // bursts and no let-up. It is the plainest of the three
+                        // and the most frightening for it: there is no rhythm to
+                        // read and no gap to use, only the twenty-two metres you
+                        // had before it stood up. 3.6 s between blows is the
+                        // slowest swing in the game, and it has to be, because
+                        // it is also the hardest.
+                        Power.AMBUSH, 0.34, 3.8, 3.6, 40, 70, 2.35, 5.0, null,
+                        // Not red. The mirewraith's light is the drowned,
+                        // lantern-green of the water it stands in — the two red
+                        // pairs are the wendigo and the werewolf, and a third
+                        // would make the colour stop meaning anything.
+                        0x9EF0B4));
     }
 
     /**
