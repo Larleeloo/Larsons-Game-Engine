@@ -331,6 +331,13 @@ public final class Forage {
                 "Where the sightings go. You start with it.");
         item(map, Spyglass.ITEM, "Spyglass", Kind.TOOL, 0, 0,
                 "Two lenses in a tube. Hold it up and the far shore comes to you.");
+        // The one item nobody forages, cooks or buys: it is handed to whoever is
+        // it and taken back when they pass it on. It is here rather than invented
+        // by the round because the hands, the satchel and the pickup flash all
+        // draw whatever is in the bag, and a thing with no row here would be a
+        // thing none of the three could show. See com.larsons.engine.watch.Tag.
+        item(map, Tag.GUN, "Water Gun", Kind.TOOL, 0, 0,
+                "Yours while you are it. Twenty metres of cold water, and no more.");
 
         // The three things you can carry that burn. A campfire is not among
         // them and cannot be: it is built where it stands out of branches and

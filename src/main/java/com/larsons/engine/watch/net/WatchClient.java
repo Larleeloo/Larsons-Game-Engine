@@ -181,6 +181,18 @@ public final class WatchClient implements AutoCloseable {
         send(WatchProto.pin(chartId, boardId));
     }
 
+    /** Suggest a game of tag, or — while one is on — an end to it. */
+    public void sendTag() { send(WatchProto.tag()); }
+
+    /** Answer the open poll. */
+    public void sendVote(boolean yes) { send(WatchProto.vote(yes)); }
+
+    /** Pull the trigger on the water gun. */
+    public void sendSquirt() { send(WatchProto.squirt()); }
+
+    /** Ask for a bounty to be pinned on a species. The host prices it. */
+    public void sendBounty(String species) { send(WatchProto.bounty(species)); }
+
     // --- receiving ------------------------------------------------------------------
 
     /**
@@ -226,6 +238,11 @@ public final class WatchClient implements AutoCloseable {
                 view.loadLights(WatchJson.objects(message, "lights"));
                 view.loadHurls(WatchJson.objects(message, "hurls"));
                 view.weather().load(WatchJson.map(message, "sky"));
+                // Replaced on every snapshot, present or absent, for the hurls'
+                // reason: the field is left out entirely once a round is over,
+                // and a client that only replaced on presence would leave one
+                // player frozen and 1.3× fast for the rest of the walk.
+                view.tag().load(WatchJson.map(message, "tag"));
             }
             case "party" -> {
                 // The party list is a superset of the snapshot's while somebody
@@ -255,6 +272,7 @@ public final class WatchClient implements AutoCloseable {
                 view.maps().load(WatchJson.map(message, "maps"));
                 view.boats().load(WatchJson.map(message, "boats"));
                 view.spills().load(WatchJson.map(message, "spills"));
+                view.bounties().load(WatchJson.map(message, "bounties"));
                 view.loadTakenLitter(WatchJson.list(message, "taken"));
             }
             case "info" -> view.say(WatchJson.str(message, "msg", ""));

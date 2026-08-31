@@ -283,6 +283,25 @@ public enum GameAction {
             InputBinding.key(KeyEvent.VK_M)),
     WATCH_BOAT("watch_boat", "Board / Leave Boat", Category.WATCH,
             InputBinding.key(KeyEvent.VK_Y)),
+    // The two party games, and the four keys between them.
+    //
+    // T does three things and they are one intention with a state attached, in
+    // the same way N lights and douses one lamp: with no game on it suggests
+    // one, with a game on it suggests calling it off, and while the party is
+    // being asked either question it is a yes. U is the no, and it is the one
+    // key here that exists only to answer — a poll is on screen for half a
+    // minute at most, and a key that does nothing the rest of the time is a
+    // better trade than overloading one that does something.
+    WATCH_TAG("watch_tag", "Tag — Suggest / Call Off / Vote Yes", Category.WATCH,
+            InputBinding.key(KeyEvent.VK_T)),
+    WATCH_TAG_NO("watch_tag_no", "Tag — Vote No", Category.WATCH,
+            InputBinding.key(KeyEvent.VK_U)),
+    // Q, which is under the left hand's little finger while the other three are
+    // on WASD — the only key on this list that is pressed at a dead run.
+    WATCH_SQUIRT("watch_squirt", "Water Gun (while It)", Category.WATCH,
+            InputBinding.key(KeyEvent.VK_Q)),
+    WATCH_BOUNTY("watch_bounty", "Eye Spy Board", Category.WATCH,
+            InputBinding.key(KeyEvent.VK_J)),
     WATCH_LEAVE("watch_leave", "Leave Walk (while paused)", Category.WATCH,
             InputBinding.key(KeyEvent.VK_L));
 

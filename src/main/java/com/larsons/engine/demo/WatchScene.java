@@ -11,6 +11,7 @@ import com.larsons.engine.input.KeyBinds;
 import com.larsons.engine.input.Pointer;
 import com.larsons.engine.scene.AbstractScene;
 import com.larsons.engine.watch.Boats;
+import com.larsons.engine.watch.Bounty;
 import com.larsons.engine.watch.Cartography;
 import com.larsons.engine.watch.Chart;
 import com.larsons.engine.watch.Cultivation;
@@ -26,6 +27,7 @@ import com.larsons.engine.watch.Shops;
 import com.larsons.engine.watch.Spill;
 import com.larsons.engine.watch.Spotlight;
 import com.larsons.engine.watch.Spyglass;
+import com.larsons.engine.watch.Tag;
 import com.larsons.engine.watch.Trading;
 import com.larsons.engine.watch.WatchClock;
 import com.larsons.engine.watch.WatchGame;
@@ -46,6 +48,7 @@ import com.larsons.engine.watch.light.LightField;
 import com.larsons.engine.watch.light.LightKind;
 import com.larsons.engine.watch.light.PlacedLight;
 import com.larsons.engine.watch.net.WatchSession;
+import com.larsons.engine.watch.render.AnimalPortrait;
 import com.larsons.engine.watch.render.BoardImage;
 import com.larsons.engine.watch.render.BoatModel;
 import com.larsons.engine.watch.render.ChartImage;
@@ -294,7 +297,7 @@ public class WatchScene extends AbstractScene {
     private static final long TRACKS_KEY = Long.MIN_VALUE + 2;
 
     /** Which overlay is up, if any. */
-    private enum Panel { NONE, SATCHEL, BUILD, SHOP, MAP, PAUSED }
+    private enum Panel { NONE, SATCHEL, BUILD, SHOP, MAP, BOUNTY, PAUSED }
 
     private final GameContext ctx;
 
@@ -652,6 +655,23 @@ public class WatchScene extends AbstractScene {
     private int shopIndex;
 
     /**
+     * Where the cursor is on the Eye Spy board's list of things to ask for.
+     *
+     * <p>The list itself is not kept, for the shop's reason turned up a notch: it
+     * is a function of where the player is standing and of what is already on the
+     * board, and both of those change under an open panel — somebody else can pin
+     * up the very species this cursor is sitting on. So it is rebuilt from
+     * {@link Bounty#choices} whenever it is needed, and only the row survives
+     * between frames.
+     */
+    private int bountyIndex;
+
+    private int bountyScroll;
+
+    /** The last thing the board said back — a posting, or why it was refused. */
+    private String bountyLine = "";
+
+    /**
      * The map screen, which draws both a single map and a board.
      *
      * <p>Its own class rather than another six hundred lines here, and it earns
@@ -962,6 +982,12 @@ public class WatchScene extends AbstractScene {
             if (debugging() && input.isKeyJustPressed(java.awt.event.KeyEvent.VK_K)) {
                 summonMutant();
             }
+            // Here rather than in `act`, which is below the panel branch, so
+            // that a poll can be answered from the satchel screen. A poll is
+            // open for half a minute and an abstention is a no — somebody who
+            // happened to be reading a recipe when the party was asked should
+            // not be voted against by their own inventory.
+            answerPoll(input);
         }
 
         if (panel != Panel.NONE) {
@@ -1022,6 +1048,10 @@ public class WatchScene extends AbstractScene {
         }
         if (KeyBinds.pressed(input, GameAction.WATCH_MAP)) {
             drawMap();
+            return;
+        }
+        if (KeyBinds.pressed(input, GameAction.WATCH_BOUNTY)) {
+            openBounties();
             return;
         }
         if (KeyBinds.pressed(input, GameAction.TOGGLE_VIEW)) thirdPerson = !thirdPerson;
@@ -1507,6 +1537,25 @@ public class WatchScene extends AbstractScene {
      * </ul>
      */
     private void walk(double dt, InputManager input) {
+        // Frozen: nothing below this line happens at all, which is the shortest
+        // and the only honest way to write it.
+        //
+        // <b>The host enforces the freeze and this obeys it</b>, which is not the
+        // same rule twice. The host refuses to take a position from somebody who
+        // is counting; if this method ran anyway they would walk away from their
+        // own body and be silently pulled back twenty times a second, which reads
+        // as the game having broken rather than as a count of thirty. And it is
+        // an early return rather than a zeroed input because the vertical half of
+        // walking does not go through the input at all: a swimmer drifts toward
+        // the surface on their own, and a swimmer out of air is floated up
+        // whatever the keys say — both of which would be a screen disagreeing
+        // with the world for half a minute. See Tag.
+        if (view().tag().frozen(session.selfId())) {
+            driveGait(dt, 0, cycleNow());
+            settle = Math.max(0, settle - dt / Gait.SETTLE_SECONDS);
+            return;
+        }
+
         double ground = streamer.groundAt(px, py);
         double surface = TerrainField.WATER_LEVEL;
         double depth = Math.max(0, surface - ground);
@@ -1551,6 +1600,11 @@ public class WatchScene extends AbstractScene {
                     : sprinting && !crouching ? WatchPlayer.RUN_SPEED
                     : WatchPlayer.WALK_SPEED;
         }
+        // Being it, in the one place it changes anything about walking: 1.3×
+        // everywhere — rowing and swimming included, because a chase that can be
+        // won by getting into a boat is not a chase. The other half of the same
+        // number, the freeze, has already returned above. See Tag.speed.
+        speed *= view().tag().speed(session.selfId());
 
         double startX = px, startY = py;
         double length = Math.hypot(forward, strafe);
@@ -1994,6 +2048,27 @@ public class WatchScene extends AbstractScene {
         if (KeyBinds.pressed(input, GameAction.WATCH_BOAT)) request("boat");
         if (KeyBinds.pressed(input, GameAction.WATCH_LIGHT)) request("lamp");
         if (KeyBinds.pressed(input, GameAction.WATCH_CAMPFIRE)) request("putlight");
+        // The tag keys are not here: they are read above the panel branch, so a
+        // poll can be answered from a screen. See answerPoll. The trigger is,
+        // because nobody fires a water gun out of their satchel.
+        if (KeyBinds.pressed(input, GameAction.WATCH_SQUIRT)) request("squirt");
+    }
+
+    /**
+     * T and U: the two keys the party games are worked with.
+     *
+     * <p>T does three things and they are one intention with a state attached,
+     * in the same way N lights and douses one lamp — suggest a game, suggest an
+     * end to one, or say yes to whichever is being asked. U is the no, and it
+     * does nothing at all when nothing is being asked.
+     */
+    private void answerPoll(InputManager input) {
+        if (session == null || view() == null) return;
+        boolean asked = view().tag().polling();
+        if (KeyBinds.pressed(input, GameAction.WATCH_TAG)) {
+            request(asked ? "yes" : "tag");
+        }
+        if (asked && KeyBinds.pressed(input, GameAction.WATCH_TAG_NO)) request("no");
     }
 
     /**
@@ -2126,6 +2201,52 @@ public class WatchScene extends AbstractScene {
                 }
             }
             case "rod" -> castOrStrike(local, me);
+            // The party games. Nothing is drawn optimistically on any of the
+            // four: a poll, a freeze and whoever is it all ride the snapshot, so
+            // the answer is on this screen within a twentieth of a second, and a
+            // client that guessed would be a client that briefly showed a round
+            // the host had refused to start.
+            case "tag" -> {
+                if (local != null) {
+                    String line = local.suggestTag(me);
+                    say(line != null ? line : "Nobody to play with");
+                } else {
+                    session.client().sendTag();
+                }
+            }
+            case "yes", "no" -> {
+                boolean yes = verb.equals("yes");
+                if (local != null) local.voteTag(me, yes);
+                else session.client().sendVote(yes);
+            }
+            case "squirt" -> {
+                if (!view().tag().isIt(me)) {
+                    say("The water gun is whoever is it's");
+                } else if (view().tag().frozen(me)) {
+                    say("Still counting — "
+                            + (int) Math.ceil(view().tag().freeze()) + "s");
+                } else if (local != null) {
+                    local.squirt(me);
+                } else {
+                    session.client().sendSquirt();
+                }
+            }
+            case "bounty" -> {
+                String species = bountyCursor();
+                if (species == null) {
+                    bountySays("Nothing here worth asking for");
+                } else if (local != null) {
+                    String line = local.postBounty(me, species);
+                    bountySays(line == null ? "No such animal" : line);
+                } else {
+                    session.client().sendBounty(species);
+                    // Nothing is assumed, exactly as at a shop counter: the host
+                    // rolls the price and may refuse the posting outright, and a
+                    // number drawn optimistically would be a number it never
+                    // agreed to.
+                    bountySays("…");
+                }
+            }
             default -> { }
         }
     }
@@ -2306,6 +2427,7 @@ public class WatchScene extends AbstractScene {
             case BUILD -> updateBuild(input);
             case SHOP -> updateShop(input);
             case MAP -> updateMap(input);
+            case BOUNTY -> updateBounty(input);
             case PAUSED -> updatePaused(input);
             case NONE -> { }
         }
@@ -2558,6 +2680,92 @@ public class WatchScene extends AbstractScene {
         if (line == null || line.isBlank()) return;
         keeperLine = line;
         keeperFor = KEEPER_SECONDS;
+        say(line);
+    }
+
+    // --- the Eye Spy board -------------------------------------------------------------
+
+    /**
+     * What this walker could ask the party to find, from where they are standing.
+     *
+     * <p>Worked out on this side, from the shared book and the biome underfoot —
+     * exactly as the shops and the boats are, and for the same reason: it is a
+     * pure function of things this machine already has, and asking the host would
+     * be asking a question it could only answer with the same arithmetic. See
+     * {@link Bounty#choices}, which is the function both ends call.
+     */
+    private List<AnimalDef> bountyChoices() {
+        if (streamer == null) return List.of();
+        return view().bounties().choices(view().guide(),
+                streamer.biomeAt(px, py).key(), Bounty.CHOICES);
+    }
+
+    /** The species the board's cursor is on, or {@code null} for an empty list. */
+    private String bountyCursor() {
+        List<AnimalDef> choices = bountyChoices();
+        if (choices.isEmpty()) return null;
+        return choices.get(Math.min(bountyIndex, choices.size() - 1)).key();
+    }
+
+    private void openBounties() {
+        panel = Panel.BOUNTY;
+        bountyIndex = 0;
+        bountyScroll = 0;
+        dragBar = 0;
+        bountyLine = "";
+    }
+
+    /**
+     * The board: a list of things to ask for on the left, and what is already
+     * pinned up on the right.
+     *
+     * <p>Driven by the same two hands as the shop and the satchel, off the same
+     * {@link SatchelBox}, for the reason the shop gives: a third way of working a
+     * list is a third chance to select the row above the one that was clicked.
+     */
+    private void updateBounty(InputManager input) {
+        List<AnimalDef> choices = bountyChoices();
+        SatchelBox box = satchelBox();
+
+        int step = 0;
+        if (KeyBinds.pressed(input, GameAction.MENU_DOWN)) step = 1;
+        if (KeyBinds.pressed(input, GameAction.MENU_UP)) step = -1;
+        if (step != 0 && !choices.isEmpty()) {
+            bountyIndex = Math.floorMod(bountyIndex + step, choices.size());
+        }
+
+        int wheel = input.getWheelRotation();
+        if (wheel != 0) {
+            bountyScroll = boundScroll(bountyScroll + wheel * WHEEL_ROWS,
+                    choices.size(), box.rows());
+        }
+
+        boolean moved = pointerMoved(input);
+        int row = box.columnAt(pointerX, pointerY) == 0 ? box.rowAt(pointerY) : -1;
+        int index = row < 0 ? -1 : bountyScroll + row;
+        if (index >= choices.size()) index = -1;
+        if (index >= 0 && moved) bountyIndex = index;
+
+        boolean post = KeyBinds.pressed(input, GameAction.MENU_SELECT);
+        if (input.isMouseJustPressed()) {
+            if (box.overClose(pointerX, pointerY)) {
+                panel = Panel.NONE;
+                return;
+            }
+            if (index >= 0) {
+                bountyIndex = index;
+                post = true;
+            }
+        }
+        if (post && !choices.isEmpty()) request("bounty");
+        if (KeyBinds.pressed(input, GameAction.WATCH_BOUNTY)) panel = Panel.NONE;
+        if (KeyBinds.pressed(input, GameAction.WATCH_PICK)) panel = Panel.NONE;
+    }
+
+    /** What the board said back, on the panel and in the log. */
+    private void bountySays(String line) {
+        if (line == null || line.isBlank()) return;
+        bountyLine = line;
         say(line);
     }
 
@@ -3089,12 +3297,19 @@ public class WatchScene extends AbstractScene {
             case SHOP -> drawShop(target);
             case MAP -> mapPanel.draw(target, view(), streamer.field(), viewportWidth,
                     viewportHeight);
+            case BOUNTY -> drawBounty(target);
             case PAUSED -> drawPaused(target);
             case NONE -> { }
         }
-        // Last, and deliberately over the panels as well: being hit while
-        // reading a recipe is still being hit, and a satchel screen must not be
-        // the thing that hides the only warning this game gives.
+        // The last two, and deliberately over the panels as well.
+        //
+        // Being hit while reading a recipe is still being hit, and a satchel
+        // screen must not be the thing that hides the only warning this game
+        // gives. The poll card is there for the same reason turned around: T and
+        // U are read above the panel branch precisely so a screen cannot vote
+        // against you by being open, and a card nobody can see would make that
+        // pointless.
+        drawTag(target);
         drawHurt(target);
     }
 
@@ -3331,6 +3546,24 @@ public class WatchScene extends AbstractScene {
         // along the path *behind* the shard, so it says where the thing came
         // from as well as where it is.
         for (Hurl hurl : view.hurls()) {
+            // The other thing that flies, and it is drawn as what it is: three
+            // beads of water tapering back along the way it came, rather than a
+            // shaft. See com.larsons.engine.watch.Tag.
+            if (Tag.JET.equals(hurl.species())) {
+                double cos = Math.cos(hurl.pitch());
+                double jx = Math.sin(hurl.yaw()) * cos;
+                double jy = -Math.cos(hurl.yaw()) * cos;
+                double jz = Math.sin(hurl.pitch());
+                WatchMaterials.uv(WatchMaterial.WATER, uv);
+                for (int bead = 0; bead < 3; bead++) {
+                    double back = bead * 0.34;
+                    double size = 0.075 - bead * 0.018;
+                    Shapes.blob(mesh, hurl.x() - ox - jx * back, hurl.y() - oy - jy * back,
+                            hurl.z() - jz * back, size, size, size, uv,
+                            bead == 0 ? 0xBDE8FF : 0x86C8EE);
+                }
+                continue;
+            }
             AnimalDef thrower = AnimalRegistry.byKey(hurl.species());
             int bone = thrower == null ? 0xD8D2C0
                     : AnimalSkins.regionColour(thrower, AnimalSkins.Region.HARD);
@@ -3899,6 +4132,11 @@ public class WatchScene extends AbstractScene {
     private String heldItem() {
         WatchPlayer me = session.local() == null ? null
                 : session.local().player(session.selfId());
+        // The water gun beats even a cast line, because being it beats
+        // everything: there is no moment during a round when what is in your
+        // hand is a question, and a player who has to look at their hands to
+        // find out whether they can shoot has been told the wrong thing.
+        if (view().tag().isIt(session.selfId())) return Tag.GUN;
         if (me != null && me.rod().active()) return "rod";
         // A lit lamp beats the pickup flash and loses to a cast line, which is
         // the order of how much each of the three is a thing you are *doing*:
@@ -3965,13 +4203,22 @@ public class WatchScene extends AbstractScene {
                         + view.guide().tallied() + " on this page",
                 pad, pad + 90, HUD_SMALL, HUD_DIM);
         drawCompass(target, pad, pad + 112);
+        // The needle, on the compass rather than beside it: whoever is it is
+        // given a bearing to the nearest walker, which is the one thing a chase
+        // in an endless wood needs and cannot get any other way.
+        drawQuarry(target, pad, pad + 112);
 
         // Top right: the party.
         int right = viewportWidth - pad;
         int row = pad + 18;
+        Tag tag = view.tag();
         for (WatchView.Walker walker : view.walkers()) {
             String label = walker.name()
-                    + (walker.id() == view.selfId() ? " (you)" : "");
+                    + (walker.id() == view.selfId() ? " (you)" : "")
+                    // Who is it, beside their name and nowhere else: a party
+                    // spread over a valley has to be able to check at a glance,
+                    // and the answer changes every couple of minutes.
+                    + (tag.isIt(walker.id()) ? "  · IT" : "");
             // Somebody else's health, as a fraction beside their name and only
             // while they are hurt. A party spread over a valley finds out that
             // one of them has walked into something this way and no other, and
@@ -4053,9 +4300,16 @@ public class WatchScene extends AbstractScene {
         }
         if (panel == Panel.NONE) {
             String keys = "E use · F feeder · R plant · C cross · V rod · Y boat "
-                    + "· B build · Tab satchel · G guide";
+                    + "· B build · Tab satchel · G guide · J eye spy";
             if (view.satchel().has(Spyglass.ITEM)) {
                 keys += " · Right-click glass";
+            }
+            // Only with somebody to play with, because it is the one verb on
+            // this line the host refuses outright on a walk for one — and a hint
+            // for a key that cannot work is worse than no hint. Q joins it only
+            // while there is actually a gun in your hand.
+            if (view.walkers().size() >= Tag.LEAST_PLAYERS) {
+                keys += tag.isIt(view.selfId()) ? " · Q squirt · T call off" : " · T tag";
             }
             // Only once the mode is on, because it is the only verb on this
             // line that would otherwise refuse — and a hint for a key that does
@@ -4139,6 +4393,15 @@ public class WatchScene extends AbstractScene {
         lines.add("guide  " + view.guide().discovered() + " / " + view.guide().total()
                 + " · " + view.guide().points() + " pts · vol " + view.guide().volume()
                 + " (" + view.guide().tallied() + " scored)");
+        // The two party games, on one line each. Both are idle nearly always,
+        // which is exactly why they are worth a line: the interesting states are
+        // the ones nobody can reproduce on demand.
+        Tag tag = view.tag();
+        lines.add("tag  " + tag.describe().toLowerCase(java.util.Locale.ROOT)
+                + (tag.polling() ? "  ·  " + tag.tally() : "")
+                + (tag.running() ? "  ·  ×" + tag.speed(view.selfId()) : ""));
+        lines.add("eye spy  " + view.bounties().openCount() + " open · "
+                + view.bounties().settled().size() + " claimed");
         // Where the nearest trading post is, which is the one thing in this
         // world that is worth walking a long way to and cannot be seen from
         // anywhere near it.
@@ -4251,6 +4514,110 @@ public class WatchScene extends AbstractScene {
         }
         target.fillRect(x + width / 2, y - height + 4, 1, height, HUD_ACCENT);
     }
+
+    /**
+     * The needle whoever is it is given: which way the nearest walker is, and
+     * how far.
+     *
+     * <p><b>Only while it, and that is the whole balance of the feature.</b> A
+     * bearing to the nearest person, given to everybody, would end every round in
+     * about forty seconds — the field would simply spread out along the vectors
+     * they were shown. Given to one player it is the answer to the only question
+     * a chase in a wood with no edges and no landmarks can ask, which is "which
+     * way did they go".
+     *
+     * <p>Drawn on the compass strip rather than beside it, because it is a
+     * bearing and that strip is where this game keeps bearings. It is one more
+     * mark sliding under the same fixed marker, in a colour nothing else on the
+     * HUD uses.
+     */
+    private void drawQuarry(DrawTarget target, int x, int y) {
+        Tag tag = view().tag();
+        if (!tag.isIt(session.selfId())) return;
+        WatchView.Walker quarry = view().nearestOther(session.selfId(), px, py);
+        if (quarry == null) return;
+
+        int width = 190;
+        double bearing = Math.atan2(quarry.x() - px, -(quarry.y() - py));
+        double delta = bearing - yaw;
+        delta = Math.atan2(Math.sin(delta), Math.cos(delta));
+        double metres = Math.hypot(quarry.x() - px, quarry.y() - py);
+
+        // Behind you, the needle pins to whichever edge it went off — an arrow
+        // that simply vanished when somebody ran round you would be a compass
+        // that stops working at the exact moment it is being read.
+        boolean ahead = Math.abs(delta) <= Math.PI / 2;
+        double clamped = Math.max(-Math.PI / 2, Math.min(Math.PI / 2, delta));
+        int at = (int) (x + width / 2.0 + clamped / (Math.PI / 2) * (width / 2.0));
+        target.fillRect(at - 1, y - 20, 3, 10, QUARRY_INK);
+
+        String line = quarry.name() + "  " + Math.round(metres) + " m"
+                + (ahead ? "" : delta > 0 ? "  →" : "  ←");
+        label(target, line, at - target.textWidth(line, HUD_SMALL) / 2, y - 24,
+                HUD_SMALL, QUARRY_INK);
+    }
+
+    /**
+     * The poll card, and the banner under it.
+     *
+     * <p><b>Top centre, over the world, and never a panel.</b> Everything else in
+     * this game that asks a question stops the walk while it is asking — see
+     * {@link #updatePanel}, which returns before {@link #walk}. This one cannot:
+     * the question a running round asks is "shall we stop", and a screen that
+     * froze eight people mid-chase for half a minute to ask it would hand whoever
+     * is it their thirty seconds back. So it is two lines and two keys, in the one
+     * part of the screen this HUD otherwise leaves empty.
+     */
+    private void drawTag(DrawTarget target) {
+        Tag tag = view().tag();
+        if (tag.idle()) return;
+        int cx = viewportWidth / 2;
+        int top = 26;
+
+        if (tag.polling()) {
+            String question = tag.question();
+            String keys = tag.voted(session.selfId())
+                    ? "answered · T yes · U no · " + (int) Math.ceil(tag.voteRemaining()) + "s"
+                    : "T — yes · U — no · " + (int) Math.ceil(tag.voteRemaining()) + "s";
+            int width = Math.max(target.textWidth(question, HUD_BOLD),
+                    target.textWidth(keys, HUD_SMALL)) + 40;
+            target.fillRect(cx - width / 2, top - 4, width, 60, HUD_PANEL);
+            target.drawRect(cx - width / 2, top - 4, width, 60, HUD_ACCENT);
+            label(target, question, cx - target.textWidth(question, HUD_BOLD) / 2,
+                    top + 18, HUD_BOLD, HUD_INK);
+            label(target, keys, cx - target.textWidth(keys, HUD_SMALL) / 2, top + 36,
+                    HUD_SMALL, HUD_ACCENT);
+            label(target, tag.tally(), cx - target.textWidth(tag.tally(), HUD_SMALL) / 2,
+                    top + 50, HUD_SMALL, HUD_DIM);
+            top += 72;
+        }
+
+        if (!tag.running()) return;
+        boolean mine = tag.isIt(session.selfId());
+        String banner = mine
+                ? tag.freeze() > 0
+                        ? "YOU ARE IT — counting " + (int) Math.ceil(tag.freeze())
+                        : "YOU ARE IT — Q to squirt"
+                : tag.it() + " is it"
+                        + (tag.freeze() > 0
+                                ? " — frozen for " + (int) Math.ceil(tag.freeze()) : "");
+        label(target, banner, cx - target.textWidth(banner, HUD_BOLD) / 2, top + 16,
+                HUD_BOLD, mine ? QUARRY_INK : HUD_WARN);
+
+        // The count, as a bar rather than only as a number: thirty seconds is a
+        // long time to watch a digit, and everybody else on the walk is reading
+        // the same bar to work out how long they have to get somewhere.
+        if (tag.freeze() > 0) {
+            int barW = 190, barH = 5;
+            int barX = cx - barW / 2, barY = top + 24;
+            double left = tag.freeze() / Tag.FREEZE_SECONDS;
+            target.fillRect(barX, barY, barW, barH, new Color(0, 0, 0, 150));
+            target.fillRect(barX, barY, (int) (barW * left), barH, QUARRY_INK);
+        }
+    }
+
+    /** The one colour on this HUD that means "the game of tag", and nothing else. */
+    private static final Color QUARRY_INK = new Color(120, 190, 240);
 
     /**
      * The health bar, and the state of the wound under it.
@@ -5194,6 +5561,139 @@ public class WatchScene extends AbstractScene {
                 HUD_SMALL, HUD_DIM);
     }
 
+    /**
+     * The Eye Spy board.
+     *
+     * <p>Two columns and they answer two different questions. On the left, what
+     * you could ask for: the species of the ground under your feet, the ones
+     * already in the book first because a bounty on something somebody can
+     * describe is a bounty somebody can go and look for. On the right, what is
+     * already pinned up and what has been claimed — which is the half a player
+     * actually opens this panel for, because it is the party's list of things
+     * worth doing this week.
+     */
+    private void drawBounty(DrawTarget target) {
+        SatchelBox box = satchelBox();
+        int x = box.x(), y = box.y(), w = box.w(), h = box.h();
+        target.fillRect(x, y, w, h, HUD_PANEL);
+        target.drawRect(x, y, w, h, HUD_ACCENT);
+        target.drawText("Eye Spy", x + 20, y + 32, TITLE_FONT, HUD_INK);
+        WatchBiome here = streamer == null ? null : streamer.biomeAt(px, py);
+        target.drawText("What lives in " + (here == null ? "here" : here.displayName())
+                        + ", and what the party has asked for",
+                x + 20, y + 54, HUD_SMALL, HUD_DIM);
+        drawCloseButton(target, box);
+
+        Bounty board = view().bounties();
+        String me = myName();
+        boolean spent = board.postedToday(me, System.currentTimeMillis());
+        String allowance = spent
+                ? "Your bounty is spent — one a day"
+                : "One bounty to pin up today";
+        target.drawText(allowance,
+                x + w - target.textWidth(allowance, HUD_BOLD) - 46, y + 54, HUD_BOLD,
+                spent ? HUD_WARN : HUD_ACCENT);
+
+        // --- what you could ask for -----------------------------------------
+        List<AnimalDef> choices = bountyChoices();
+        bountyScroll = boundScroll(bountyScroll, choices.size(), box.rows());
+        target.drawText("Ask the party to find", box.leftX(), y + 80, HUD_BOLD,
+                HUD_ACCENT);
+        for (int i = 0; i < box.rows(); i++) {
+            int index = bountyScroll + i;
+            if (index >= choices.size()) break;
+            AnimalDef def = choices.get(index);
+            int top = box.rowTop(i);
+            int text = top + ROW_HEIGHT - 9;
+            if (index == bountyIndex) {
+                target.fillRect(box.leftX() - 8, top, box.colWidth(), ROW_HEIGHT - 2,
+                        new Color(60, 110, 70, 160));
+            }
+            target.drawImage(AnimalPortrait.of(def, ICON, ICON_BACKDROP),
+                    box.leftX(), top + 3, ICON, ICON);
+            boolean known = view().guide().seen(def.key());
+            target.drawText(def.name(), box.leftX() + ICON + 10, text, HUD_FONT,
+                    spent ? new Color(130, 140, 132) : HUD_INK);
+            // Whether it is in the book at all, which is the one thing that
+            // changes what kind of bounty this would be: a reminder, or a hunt.
+            String note = known ? "in the book" : "never seen";
+            target.drawText(note,
+                    box.leftX() + box.colWidth() - target.textWidth(note, HUD_SMALL) - 12,
+                    text, HUD_SMALL, known ? HUD_DIM : HUD_WARN);
+        }
+        if (choices.isEmpty()) {
+            target.drawText("Nothing here that is not already asked for",
+                    box.leftX(), box.listTop() + 20, HUD_FONT, HUD_DIM);
+        }
+        scrollbar(target, box.barX(0), box.barTop(), box.barHeight(), bountyScroll,
+                box.rows(), choices.size());
+
+        // --- what is already up ---------------------------------------------
+        int rx = box.rightX();
+        int width = box.colWidth();
+        List<Bounty.Posting> open = board.open();
+        target.drawText("On the board  (" + open.size() + ")", rx, y + 80, HUD_BOLD,
+                HUD_ACCENT);
+        int line = box.listTop() + 14;
+        long now = System.currentTimeMillis();
+        for (Bounty.Posting posting : open) {
+            if (line > y + h - 150) break;
+            boolean mine = me.equals(posting.poster());
+            target.drawText(fitted(target, posting.describe(), width), rx, line,
+                    HUD_FONT, mine ? HUD_DIM : HUD_INK);
+            // Whose it is decides whether it is worth anything to you, so the
+            // one rule this board has is on the row rather than in a footnote.
+            target.drawText(mine ? "yours — you cannot claim it"
+                            : Math.round(posting.hoursLeft(now)) + "h left",
+                    rx + 12, line + 15, HUD_SMALL, mine ? HUD_WARN : HUD_DIM);
+            line += 38;
+        }
+        if (open.isEmpty()) {
+            target.drawText("Nothing pinned up", rx, line, HUD_FONT, HUD_DIM);
+            line += 24;
+        }
+
+        List<Bounty.Posting> settled = board.settled();
+        if (!settled.isEmpty() && line < y + h - 130) {
+            target.drawText("Claimed", rx, line + 14, HUD_BOLD, HUD_DIM);
+            line += 34;
+            for (Bounty.Posting posting : settled) {
+                if (line > y + h - 96) break;
+                target.drawText(fitted(target, posting.describe(), width), rx, line,
+                        HUD_SMALL, HUD_DIM);
+                line += 18;
+            }
+        }
+
+        // --- what happened last -----------------------------------------------
+        int foot = y + h - 74;
+        AnimalDef chosen = choices.isEmpty() ? null
+                : choices.get(Math.min(bountyIndex, choices.size() - 1));
+        if (chosen != null) {
+            target.drawText(fitted(target, chosen.name() + "  ·  " + chosen.blurb(),
+                            w - 60),
+                    box.leftX(), foot, HUD_SMALL, HUD_DIM);
+            target.drawText("Enter — pin it up. The world decides what it pays: "
+                            + Bounty.LEAST + "–" + Bounty.MOST + " points.",
+                    box.leftX(), foot + 20, HUD_SMALL,
+                    spent ? new Color(130, 140, 132) : HUD_ACCENT);
+        }
+        if (!bountyLine.isEmpty()) {
+            target.drawText(fitted(target, bountyLine, w - 60), box.leftX(), foot + 42,
+                    HUD_FONT, HUD_INK);
+        }
+
+        String keys = "Click to pin · ↑↓ · Enter · J close";
+        target.drawText(keys, x + w - target.textWidth(keys, HUD_SMALL) - 46, y + 32,
+                HUD_SMALL, HUD_DIM);
+    }
+
+    /** What this walker is called, for the rules that are about a name. */
+    private String myName() {
+        WatchView.Walker me = view().self();
+        return me == null ? "" : me.name();
+    }
+
     /** A line broken onto as many rows as it needs, at the panel's own width. */
     private static List<String> wrapped(DrawTarget target, String text, int width) {
         List<String> out = new ArrayList<>();
@@ -5247,6 +5747,10 @@ public class WatchScene extends AbstractScene {
      * empty list. For tests.
      */
     public String panelCursor() {
+        // The Eye Spy board's rows are species rather than items, so its cursor
+        // answers a species key. A test that could not tell the two apart would
+        // pass while the board was offering fishing rods.
+        if (panel == Panel.BOUNTY) return bountyCursor();
         if (panel == Panel.SHOP) {
             Shops.Shop shop = shopInReach();
             if (shop == null || shop.stock().isEmpty()) return null;
@@ -5283,6 +5787,9 @@ public class WatchScene extends AbstractScene {
 
     /** What is in reach of the local player this frame, or {@code null} — for tests. */
     public WatchGame.Pickable inReach() { return inReach; }
+
+    /** How fast this walk is moving the local player, as a multiple — for tests. */
+    public double paceMultiplier() { return view().tag().speed(session.selfId()); }
 
     /** The camera, so a test can check where it ended up. */
     public EyeCamera camera() { return eye; }
