@@ -223,6 +223,7 @@ public final class WatchClient implements AutoCloseable {
                 view.loadWalkers(WatchJson.objects(message, "players"));
                 view.loadCreatures(WatchJson.objects(message, "animals"));
                 view.loadLures(WatchJson.objects(message, "lures"));
+                view.loadLights(WatchJson.objects(message, "lights"));
                 view.loadHurls(WatchJson.objects(message, "hurls"));
                 view.weather().load(WatchJson.map(message, "sky"));
             }

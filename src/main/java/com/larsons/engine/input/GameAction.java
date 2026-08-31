@@ -264,6 +264,16 @@ public enum GameAction {
             InputBinding.mouse(MouseEvent.BUTTON3), InputBinding.key(KeyEvent.VK_Z)),
     WATCH_TURN_PIECE("watch_turn_piece", "Turn Build Piece", Category.WATCH,
             InputBinding.key(KeyEvent.VK_X)),
+    // The two the dark needs. N lights or puts out whatever is in your hand —
+    // one key, because "make it light" and "make it dark" are one intention
+    // with a state attached, and a game that asked for two would be a game
+    // where you have to remember which you last pressed. H sets a light down,
+    // or builds a campfire out of branches and stones when your hands are
+    // empty: H for hearth.
+    WATCH_LIGHT("watch_light", "Light / Douse Lantern", Category.WATCH,
+            InputBinding.key(KeyEvent.VK_N)),
+    WATCH_CAMPFIRE("watch_campfire", "Set Down Light / Build Fire", Category.WATCH,
+            InputBinding.key(KeyEvent.VK_H)),
     // M, which is where every game has put a map for thirty years. It is on the
     // controls screen like any other verb even though the feature behind it is
     // still {@code Debug.Power.MAPS} — a key that does nothing until you know a

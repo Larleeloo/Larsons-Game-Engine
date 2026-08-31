@@ -514,10 +514,17 @@ A new, narrow core interface:
 ```java
 public interface MeshPass {
     void setTexture(BufferedImage atlas, int revision);
+    void setLighting(List<Light> lights, float dayR, float dayG, float dayB);
     void draw(List<Mesh.Draw> draws, EyeCamera eye, int fogArgb,
               double fogStart, double fogEnd);
 }
 ```
+
+`setLighting` arrived with §7j and is the one thing here that is not baked into
+the geometry: the hour's own multiplier, and up to `MAX_LIGHTS` point lights in
+world coordinates. It has a do-nothing default, so a backend that ignores it —
+and `GlTerrainPass`, which shares the shader — draws exactly what it drew
+before.
 
 `TerrainPass.meshPass()` returns one (default `null`). `GlMeshPass` uploads each
 mesh once into a VBO keyed by the mesh's identity and revision, re-uses it until
@@ -573,6 +580,7 @@ party spread across the map costs what it should.
 | Infinite low-poly 3D terrain, custom textures | `watch/world/TerrainField`, `watch/render/TerrainMesher`, `WatchMaterials` (texture keys) |
 | Online, up to 8 | `watch/net/*`, `WatchProto.MAX_PLAYERS = 8` |
 | GPU accelerated, multithreaded | `gl/GlMeshPass`, `graphics/MeshPass`; `ChunkStreamer` worker pool |
+| GPU-accelerated lighting; placeable and carried lights; glowing mutants | `watch/light/*`, `watch/render/LightModel`, `MeshPass.setLighting`, `gl/GlTerrainProgram`'s fragment lighting — see §7j |
 | Trees that grow in stages | `TreeSpecies.Stage`, `TreeInstance.advance`, `Grove` |
 | Grass of varying length | `GrassField`, `WatchBiome.grassMin/grassMax` |
 | 3D animals from Blockbench + placeholders | `watch/life/Blockbench`, `AnimalModel`, `resources/watch/models/README.md` |
@@ -1950,6 +1958,11 @@ same light, so the *contrast* survives every hour of the day, and at night —
 which is when these are out — ten-to-one against a dark body is the only thing on
 them the eye finds.
 
+That is still true of the *material*, and §7j is the other half of it: the glow
+is a colour on a texture, and the light it casts on the trunks beside the
+creature is a point light in the same colour. Neither needed an emissive vertex
+channel.
+
 Two new skin regions carry it, `GLOW` and `SHADOW`, and they **cost nothing**:
 the eight original regions look like they tile the 64×64 sheet and do not quite,
 leaving a 32×16 strip along the bottom right that nothing had ever painted or
@@ -2121,6 +2134,205 @@ written to avoid is still a metre away at the closest corner.
 
 ---
 
+## 7j. Firelight, and the shader that finally got some
+
+> Asked for: lighting accelerated by the GPU — lanterns and campfires that can
+> be placed, some lights that can be carried, and the mutant animals glowing.
+
+The world had a day and a night and nothing in between you could carry. Every
+colour in it is a baked albedo multiplied by the hour (`WatchClock.lightTint`),
+and the whole of "night" was that multiplier reaching 0.26. Nothing in the game
+could add to it.
+
+### The bug this found on the way in
+
+**The card was not applying the hour at all.** `WatchRenderer.fogged` multiplies
+every vertex by `lightTint` on the painter path; `GlMeshPass` uploaded the same
+vertices and drew them through a shader with no such uniform. A machine with a
+driver therefore played the whole game at noon while a machine without one had a
+night — a difference nobody had put a number on because both pictures look like
+a wood.
+
+It is one call now, `MeshPass.setLighting`, made from `WatchRenderer.flush`, and
+the two paths shade the same world at the same hour. Everything below rides on
+the same seam.
+
+### Four things that burn (`watch/light/LightKind`)
+
+A catalogue, not four classes — a light here is entirely described by numbers,
+so the difference between a campfire and a lantern is a row:
+
+| | Colour | Reach | Burns | Fed with | Carried |
+|---|---|---|---|---|---|
+| **Campfire** | deep orange | 12 m | 4 h | branches | no — built where it stands |
+| **Lantern** | warm yellow | 9 m | 9 h | sap | yes |
+| **Torch** | orange | 6.5 m | 1.2 h | nothing — it burns out and is gone | yes |
+| **Spore Lantern** | cold green | 7.5 m | for ever | nothing | yes |
+
+The colours are the point of having four. A camp lit by one warm fire and one
+cold spore lantern reads as two pools of light on the same ground, and at a
+hundred metres in the dark you can tell which of your party is carrying which.
+The spore lantern is also the one thing in the game whose ingredient comes from
+exactly one biome (`glow_spore`, the mushroom hollow): the only light that never
+goes out should be the one you had to go somewhere for.
+
+Fuel is measured in **real hours** off the wall clock, like the trees and the
+crops and for the same reason — a fire lit before bed is out in the morning
+whether or not anybody was logged in.
+
+### Two keys, and what they mean
+
+* **N** — light, douse or fill whatever is in your hand. One key, because "make
+  it light" and "make it dark" are one intention with a state attached: burning
+  goes out, out-with-oil comes back, empty-with-sap-in-the-bag is filled and
+  lit, and empty hands take the longest-lasting light in the satchel.
+* **H** — set it down (H for hearth). What is in your hand goes down first,
+  keeping the oil it has left; with empty hands it builds a campfire out of
+  three branches and two stones.
+* **E** — the existing reach key, which now finds a fire as a `Pickable.FIRE`
+  and tends it: an armful of branches goes on a guttering one, a cold one is
+  lit, and a lantern with nothing wrong with it is picked back up — still
+  burning, with the oil it had.
+
+**Putting a lamp out keeps its oil**, which is the whole reason `WatchPlayer`
+carries a separate `lampLit` flag rather than letting a null key mean "not
+burning". A lamp that forgot its oil every time it was doused would make the
+fuel economy a formality: putting one out and lighting it again is two
+keypresses.
+
+New walkers start with two torches, on the same argument as the starting seed
+and berries: this clock is the real one, and somebody who begins a walk at nine
+in the evening should not have to forage a wood they cannot see in first.
+
+### The mutants light the ground now
+
+§7i's note on the glow — "the mesh format has no emissive channel, so it glows
+by contrast rather than by emitting" — is still exactly right about the
+*material*. What was missing was the other half: a creature with a burning
+ribcage should light the trunks beside it. Each of the three now carries a point
+light in its own `AnimalSkins.Region.GLOW` colour at chest height, pulsing on a
+slow two-second heartbeat rather than a flame's chatter.
+
+Its reach is **6.2 m, deliberately short for how bright it is**. A wendigo lighting
+the wood the way a campfire does would mean meeting one is well lit, which is
+precisely the wrong feeling; six metres lights the ground it stands on and the
+trunks beside it and nothing else. The thing you can see is the thing that is
+already too close.
+
+### What is burning, per frame (`watch/light/LightField`)
+
+Nothing about a light travels. A fire's *existence* is world state the host owns
+and replicates — where it is, whether it is lit, how much is left in it — and
+every *consequence* of it is worked out on the machine that draws it, which is
+the same bargain `Sparks` strikes for embers and `WatchSounds` for noises. It
+buys a flicker that cannot arrive late and nothing on the wire when eight people
+stand round one fire.
+
+Five things are gathered: placed lights, everybody's carried lights (not only
+your own — a lantern moving along the far side of a valley is how a party keeps
+track of each other after dark), mutants, a wendigo's burning shards in flight,
+and the one feeder bait that is itself a lamp (`moth_lamp`, whose own
+description said so already).
+
+**The bound is the design.** A fragment shader that walks a list walks all of
+it, so the list is capped at `MeshPass.MAX_LIGHTS` = 16 and the cap is applied
+here, ranked by how much lit ground each light can put in front of the camera —
+full marks while the eye is inside a light's own sphere, falling away outside
+it. A party that lights forty lanterns in one clearing gets the sixteen that
+reach them and no frame-rate cliff, because the alternative is a game that gets
+slower the more of it you build.
+
+### The normal problem, and the two answers to it
+
+Point lights need a surface normal and this vertex format has none — three
+positions, two texture coordinates and a colour, chosen so a chunk can be
+uploaded once and drawn for as long as it is in view. Adding one would be four
+more bytes on every vertex in memory to carry a number that is the same for all
+three vertices of a flat-shaded triangle.
+
+Neither path pays for it:
+
+* **The painter** has the normal for nothing. It walks triangles, and a flat-shaded
+  mesh's three vertices *are* the face: one cross product per triangle, and only
+  for triangles in a mesh that survived a per-mesh light cull.
+* **The card** derives it per fragment from the screen-space gradient of the
+  eye-space position — `normalize(cross(dFdx(vEye), dFdy(vEye)))` is exactly the
+  plane the triangle lies in, costs two instructions, and is free of the one
+  thing an interpolated normal would give: smoothing, which is precisely what
+  this world does not want.
+
+Both then turn the normal toward the eye, because grass, leaves and water are
+single-sided sheets meant to be seen from either face — a lantern behind a blade
+of grass has to light the side you are looking at.
+
+The arithmetic after that is one function, `LightField.contribute`, written out
+once in Java and once in GLSL:
+
+```
+  fall   = (1 − distance/radius)²        compact, so a light is either inside a
+                                         fragment's reckoning or costs it nothing
+  ndotl  = max(0, N · L)
+  light += colour × intensity × fall × (WRAP + (1 − WRAP) × ndotl)
+```
+
+`WRAP` (0.32) lives on `MeshPass.LIGHT_WRAP` so both sides read one number. It
+is why a fire lights the underside of a branch: pure Lambert on flat-shaded
+low-poly geometry is black on everything not squarely facing the flame, and a
+wood at night is mostly surfaces that are not. Inverse-square would be more
+nearly physical and has no outer edge at all — which means every light in the
+world contributes to every fragment, the thing a bounded list exists to prevent.
+
+### Where the cost goes
+
+| | Painter | Card |
+|---|---|---|
+| Lights per frame | ≤ 16, culled again per mesh | ≤ 16, in a uniform block |
+| Normal | one cross product per triangle | `dFdx`/`dFdy`, per fragment |
+| Meshes that pay anything | only those whose bounding box a light's sphere touches | all — it is two dozen instructions |
+| Geometry re-uploaded when a light moves | none | none |
+
+The per-mesh cull is what makes the painter afford this at all: a campfire
+reaches twelve metres and a chunk is thirty-two across, so all but a handful of
+the meshes in a frame are outside every light in the world. One box test each
+throws them out and their forty thousand triangles never ask a lighting
+question.
+
+### The objects (`watch/render/LightModel`)
+
+A pool of light with nothing in the middle of it reads as a rendering fault. So:
+a ring of seven stones with three logs across it and a three-cone flame; a
+lantern's base, four uprights, a cap and its bail — open-sided, because a
+modelled pane would hide the only part of it that matters; a torch as a shaft
+with a bound head. A campfire that has burnt out **chars rather than vanishes**,
+because a four-hour fuel should be a chore and not a punishment: the logs go to
+ash colour and the hearth stays lightable.
+
+The flame is built on `WatchMaterial.PAPER` — the white, grainless tile the map
+board needed — so that `texture × vertexColour` on a card and the vertex colour
+alone in the painter come out as the same fire. It needs no emissive channel: a
+flame sits at the exact centre of its own point light, so the lighting pass hands
+it the full intensity of the thing it is the source of, and it reads at its own
+colour at every hour of the day.
+
+Campfires throw embers, through `Sparks` — the class that already existed for
+burning bone shards — at fourteen a second, rising, capped at six fires' worth.
+Sparks going up are what say the light is being *made* rather than emitted.
+
+### What travels
+
+Placed lights ride the **snapshot**, beside the feeders rather than on the
+five-second world sync, and for the feeders' reason: they are world state that
+changes on its own. A built piece never does; a fire goes out, and a party who
+watched their camp go dark five seconds after it happened would learn to
+distrust the picture. A row is six numbers and a key.
+
+A carried light is one field on the player row (`lt`), and the hours left in it
+a second (`lh`) — which is what draws the gauge above the stillness bar, and
+which had to be sent in **hours rather than as a fraction** so that the row
+carries no knowledge of the catalogue.
+
+---
+
 ## 8. Tests
 
 `src/test/java/com/larsons/engine/watch/`
@@ -2195,6 +2407,35 @@ written to avoid is still a metre away at the closest corner.
 * `WatchNetTest` — an eight-player session over loopback: join, move, spot,
   spotlight broadcast, build, disconnect; the ninth is refused.
 * `WatchClockTest` — the real-clock mapping, both directions.
+* `LightingTest` — the four layers of §7j. **The catalogue**: every light names
+  items, fuel and costs that exist, and every carried one can actually be made.
+  **The world state**: a fire burns down over real hours and leaves a lightable
+  hearth, a torch is spent and gone, feeding relights and is capped at a full
+  charge, two lights cannot stand inside each other, and every standing light
+  survives a save and the wire with whatever is left in it. **The verbs**: one
+  key lights and douses, dousing keeps the oil (the exploit that would otherwise
+  make the fuel economy a formality), an empty lantern is filled from the
+  satchel, empty hands build a fire out of branches and stones, what is in your
+  hand goes down before a campfire does and keeps its oil, standing at a fire
+  offers to tend it and E feeds it, taking a lit lantern back keeps it burning,
+  dying drops the lamp with the bag, and a reopened walk finds the camp.
+  **The picture**: everything burning reaches the frame and a cold hearth does
+  not, a mutant lights the ground in its own glow colour at chest height, forty
+  lanterns are capped at sixteen and the fire you are standing at is not the one
+  dropped, the falloff is compact and the wrap share is the constant both
+  backends read — and, through the painter end to end, a campfire measurably
+  brightens and warms the ground in front of it while one four hundred metres
+  away changes nothing. The last of those also pins the bug §7j opens with: at
+  midnight the world is a quarter of its noon brightness, which is the number the
+  card is now handed and was not before.
+  `gl/…/GlLightingTest` is the other end of it, on a real driver and skipped
+  where there is none: the world shader compiles with its lighting block, the
+  driver keeps the uniforms (an array looked up as `uLightPos` rather than
+  `uLightPos[0]` comes back −1 and every write to it is accepted and discarded),
+  a full block of sixteen uploads cleanly, one too many is clamped rather than
+  written past the array, and binding the program leaves the block neutral —
+  which is what keeps `GlTerrainPass`, which shares the shader and knows nothing
+  about any of this, drawing exactly what it drew before.
 * `WatchSceneTest` — the mini game is on the launch strip, the scenes register,
   the lobby's menu offers what it should.
 * `WeatherTest` — it changes, it never changes into what is already up, a

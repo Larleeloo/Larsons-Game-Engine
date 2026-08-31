@@ -28,7 +28,8 @@ import java.util.Map;
  *
  *   client → server   {"t":"move","x":..,"y":..,"z":..,"yaw":..,"p":..,"c":false}
  *   server → all      {"t":"state","tick":42,"time":0.61,
- *                      "players":[…],"animals":[…],"lures":[…],"hurls":[…]}
+ *                      "players":[…],"animals":[…],"lures":[…],"hurls":[…],
+ *                      "lights":[…]}
  *
  *   client → server   {"t":"spot","a":animalId}     (0 = whatever I am looking at)
  *   server → all      {"t":"seen","a":id,"sp":"songbird_finch_banded","by":"Kara",
@@ -36,6 +37,8 @@ import java.util.Map;
  *
  *   client → server   {"t":"pick"} {"t":"log"} {"t":"harvest"} {"t":"cross"}
  *   client → server   {"t":"lure","f":"suet_cake"} {"t":"refill","id":..}
+ *   client → server   {"t":"lamp"}       (light, douse or fill what is in hand)
+ *   client → server   {"t":"putlight"}   (set a light down, or build a fire)
  *   client → server   {"t":"plant","s":"acorn"}
  *   client → server   {"t":"build","p":"platform","r":2,"tree":true}
  *   client → server   {"t":"craft","o":"suet_cake","st":"FIRE"}
@@ -189,7 +192,7 @@ public final class WatchProto {
     public static Map<String, Object> state(long tick, double timeOfDay,
                                             List<WatchPlayer> players,
                                             List<Animal> animals, List<Lure> lures,
-                                            List<Hurl> hurls,
+                                            List<Hurl> hurls, List<Object> lights,
                                             Map<String, Object> sky) {
         Map<String, Object> m = msg("state");
         m.put("tick", tick);
@@ -233,6 +236,14 @@ public final class WatchProto {
         List<Object> lureRows = new ArrayList<>();
         for (Lure lure : lures) lureRows.add(lure.toMap());
         m.put("lures", lureRows);
+
+        // The fires and lanterns, beside the feeders and for the feeders'
+        // reason: they are world state that <em>changes on its own</em>. A
+        // built piece never does, so it can ride the five-second world sync;
+        // a fire goes out, and a party who watched their camp go dark five
+        // seconds after it happened would learn to distrust the picture. A row
+        // is six numbers and a key, and a well-lit camp has half a dozen.
+        m.put("lights", lights == null ? new ArrayList<>() : lights);
         return m;
     }
 

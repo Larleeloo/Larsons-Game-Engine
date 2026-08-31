@@ -172,6 +172,29 @@ public final class Recipes {
                 "For putting seeds where you want them.",
                 "fallen_branch", 1, "stone", 1);
 
+        // --- the things that burn -----------------------------------------------
+        //
+        // Three, at three prices, and the prices are the design. A torch is one
+        // branch and one lot of sap because it has to be the thing you make
+        // when the sun goes down further from camp than you meant to be — an
+        // hour of light for two minutes of foraging. A lantern is a bench, a
+        // pane's worth of quartz and a plank, because nine hours of light you
+        // can walk with is worth a walk to a crag. And the spore lantern costs
+        // three glow spores, which grow in exactly one biome: the only light
+        // that never goes out should be the one you had to go somewhere for.
+        //
+        // See com.larsons.engine.watch.light.LightKind for what each is worth
+        // once it is lit, and WatchGame.setDownLight for putting one down.
+        add(out, "torch", 2, Station.HANDS,
+                "Bark round a branch, soaked in sap. An hour of light, and then ash.",
+                "fallen_branch", 1, "bark_strip", 1, "sap", 1);
+        add(out, "lantern", 1, Station.BENCH,
+                "Quartz panes, a plank frame and a wire bail. It burns sap for hours.",
+                "quartz", 2, "plank", 1, "sap", 2, "rope", 1);
+        add(out, "spore_lantern", 1, Station.BENCH,
+                "Glow spores sealed in a jar. Cold, green, and it outlasts you.",
+                "glow_spore", 3, "quartz", 1, "rope", 1);
+
         // --- the spyglass, in two steps --------------------------------------------
         //
         // Deliberately the longest chain in the game, because it is the only

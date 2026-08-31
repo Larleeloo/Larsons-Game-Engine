@@ -1,6 +1,7 @@
 package com.larsons.engine.watch.render;
 
 import com.larsons.engine.watch.Forage;
+import com.larsons.engine.watch.light.LightKind;
 import com.larsons.engine.watch.world.WatchMaterial;
 import com.larsons.engine.watch.world.WatchMaterials;
 
@@ -974,6 +975,22 @@ public final class ItemModel {
             case "feeder" -> feeder(mesh, x, y, z, scale, yaw, uv, colour);
             case "journal" -> journal(mesh, x, y, z, scale, yaw, uv, colour);
             case "spyglass" -> spyglass(mesh, x, y, z, scale, yaw, uv, colour);
+            // The three things you can carry that burn, drawn <b>unlit</b> here
+            // and by the same code that draws the standing ones. An item in a
+            // satchel row, lying on the ground or being held out at a pickup is
+            // not alight — what is alight is
+            // {@link com.larsons.engine.watch.light.PlacedLight}, drawn by
+            // {@link LightModel#light}, and the one in your hand while you carry
+            // it lit, drawn by the view model. Two shapes for one object would
+            // be two shapes to keep in step.
+            case "lantern" -> LightModel.lantern(mesh, x, y, z, yaw, LightKind.LANTERN,
+                    0, 0, scale * 0.75);
+            case "spore_lantern" -> LightModel.lantern(mesh, x, y, z, yaw,
+                    LightKind.SPORE_LANTERN,
+                    // A jar of spores has nothing to put out: it is the one
+                    // light that looks the same in a satchel as on a post.
+                    1, 0, scale * 0.75);
+            case "torch" -> LightModel.torch(mesh, x, y, z, yaw, 0, 0, scale * 0.42);
             default -> trowel(mesh, x, y, z, scale, yaw, uv, colour);
         }
     }
@@ -1240,6 +1257,13 @@ public final class ItemModel {
         m.put("feeder", 0xA37C4C);
         m.put("journal", 0x6A4A34);
         m.put("spyglass", 0xB08A3C);
+        // The lights. Their models build their own colours out of
+        // LightKind.rgb(), so these are only what a satchel row's rarity dot
+        // and any future flat draw would use — the colour of the object, not
+        // the colour of the flame.
+        m.put("lantern", 0xC8A24C);
+        m.put("torch", 0x8A6A3C);
+        m.put("spore_lantern", 0x7CF0C0);
         return Map.copyOf(m);
     }
 

@@ -6,6 +6,7 @@ import com.larsons.engine.watch.life.AnimState;
 import com.larsons.engine.watch.life.AnimalDef;
 import com.larsons.engine.watch.life.AnimalRegistry;
 import com.larsons.engine.watch.life.Hurl;
+import com.larsons.engine.watch.light.Lights;
 import com.larsons.engine.watch.world.Grove;
 
 import java.util.ArrayList;
@@ -47,11 +48,26 @@ public final class WatchView {
      * @param respawns how many times they have been killed. See
      *              {@link WatchPlayer#respawns()}: this is how a respawn
      *              reaches the screen that has to act on it
+     * @param light the forage key of the light they are carrying lit, or
+     *              {@code null} for empty hands. On everybody's row rather than
+     *              only on your own, because a lantern moving along the far
+     *              side of a valley is how a party keeps track of each other
+     *              after dark — see
+     *              {@link com.larsons.engine.watch.light.LightField}
+     * @param lightHours how many real hours of burning are left in it. In
+     *              hours rather than as a fraction so that this row carries no
+     *              knowledge of the light catalogue: what a full lantern holds
+     *              is {@code LightKind}'s business, and the screen has that
+     *              class to hand
      */
     public record Walker(int id, String name, double x, double y, double z,
                          double yaw, double pitch, double stillness, boolean crouching,
                          boolean submerged, double breath, long boatId, double glass,
-                         boolean debug, double health, int respawns) {
+                         boolean debug, double health, int respawns, String light,
+                         double lightHours) {
+
+        /** Whether they have something lit in their hand. */
+        public boolean carryingLight() { return light != null && !light.isBlank(); }
 
         /** Whether they are rowing rather than walking. */
         public boolean inBoat() { return boatId != 0; }
@@ -102,6 +118,17 @@ public final class WatchView {
     private final Grove grove = new Grove();
     private final Cultivation crops = new Cultivation();
     private final Structure structure = new Structure();
+
+    /**
+     * Every fire and lantern standing in the world.
+     *
+     * <p>Beside the buildings rather than beside the feeders, because that is
+     * what they are: things the party put down that stay put. What is different
+     * about them is that they burn out, which is why they ride the snapshot with
+     * the feeders rather than the five-second world sync — see
+     * {@link com.larsons.engine.watch.net.WatchProto#state}.
+     */
+    private final Lights lights = new Lights();
 
     /**
      * The party's maps and boards.
@@ -200,6 +227,9 @@ public final class WatchView {
 
     public Structure structure() { return structure; }
 
+    /** Every fire and lantern the party has left standing. */
+    public Lights lights() { return lights; }
+
     /** Every map anybody drew, and every board they went up on. */
     public Cartography maps() { return cartography; }
 
@@ -280,7 +310,8 @@ public final class WatchView {
                     player.z(), player.yaw(), player.pitch(), player.stillness(),
                     player.crouching(), player.submerged(), player.breath(),
                     player.boatId(), player.glassPower(), player.debugging(),
-                    player.health(), player.respawns()));
+                    player.health(), player.respawns(), player.carriedLight(),
+                    player.lampFuel()));
         }
         creatures.clear();
         for (Animal animal : game.animals()) {
@@ -290,6 +321,7 @@ public final class WatchView {
         }
         lures.clear();
         lures.addAll(game.lures());
+        lights.load(game.lights().toMap());
         hurls.clear();
         hurls.addAll(game.hurls());
         spotlights.clear();
@@ -338,7 +370,8 @@ public final class WatchView {
                     WatchJson.bool(row, "uw", false), WatchJson.num(row, "air", 1),
                     WatchJson.big(row, "boat", 0), WatchJson.num(row, "gl", 1),
                     WatchJson.bool(row, "dbg", false), WatchJson.num(row, "hp", 1),
-                    WatchJson.integer(row, "rs", 0)));
+                    WatchJson.integer(row, "rs", 0), WatchJson.str(row, "lt", null),
+                    WatchJson.num(row, "lh", 0)));
         }
         Walker me = self();
         satchel.setBottomless(me != null && me.debug());
@@ -390,5 +423,16 @@ public final class WatchView {
             Lure lure = Lure.fromMap(row);
             if (lure != null) lures.add(lure);
         }
+    }
+
+    /**
+     * Replace the fires and lanterns from a snapshot's {@code lights} array.
+     *
+     * <p>Replaced wholesale even when the array is empty, for the reason
+     * {@link #loadHurls} is: a client that only replaced on presence would keep
+     * drawing — and keep lighting the wood with — a fire that has burnt out.
+     */
+    public void loadLights(List<Map<String, Object>> rows) {
+        lights.loadRows(rows);
     }
 }

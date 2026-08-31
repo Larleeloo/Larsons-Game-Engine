@@ -8,6 +8,9 @@ import com.larsons.engine.watch.life.AnimalRegistry;
 import com.larsons.engine.watch.life.Diet;
 import com.larsons.engine.watch.life.Hurl;
 import com.larsons.engine.watch.life.Mutants;
+import com.larsons.engine.watch.light.LightKind;
+import com.larsons.engine.watch.light.Lights;
+import com.larsons.engine.watch.light.PlacedLight;
 import com.larsons.engine.watch.world.Flora;
 import com.larsons.engine.watch.world.Grove;
 import com.larsons.engine.watch.world.TerrainField;
@@ -271,6 +274,25 @@ public final class WatchGame implements Animal.Surroundings {
     private final Structure structure = new Structure();
 
     /**
+     * Every fire and lantern the party has put down.
+     *
+     * <p>World state like the buildings, and burning down like the feeders: the
+     * two halves of it are that a light is a thing standing in a place, and
+     * that it goes out. The host owns both — how much oil is left in a lantern
+     * is exactly the sort of thing a client must not be allowed to decide, for
+     * the reason everything else here is server-authoritative: a party that has
+     * to walk back to camp before dark is a party playing the game, and one
+     * whose lamps never run out is a party with the lights on.
+     *
+     * <p>What is <em>not</em> here is any of the light itself. A flame's
+     * colour, its reach and its flicker are worked out on every machine that
+     * draws one — see {@link com.larsons.engine.watch.light.LightField} — so
+     * nothing about the lighting model travels and eight people round one fire
+     * cost one row.
+     */
+    private final Lights lights = new Lights();
+
+    /**
      * Every map the party has drawn, and every board they have hung one on.
      *
      * <p>World state like the grove and the buildings, and shared for the same
@@ -359,6 +381,9 @@ public final class WatchGame implements Animal.Surroundings {
 
     /** Everything anybody built. */
     public Structure structure() { return structure; }
+
+    /** Every fire and lantern standing in the world. */
+    public Lights lights() { return lights; }
 
     /** Every map anybody drew, and every board they went up on. */
     public Cartography maps() { return cartography; }
@@ -451,6 +476,12 @@ public final class WatchGame implements Animal.Surroundings {
         player.satchel().add("journal", 1);
         player.satchel().add("grass_seed", 6);
         player.satchel().add("blackberry", 3);
+        // Two torches, for the same reason as the seed and the berries: this
+        // clock is the real one, and somebody who starts a walk at nine in the
+        // evening should not have to forage a wood they cannot see in before
+        // the game can begin. Two is an evening, not a supply — they burn out,
+        // and what replaces them is made rather than given.
+        player.satchel().add("torch", 2);
         players.put(id, player);
         say(name + " joined the walk");
         return player;
@@ -837,6 +868,18 @@ public final class WatchGame implements Animal.Surroundings {
                     lure.z() + 1.2, 0.35);
         }
 
+        // A fire or a lantern standing there. Above the oars and below the
+        // feeders, on the same principle as both: it is a thing somebody put
+        // here on purpose, and one that wants tending is the more urgent of the
+        // two — a boat will still be on the beach in an hour and the fire will
+        // not.
+        PlacedLight burning = lights.nearest(player.x(), player.y(), REACH);
+        if (burning != null) {
+            return new Pickable(Pickable.Kind.FIRE, burning.kind().key(),
+                    burning.describe(), burning.x(), burning.y(), burning.flameZ(),
+                    burning.reach());
+        }
+
         Boats.Boat boat = boats.nearest(field, player.x(), player.y(), Boats.BOARD_RANGE);
         if (boat != null && player.boatId() == 0) {
             return new Pickable(Pickable.Kind.BOAT, "boat", "Rowing boat",
@@ -920,6 +963,18 @@ public final class WatchGame implements Animal.Surroundings {
             CROP("Harvest"),
             /** A feeder somebody put out. */
             FEEDER("Top up"),
+            /**
+             * A fire or a lantern somebody put down. See
+             * {@link com.larsons.engine.watch.light.Lights}.
+             *
+             * <p>"Tend" rather than "Take", because what the key does depends on
+             * what the light needs: an armful of branches goes on a guttering
+             * fire, a cold one is lit, and a lantern with nothing wrong with it
+             * is picked up. One verb, three outcomes, and the prompt says which
+             * by naming the light's own state — see
+             * {@link com.larsons.engine.watch.light.PlacedLight#describe}.
+             */
+            FIRE("Tend"),
             /** A boat, drawn up on the shore. */
             BOAT("Take the oars"),
             /**
@@ -1165,6 +1220,7 @@ public final class WatchGame implements Animal.Surroundings {
                         ? "Topped up the feeder"
                         : "Nothing left to put in it";
             }
+            case FIRE -> tendLight(playerId);
             case BOAT -> useBoat(playerId);
             case SHOP -> {
                 // Trading is a panel, and a panel is the client's business — see
@@ -1466,6 +1522,218 @@ public final class WatchGame implements Animal.Surroundings {
         }
     }
 
+    // --- fire and lamplight -----------------------------------------------------------
+
+    /**
+     * How far in front of somebody a light is set down, in metres.
+     *
+     * <p>Shorter than a built piece's two metres, because a light is a thing
+     * you put at your feet rather than a thing you erect: a fire that appeared
+     * two metres away would be a fire you have to walk to in order to tend.
+     */
+    private static final double PLACE_AHEAD = 1.6;
+
+    /** How deep water has to be before nothing can be stood in it. */
+    private static final double DRY_ENOUGH = 0.2;
+
+    /**
+     * Light what is in the hand, put it out, or fill it — <b>one verb, because
+     * a player pressing it always means the same thing.</b>
+     *
+     * <p>"Make it dark" and "make it light" are one intention with a state
+     * attached, and a game that asked for two keys would be a game where you
+     * have to remember which of them you last pressed. So: burning goes out;
+     * out with oil in it comes back; empty with fuel in the satchel is filled
+     * and lit; hands empty takes the best light in the satchel and lights that.
+     *
+     * <p>"Best" is <b>whichever burns longest</b>, with "for ever" at the top —
+     * a jar of spores, then a lantern, then a torch. That is the right order
+     * because it is the order of what each one costs to keep burning: nobody
+     * should spend a torch while carrying a light that never goes out, and
+     * a rule that read the enum's own order instead would depend on which way
+     * round somebody happened to write the four rows.
+     *
+     * @return a line for the HUD, or {@code null} when there is nothing to burn
+     */
+    public synchronized String tendLamp(int playerId) {
+        WatchPlayer player = players.get(playerId);
+        if (player == null) return null;
+        LightKind held = LightKind.ofItem(player.lamp());
+
+        if (player.lampLit()) {
+            player.douseLamp();
+            return "Put the " + (held == null ? "light" : held.displayName()) + " out";
+        }
+        if (held != null) {
+            if (player.relightLamp(held.eternal())) {
+                return "Lit the " + held.displayName();
+            }
+            // In the hand and empty. Filling it is the same gesture, because
+            // "my lantern has gone out" and "my lantern needs oil" are the same
+            // problem from the player's side.
+            if (held.fuel() != null && player.satchel().take(held.fuel(), 1)) {
+                player.fillLamp(held.burnHours());
+                return "Filled the " + held.displayName() + " with "
+                        + Forage.nameOf(held.fuel());
+            }
+            if (held.fuel() != null) {
+                return "The " + held.displayName() + " is empty — it needs "
+                        + Forage.nameOf(held.fuel());
+            }
+        }
+        LightKind take = bestCarryable(player);
+        if (take == null) return null;
+        player.carryLight(take.item(), take.burnHours());
+        return "Lit the " + take.displayName();
+    }
+
+    /** The best thing in a satchel to be carrying lit. See {@link #tendLamp}. */
+    private LightKind bestCarryable(WatchPlayer player) {
+        LightKind best = null;
+        for (LightKind kind : LightKind.all()) {
+            if (!kind.carryable() || kind.item() == null) continue;
+            if (!player.satchel().has(kind.item())) continue;
+            if (best == null || lampRank(kind) > lampRank(best)) best = kind;
+        }
+        return best;
+    }
+
+    /** How long a light lasts, with "for ever" at the top. */
+    private static double lampRank(LightKind kind) {
+        return kind.eternal() ? Double.MAX_VALUE : kind.burnHours();
+    }
+
+    /**
+     * Set a light down in front of the player: the one in hand, else a fire.
+     *
+     * <p><b>The order is the whole of the design.</b> A player with a lantern
+     * out and a key that builds campfires would build a campfire, which is not
+     * what anybody pressing "put this down" means. So: what is in your hand goes
+     * down first, exactly as it was — lit if it was lit, with the oil it has
+     * left; with empty hands you build a fire out of branches and stones; and
+     * failing both you take a light out of the satchel and stand it up burning,
+     * because a light nobody lit is a light nobody would notice they had put
+     * down.
+     *
+     * @return the light now standing there, or {@code null} when there was
+     *         nothing to put down or nowhere to put it
+     */
+    public synchronized PlacedLight setDownLight(int playerId) {
+        WatchPlayer player = players.get(playerId);
+        if (player == null) return null;
+        double x = player.x() + Math.sin(player.yaw()) * PLACE_AHEAD;
+        double y = player.y() - Math.cos(player.yaw()) * PLACE_AHEAD;
+        double z = field.heightAt(x, y);
+        // Not in a lake, and not on top of another one. Both refusals are
+        // silent-ish — the caller says so — because the alternative is a fire
+        // burning on the surface of a tarn.
+        if (field.waterDepth(z) > DRY_ENOUGH) return null;
+        if (lights.blocked(x, y)) return null;
+
+        LightKind held = LightKind.ofItem(player.lamp());
+        if (held != null && player.satchel().take(held.item(), 1)) {
+            // Set down as it was: a lamp somebody had put out goes down out,
+            // and one they were carrying lit stays lit. Anything else would be
+            // the world disagreeing with the hand it came from.
+            PlacedLight put = lights.place(held, x, y, z, player.yaw(), player.name(),
+                    System.currentTimeMillis(), player.lampFuel(), player.lampLit());
+            player.dropLamp();
+            say(player.name() + " set down a " + held.displayName());
+            return put;
+        }
+        if (LightKind.CAMPFIRE.pay(player.satchel())) {
+            PlacedLight fire = lights.place(LightKind.CAMPFIRE, x, y, z, player.yaw(),
+                    player.name(), System.currentTimeMillis());
+            say(player.name() + " lit a campfire");
+            return fire;
+        }
+        for (LightKind kind : LightKind.all()) {
+            if (kind.item() == null || !player.satchel().has(kind.item())) continue;
+            player.satchel().take(kind.item(), 1);
+            PlacedLight put = lights.place(kind, x, y, z, player.yaw(), player.name(),
+                    System.currentTimeMillis());
+            say(player.name() + " set down a " + kind.displayName());
+            return put;
+        }
+        return null;
+    }
+
+    /**
+     * Feed, relight or pick up the light somebody is standing at.
+     *
+     * <p>What {@code E} does when the thing in reach is burning, and one method
+     * rather than three keys for the same reason {@link #use} is one key for
+     * eight kinds of picking: standing in front of a guttering fire with an
+     * armful of branches, there is exactly one thing you want to happen.
+     *
+     * @return a line for the HUD, or {@code null} when there was nothing to do
+     */
+    public synchronized String tendLight(int playerId) {
+        WatchPlayer player = players.get(playerId);
+        if (player == null) return null;
+        PlacedLight light = lights.nearest(player.x(), player.y(), REACH);
+        if (light == null) return null;
+        LightKind kind = light.kind();
+
+        if (kind.fuel() != null && light.fuelLeft() < 1
+                && player.satchel().has(kind.fuel())) {
+            player.satchel().take(kind.fuel(), 1);
+            light.feed(1);
+            return "Fed the " + kind.displayName() + " — " + light.hoursLabel();
+        }
+        if (light.relight()) return "Lit the " + kind.displayName();
+        if (kind.carryable()) {
+            lights.remove(light.id());
+            player.satchel().add(kind.item(), 1);
+            // Straight into an empty hand, still burning, with the oil it had:
+            // picking a lit lantern off the ground and having it go out would
+            // be the world contradicting itself.
+            if (player.lamp() == null) {
+                player.carryLight(kind.item(),
+                        kind.eternal() ? 0 : light.fuelHours());
+                if (!light.lit()) player.douseLamp();
+            }
+            return "Took the " + kind.displayName();
+        }
+        return kind.fuel() == null ? null
+                : "The " + kind.displayName() + " needs " + Forage.nameOf(kind.fuel());
+    }
+
+    /** The light somebody is standing at, or {@code null}. */
+    public synchronized PlacedLight lightAt(int playerId) {
+        WatchPlayer player = players.get(playerId);
+        return player == null ? null
+                : lights.nearest(player.x(), player.y(), REACH);
+    }
+
+    /** Adopt a light sent by the host. */
+    public synchronized void addLight(PlacedLight light) {
+        lights.adopt(light);
+    }
+
+    /**
+     * Burn one player's lamp down, and take the ash away.
+     *
+     * <p>The one place a carried light can actually be <em>spent</em>: a torch
+     * that has burnt out is not a torch you can relight, so the item leaves the
+     * satchel with the flame. A lantern keeps its glass and waits for oil, which
+     * is the difference {@link LightKind#leavesEmbers} names.
+     */
+    private void burnLamp(WatchPlayer player, double hours) {
+        LightKind kind = LightKind.ofItem(player.lamp());
+        if (kind == null) return;
+        if (!player.burnLamp(hours, kind.eternal())) return;
+        if (kind.leavesEmbers()) {
+            say(player.name() + "'s " + kind.displayName().toLowerCase(
+                    java.util.Locale.ROOT) + " has burnt out");
+            return;
+        }
+        player.satchel().take(kind.item(), 1);
+        player.dropLamp();
+        say(player.name() + "'s " + kind.displayName().toLowerCase(java.util.Locale.ROOT)
+                + " has burnt down to nothing");
+    }
+
     // --- planting --------------------------------------------------------------------
 
     /**
@@ -1729,6 +1997,16 @@ public final class WatchGame implements Animal.Surroundings {
                 say(Forage.nameOf(ripe.seed()) + " is ready to harvest");
             }
             for (Lure lure : lures.values()) lure.age(realHours);
+            // Everything burning burns down, on the wall clock rather than on
+            // the tick, for the reason the trees grow on it: a fire lit before
+            // bed should be out in the morning whether or not anybody was
+            // logged in, and four hours has to mean four hours or it means
+            // nothing.
+            for (PlacedLight died : lights.burn(realHours)) {
+                say("The " + died.kind().displayName().toLowerCase(java.util.Locale.ROOT)
+                        + " has burnt out");
+            }
+            for (WatchPlayer player : players.values()) burnLamp(player, realHours);
         }
 
         for (WatchPlayer player : players.values()) {
@@ -2275,6 +2553,10 @@ public final class WatchGame implements Animal.Surroundings {
         Spill.Pile dropped = spills.drop(player.name(), fellX, fellY,
                 field.heightAt(fellX, fellY), player.satchel().contents());
         player.satchel().clear();
+        // The lamp goes with the bag, because it was in the bag. Dropping the
+        // satchel and keeping the light burning would be the one thing that
+        // survived dying, and it would be the thing that mattered most.
+        player.dropLamp();
         // Anything hunting them stops: their quarry is not there any more. The
         // animals notice on their own next tick — `nearestQuarry` skips the
         // dead and their new position is a kilometre away — so nothing has to
@@ -2341,6 +2623,12 @@ public final class WatchGame implements Animal.Surroundings {
         // the save file taking something away that the game deliberately did
         // not. See Spill.
         m.put("spills", spills.toMap());
+        // The fires and lanterns, with however much is left in each. Saved with
+        // the buildings rather than with the feeders because that is what they
+        // are — a camp somebody made — and a walk reopened at a cold hearth
+        // with the branches still beside it is the right way to come back to
+        // one. See com.larsons.engine.watch.light.Lights.
+        m.put("lights", lights.toMap());
         List<Object> lureRows = new ArrayList<>();
         for (Lure lure : lures.values()) lureRows.add(lure.toMap());
         m.put("lures", lureRows);
@@ -2376,6 +2664,7 @@ public final class WatchGame implements Animal.Surroundings {
         weather.load(WatchJson.map(m, "sky"));
         boats.load(WatchJson.map(m, "boats"));
         spills.load(WatchJson.map(m, "spills"));
+        lights.load(WatchJson.map(m, "lights"));
         lures.clear();
         for (Map<String, Object> row : WatchJson.objects(m, "lures")) {
             addLure(Lure.fromMap(row));
@@ -2414,6 +2703,10 @@ public final class WatchGame implements Animal.Surroundings {
             crops.advance(hours);
             for (Lure lure : lures.values()) lure.age(hours);
             lures.values().removeIf(Lure::spoiled);
+            // …and the fires burn down while the save sits on the disk, for the
+            // same reason. A camp left lit a week ago is a cold hearth, not a
+            // week-old fire.
+            lights.burn(hours);
         }
         lastRealMillis = System.currentTimeMillis();
     }
