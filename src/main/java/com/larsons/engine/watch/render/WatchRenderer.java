@@ -5,6 +5,7 @@ import com.larsons.engine.graphics.MeshPass;
 import com.larsons.engine.graphics.TerrainPass;
 import com.larsons.engine.graphics.draw.DrawTarget;
 import com.larsons.engine.watch.WatchClock;
+import com.larsons.engine.watch.light.LightField;
 import com.larsons.engine.watch.world.WatchMaterials;
 
 import java.util.ArrayList;
@@ -39,6 +40,27 @@ import java.util.List;
  * and sorts once. That is the same arrangement
  * {@link com.larsons.engine.graphics.SolidPainter} arrived at, for the same
  * reason: a per-triangle object would cost more in garbage than in arithmetic.
+ *
+ * <h2>Two lights, one of them new</h2>
+ *
+ * <p>Every colour in this world is a baked albedo — the face's own shade, from
+ * the mesher — multiplied by the hour. That multiplier is
+ * {@link WatchClock#lightTint}, and applying it is what makes the same hillside
+ * read differently at six in the morning and six at night.
+ *
+ * <p><b>The card was not applying it.</b> The painter multiplied every vertex
+ * by the hour in {@link #fogged} and the GPU path multiplied by nothing at all,
+ * because the shader had no uniform to multiply by — so a machine with a driver
+ * played the whole game at noon while a machine without one had a night. That
+ * is now one call, {@link MeshPass#setLighting}, made from {@link #flush}, and
+ * the two paths shade the same world at the same hour.
+ *
+ * <p>The point lights ride the same seam. They are the one thing here that
+ * cannot be baked — a carried lantern moves every frame, and re-meshing a
+ * forest because somebody took a step is not a lighting model — so they arrive
+ * per frame as {@link MeshPass.Light}s and are applied per fragment on a card
+ * and per triangle here. See
+ * {@link LightField} for what is burning and what each one does to a surface.
  *
  * <h2>What is culled, and where</h2>
  *
@@ -82,6 +104,24 @@ public final class WatchRenderer {
     private final List<MeshPass.Draw> gpuDraws = new ArrayList<>();
     private boolean gpu;
 
+    /**
+     * The point lights this frame, and which of them can touch the mesh being
+     * submitted.
+     *
+     * <p><b>Culled per mesh, not per triangle</b>, which is what makes the
+     * painter path afford this at all. A campfire's light reaches twelve metres
+     * and a chunk is thirty-two across, so all but a handful of the meshes in a
+     * frame are outside every light in the world — one box test each throws
+     * them out, and their forty thousand triangles never ask a lighting
+     * question. What is left is the few meshes actually near a flame, and those
+     * pay for what they get.
+     */
+    private final List<MeshPass.Light> lights = new ArrayList<>();
+
+    private final int[] meshLights = new int[MeshPass.MAX_LIGHTS];
+    private int meshLightCount;
+    private final double[] lit = new double[3];
+
     private EyeCamera eye;
     private int viewWidth, viewHeight;
     private int fogRgb;
@@ -114,9 +154,37 @@ public final class WatchRenderer {
         this.drawn = 0;
         this.culled = 0;
         this.submitted = 0;
+        this.lights.clear();
         clock.lightTint(tint);
         sky(target, clock, clock.skyColour(skyRgb));
     }
+
+    /**
+     * The lights this frame is lit by — <b>everything that is burning.</b>
+     *
+     * <p>Called after {@link #begin} and before anything is submitted, because
+     * the painter path shades each triangle as it queues it and cannot be told
+     * about a lantern afterwards. On a card it is a uniform block set once for
+     * the whole frame; here it is a short array walked per triangle, against
+     * lights already culled to the mesh being submitted.
+     *
+     * <p>Whatever is passed is copied rather than kept: the caller's list is
+     * rebuilt every frame by {@link LightField}, and a renderer holding a
+     * reference to somebody else's mutable list is a renderer that shades the
+     * first half of a frame by one set of lights and the second half by
+     * another.
+     */
+    public void setLights(List<MeshPass.Light> frameLights) {
+        lights.clear();
+        if (frameLights == null) return;
+        for (MeshPass.Light light : frameLights) {
+            if (lights.size() >= MeshPass.MAX_LIGHTS) break;
+            if (light != null) lights.add(light);
+        }
+    }
+
+    /** How many lights are burning in this frame; for the debug readout. */
+    public int lightCount() { return lights.size(); }
 
     /** Whether this frame is being drawn by a graphics card. */
     public boolean acceleratedByGpu() { return gpu; }
@@ -193,8 +261,40 @@ public final class WatchRenderer {
         int count = mesh.vertexCount();
         double bias = mesh.sortBias();
         submitted += count / 3;
+        cullLights(mesh, ox, oy, oz);
         for (int v = 0; v + 2 < count; v += 3) {
             triangle(verts, colours, v, ox, oy, oz, bias);
+        }
+    }
+
+    /**
+     * Which of the frame's lights can reach this mesh at all.
+     *
+     * <p>A sphere against the mesh's own bounding box, which is the same test
+     * every renderer uses to decide whether a light is worth a fragment's time
+     * and is exact enough here for the same reason: a light that fails it
+     * contributes nothing anywhere in the mesh, and one that passes may still
+     * contribute nothing to most of its triangles — which the per-triangle
+     * falloff then finds out cheaply.
+     */
+    private void cullLights(Mesh mesh, double ox, double oy, double oz) {
+        meshLightCount = 0;
+        if (lights.isEmpty()) return;
+        double minX = ox + mesh.minX(), maxX = ox + mesh.maxX();
+        double minY = oy + mesh.minY(), maxY = oy + mesh.maxY();
+        double minZ = oz + mesh.minZ(), maxZ = oz + mesh.maxZ();
+        for (int i = 0; i < lights.size(); i++) {
+            MeshPass.Light light = lights.get(i);
+            double dx = light.x() < minX ? minX - light.x()
+                    : light.x() > maxX ? light.x() - maxX : 0;
+            double dy = light.y() < minY ? minY - light.y()
+                    : light.y() > maxY ? light.y() - maxY : 0;
+            double dz = light.z() < minZ ? minZ - light.z()
+                    : light.z() > maxZ ? light.z() - maxZ : 0;
+            double radius = light.radius();
+            if (dx * dx + dy * dy + dz * dz < radius * radius) {
+                meshLights[meshLightCount++] = i;
+            }
         }
     }
 
@@ -261,7 +361,7 @@ public final class WatchRenderer {
         }
 
         corners[queued] = (byte) n;
-        colour[queued] = fogged(colours[v], depth);
+        colour[queued] = fogged(colours[v], depth, verts, at, ox, oy, oz);
         // The true depth decides the colour, the fog and the culling above; only
         // the order this is painted in is biased, and only for a mesh that asked
         // to be. See Mesh.sortBias.
@@ -270,6 +370,60 @@ public final class WatchRenderer {
                 << INDEX_BITS) | (queued & INDEX_MASK);
         order[queued] = key;
         queued++;
+    }
+
+    /**
+     * What the lamps add to one triangle, into {@link #lit}.
+     *
+     * <p><b>Per triangle, from the face's own normal</b> — which this path has
+     * for nothing, because a flat-shaded mesh's three vertices <em>are</em> the
+     * face. The card cannot do it this way (a fragment has no idea which
+     * triangle it came from) and does not need to: it recovers the same normal
+     * from the depth gradient, per fragment, for two instructions. Same
+     * geometry, two ways of asking for it, and
+     * {@link LightField#contribute} is the one piece of arithmetic both of them
+     * then run.
+     *
+     * <p>The normal is turned toward the eye rather than trusted. Grass blades,
+     * leaves and water are single-sided sheets meant to be seen from either
+     * face, and a lantern behind a blade of grass must light the side of it you
+     * are looking at.
+     */
+    private void illuminate(float[] verts, int at, double ox, double oy, double oz) {
+        int s = Mesh.FLOATS_PER_VERTEX;
+        double ax = ox + verts[at], ay = oy + verts[at + 1], az = oz + verts[at + 2];
+        double bx = ox + verts[at + s], by = oy + verts[at + s + 1];
+        double bz = oz + verts[at + s + 2];
+        double cx = ox + verts[at + 2 * s], cy = oy + verts[at + 2 * s + 1];
+        double cz = oz + verts[at + 2 * s + 2];
+        double px = (ax + bx + cx) / 3, py = (ay + by + cy) / 3, pz = (az + bz + cz) / 3;
+
+        double ux = bx - ax, uy = by - ay, uz = bz - az;
+        double vx = cx - ax, vy = cy - ay, vz = cz - az;
+        double nx = uy * vz - uz * vy;
+        double ny = uz * vx - ux * vz;
+        double nz = ux * vy - uy * vx;
+        double length = Math.sqrt(nx * nx + ny * ny + nz * nz);
+        if (length > 1e-9) {
+            nx /= length;
+            ny /= length;
+            nz /= length;
+            if (nx * (px - eye.x()) + ny * (py - eye.y()) + nz * (pz - eye.z()) > 0) {
+                nx = -nx;
+                ny = -ny;
+                nz = -nz;
+            }
+        } else {
+            nx = ny = nz = 0;
+        }
+
+        lit[0] = 0;
+        lit[1] = 0;
+        lit[2] = 0;
+        for (int i = 0; i < meshLightCount; i++) {
+            LightField.contribute(lights.get(meshLights[i]), px, py, pz,
+                    nx, ny, nz, lit);
+        }
     }
 
     private long signedArea(int base, int n) {
@@ -294,12 +448,28 @@ public final class WatchRenderer {
         return maxX < 0 || minX > viewWidth || maxY < 0 || minY > viewHeight;
     }
 
-    /** The vertex colour with this hour's light and this frame's fog applied. */
-    private int fogged(int argb, double depth) {
+    /**
+     * The vertex colour with this hour's light, whatever lamps reach it, and
+     * this frame's fog applied — <b>in that order, and the order matters.</b>
+     *
+     * <p>Light multiplies and fog interpolates: a lit thing a long way off is
+     * still mostly haze, and a haze that had been applied first would be
+     * <em>brightened</em> by a fire beside the camera. That is the same order
+     * the shader uses, for the same reason.
+     */
+    private int fogged(int argb, double depth, float[] verts, int at,
+                       double ox, double oy, double oz) {
         int a = (argb >>> 24) & 0xFF;
-        double r = ((argb >> 16) & 0xFF) * tint[0];
-        double g = ((argb >> 8) & 0xFF) * tint[1];
-        double b = (argb & 0xFF) * tint[2];
+        double lightR = tint[0], lightG = tint[1], lightB = tint[2];
+        if (meshLightCount > 0) {
+            illuminate(verts, at, ox, oy, oz);
+            lightR += lit[0];
+            lightG += lit[1];
+            lightB += lit[2];
+        }
+        double r = ((argb >> 16) & 0xFF) * lightR;
+        double g = ((argb >> 8) & 0xFF) * lightG;
+        double b = (argb & 0xFF) * lightB;
         double haze = depth <= fogStart ? 0
                 : Math.min(1, (depth - fogStart) / (fogEnd - fogStart));
         if (haze > 0) {
@@ -325,6 +495,15 @@ public final class WatchRenderer {
     public void flush(DrawTarget target) {
         if (gpu) {
             meshPass.setTexture(WatchMaterials.atlas(), WatchMaterials.revision());
+            // The hour and the lamps, as uniforms, once for the whole frame.
+            // <b>This is where the two paths stop being the same program and
+            // start being the same picture.</b> The painter has already shaded
+            // every triangle it queued; the card has not shaded anything yet,
+            // and is about to do it per fragment with a normal it works out
+            // from the depth gradient. Same daylight, same falloff, same wrap
+            // term — see MeshPass.setLighting.
+            meshPass.setLighting(lights, (float) tint[0], (float) tint[1],
+                    (float) tint[2]);
             meshPass.draw(gpuDraws, eye, fogRgb, fogStart, fogEnd);
             drawn = submitted;
             gpuDraws.clear();

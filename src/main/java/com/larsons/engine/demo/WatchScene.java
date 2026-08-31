@@ -3,6 +3,7 @@ package com.larsons.engine.demo;
 import com.larsons.engine.config.GameContext;
 import com.larsons.engine.config.PlayerSettings;
 import com.larsons.engine.graphics.EyeCamera;
+import com.larsons.engine.graphics.MeshPass;
 import com.larsons.engine.graphics.draw.DrawTarget;
 import com.larsons.engine.input.GameAction;
 import com.larsons.engine.input.InputManager;
@@ -41,6 +42,9 @@ import com.larsons.engine.watch.life.AnimalRegistry;
 import com.larsons.engine.watch.life.AnimalSkins;
 import com.larsons.engine.watch.life.Hurl;
 import com.larsons.engine.watch.life.Mutants;
+import com.larsons.engine.watch.light.LightField;
+import com.larsons.engine.watch.light.LightKind;
+import com.larsons.engine.watch.light.PlacedLight;
 import com.larsons.engine.watch.net.WatchSession;
 import com.larsons.engine.watch.render.BoardImage;
 import com.larsons.engine.watch.render.BoatModel;
@@ -50,6 +54,7 @@ import com.larsons.engine.watch.render.Gait;
 import com.larsons.engine.watch.render.ItemModel;
 import com.larsons.engine.watch.render.ItemPortrait;
 import com.larsons.engine.watch.render.KeeperModel;
+import com.larsons.engine.watch.render.LightModel;
 import com.larsons.engine.watch.render.Mesh;
 import com.larsons.engine.watch.render.RowStroke;
 import com.larsons.engine.watch.render.Shapes;
@@ -415,6 +420,16 @@ public class WatchScene extends AbstractScene {
      * replicated positions rather than from anything on the wire.
      */
     private final Sparks sparks = new Sparks();
+
+    /**
+     * Everything burning, this frame.
+     *
+     * <p>Derived from the view like the embers and the noises, and for the
+     * third time for the same reason: a fire's <em>existence</em> is replicated
+     * and everything a fire <em>does</em> is worked out here. See
+     * {@link LightField}, and {@link WatchRenderer#setLights} for where it goes.
+     */
+    private final LightField lights = new LightField();
 
     /**
      * How far the player's feet are below the waterline, in metres.
@@ -1930,6 +1945,16 @@ public class WatchScene extends AbstractScene {
                     Forage.nameOf(lure.food()) + " feeder", lure.x(), lure.y(),
                     lure.z() + 1.2, 0.35);
         }
+        // A fire or a lantern. In the same place in this list as it is in the
+        // host's, because the two have to agree about what the key would take:
+        // a highlight that names one thing and a press that does another is
+        // worse than no highlight at all.
+        PlacedLight burning = view.lights().nearest(px, py, reachLimit);
+        if (burning != null) {
+            return new WatchGame.Pickable(WatchGame.Pickable.Kind.FIRE,
+                    burning.kind().key(), burning.describe(), burning.x(), burning.y(),
+                    burning.flameZ(), burning.reach());
+        }
         if (boatId == 0) {
             Boats.Boat boat = view.boats().nearest(streamer.field(), px, py,
                     Boats.BOARD_RANGE);
@@ -1967,6 +1992,8 @@ public class WatchScene extends AbstractScene {
         if (KeyBinds.pressed(input, GameAction.WATCH_FEEDER)) request("lure");
         if (KeyBinds.pressed(input, GameAction.WATCH_ROD)) request("rod");
         if (KeyBinds.pressed(input, GameAction.WATCH_BOAT)) request("boat");
+        if (KeyBinds.pressed(input, GameAction.WATCH_LIGHT)) request("lamp");
+        if (KeyBinds.pressed(input, GameAction.WATCH_CAMPFIRE)) request("putlight");
     }
 
     /**
@@ -2023,6 +2050,31 @@ public class WatchScene extends AbstractScene {
                         Litter.Piece piece = litterInReach();
                         if (piece != null) view().noteLitterTaken(piece.id());
                     }
+                }
+            }
+            // Light, douse or fill what is in the hand. Nothing is sent but the
+            // intention: the host owns whether there is anything to light and
+            // how much oil is in it, and the answer arrives on everybody's next
+            // snapshot as a flame on this player's row.
+            case "lamp" -> {
+                if (local != null) {
+                    String line = local.tendLamp(me);
+                    say(line != null ? line : "Nothing to light — make a torch first");
+                } else {
+                    session.client().sendAction("lamp");
+                }
+            }
+            // Set a light down, or build a fire out of what is in the satchel.
+            case "putlight" -> {
+                if (local != null) {
+                    if (local.setDownLight(me) == null) {
+                        say(LightKind.CAMPFIRE.affordable(view().satchel())
+                                ? "Nowhere to put it just here"
+                                : "Needs " + LightKind.CAMPFIRE.costLine()
+                                        + " — or a lantern to set down");
+                    }
+                } else {
+                    session.client().sendAction("putlight");
                 }
             }
             case "boat" -> {
@@ -2982,6 +3034,12 @@ public class WatchScene extends AbstractScene {
             fog = sky;
         }
         renderer.begin(target, eye, viewportWidth, viewportHeight, clock, sky, fog);
+        // Everything burning, worked out once and handed over before anything
+        // is submitted: the painter shades each triangle as it queues it and
+        // cannot be told about a lantern afterwards. On a card this is a
+        // uniform block set once for the whole frame.
+        lights.gather(view(), eye.x(), eye.y(), eye.z(), drawClock);
+        renderer.setLights(lights.lights());
         applyVisibility(weather);
         if (frame == 2) applyDistanceSettings();
 
@@ -3185,9 +3243,18 @@ public class WatchScene extends AbstractScene {
         // Every walker, including this one: in third person you are looking at
         // yourself, and in first person your own body is still what casts the
         // shadow, sits in the boat, and shows above the water.
+        double[] hand = new double[3];
         for (WatchView.Walker walker : view.walkers()) {
             if (walker.id() == view.selfId() && !thirdPerson) continue;
             drawWalker(mesh, walker, posed.get(walker.id()), ox, oy);
+            // …and whatever they have lit, in their hand. Everybody's, because
+            // the whole point of a lantern in a party is that the other seven
+            // can see it moving. Your own is drawn by the view model instead,
+            // in the camera's frame, where the hands holding it are.
+            if (!walker.carryingLight()) continue;
+            LightField.handHold(walker, hand);
+            drawLampInHand(mesh, LightKind.ofItem(walker.light()), hand[0] - ox,
+                    hand[1] - oy, hand[2], walker.yaw(), 1);
         }
         if (thirdPerson && view.self() == null) {
             // Before the first snapshot there is no walker record for us, and
@@ -3391,6 +3458,19 @@ public class WatchScene extends AbstractScene {
             FloraMesher.tree(mesh, tree, ox, oy, true);
         }
 
+        // Every fire and lantern standing in the world.
+        //
+        // In the <b>moving</b> mesh, for the reason the litter and the shops
+        // are: a chunk is re-meshed when its level of detail changes and not
+        // when somebody lights a fire, and a flame has to sway on the frame
+        // clock rather than on whenever the ground it stands on was last built.
+        // A camp is a handful of these, so the cost is a handful of cones.
+        for (PlacedLight standing : view.lights().all()) {
+            double dx = standing.x() - px, dy = standing.y() - py;
+            if (dx * dx + dy * dy > LIGHT_RANGE * LIGHT_RANGE) continue;
+            LightModel.light(mesh, standing, ox, oy, drawClock);
+        }
+
         for (Structure.Placement piece : view.structure().all()) {
             WatchMaterials.uv(piece.piece().material(), uv);
             Shapes.box(mesh, piece.x() - ox, piece.y() - oy, piece.z(),
@@ -3401,6 +3481,39 @@ public class WatchScene extends AbstractScene {
         boardFaces(mesh, view, ox, oy, uv);
 
         return mesh.build();
+    }
+
+    /**
+     * How far off a fire or a lantern is still built as a solid, in metres.
+     *
+     * <p>Generous, and it can afford to be: a light is a few dozen triangles
+     * and there are never many. It also has to be — the whole point of a
+     * lantern hung at a camp is that you can see it from across the valley on
+     * the way back, and a light whose <em>glow</em> reaches further than its
+     * model would be a pool of light with a hole in the middle.
+     */
+    private static final double LIGHT_RANGE = 220;
+
+    /**
+     * A lit light in somebody's hand.
+     *
+     * <p>One method rather than the same two-branch switch written twice,
+     * because the view model draws exactly this in the camera's frame while the
+     * moving mesh draws it in the world's.
+     *
+     * <p>Dropped below the point it hangs from rather than stood on it: both
+     * models are built standing on their own feet, a lantern swings from its
+     * bail and a torch is gripped halfway up, so each has to be lowered by
+     * about the height of the part being held.
+     */
+    private void drawLampInHand(Mesh.Builder mesh, LightKind kind, double x, double y,
+                                double z, double yaw, double burn) {
+        if (kind == null) return;
+        if (kind == LightKind.TORCH) {
+            LightModel.torch(mesh, x, y, z - 0.16, yaw, burn, drawClock, 0.42);
+        } else {
+            LightModel.lantern(mesh, x, y, z - 0.22, yaw, kind, burn, drawClock, 0.75);
+        }
     }
 
     // --- map boards ------------------------------------------------------------------
@@ -3756,11 +3869,20 @@ public class WatchScene extends AbstractScene {
             WalkerModel.cameraUp(eye.dirX(), eye.dirY(), eye.dirZ(),
                     eye.rightX(), eye.rightY(), up);
             double upX = up[0], upY = up[1], upZ = up[2];
-            ItemModel.item(mesh, held,
-                    eye.dirX() * forward + eye.rightX() * out + upX * -down,
-                    eye.dirY() * forward + eye.rightY() * out + upY * -down,
-                    eye.dirZ() * forward + upZ * -down,
-                    1.0, Math.atan2(eye.dirX(), -eye.dirY()));
+            double hx = eye.dirX() * forward + eye.rightX() * out + upX * -down;
+            double hy = eye.dirY() * forward + eye.rightY() * out + upY * -down;
+            double hz = eye.dirZ() * forward + upZ * -down;
+            double turn = Math.atan2(eye.dirX(), -eye.dirY());
+            // A lit lamp is drawn burning; everything else, the same lamp
+            // included, is drawn by the item model, which draws it cold. Which
+            // of the two this is comes off the same flag the light does, so the
+            // flame in your hand and the light on the ground cannot disagree.
+            LightKind lamp = carryingLamp();
+            if (lamp != null && lamp.item() != null && lamp.item().equals(held)) {
+                drawLampInHand(mesh, lamp, hx, hy, hz, turn, 1);
+            } else {
+                ItemModel.item(mesh, held, hx, hy, hz, 1.0, turn);
+            }
         }
         return mesh.build();
     }
@@ -3778,8 +3900,28 @@ public class WatchScene extends AbstractScene {
         WatchPlayer me = session.local() == null ? null
                 : session.local().player(session.selfId());
         if (me != null && me.rod().active()) return "rod";
-        if (pickedFlash <= 0 || flashedKey == null) return null;
+        // A lit lamp beats the pickup flash and loses to a cast line, which is
+        // the order of how much each of the three is a thing you are *doing*:
+        // a rod is out for a minute, a lantern is out for the evening, and a
+        // flash is a second of "look what I found".
+        if (pickedFlash <= 0 || flashedKey == null) {
+            LightKind lamp = carryingLamp();
+            return lamp == null ? null : lamp.item();
+        }
         return view().satchel().has(flashedKey) ? flashedKey : null;
+    }
+
+    /**
+     * The kind of light this player is carrying <em>lit</em>, or {@code null}.
+     *
+     * <p>Off the view's own walker row rather than off the local game, so it is
+     * one answer online and off: the host decides whether there is anything
+     * burning, and the row it puts in the snapshot is what the hands, the light
+     * and the HUD all read.
+     */
+    private LightKind carryingLamp() {
+        WatchView.Walker me = view().self();
+        return me == null ? null : LightKind.ofItem(me.light());
     }
 
     // --- the HUD ----------------------------------------------------------------------
@@ -3876,6 +4018,16 @@ public class WatchScene extends AbstractScene {
         // player wants to know how far along it is. See WatchPlayer.health.
         if (health < 0.999) drawHealth(target, barY - (breath < 0.999 ? 48 : 24));
 
+        // What is burning in your hand, and how long it has left.
+        //
+        // <b>Only while something is lit</b>, on the same argument as the
+        // breath bar and the health bar: a readout that is always on screen is
+        // a readout nobody reads. A lantern is a thing with an hour left in it
+        // and no other way of finding that out — the flame does sink as it goes
+        // (see PlacedLight.burnBrightness), which is the warning you get if you
+        // are looking at it, and this is the one you get if you are not.
+        drawLampGauge(target, barX, barY - lampGaugeLift(), barW);
+
         // Bottom left: the satchel, briefly.
         drawSatchelStrip(target, view.satchel(), pad, viewportHeight - pad);
 
@@ -3956,6 +4108,15 @@ public class WatchScene extends AbstractScene {
                 + renderer.culledTriangles() + " culled");
         lines.add("alive  " + view.creatures().size() + " animals · "
                 + view.lures().size() + " feeders · " + view.walkers().size() + " walking");
+        // What is burning, and how much of it the frame is actually carrying.
+        // The second number is the one worth watching: it is capped at
+        // MeshPass.MAX_LIGHTS, and a camp where it is pinned there is a camp
+        // where somebody's lantern is being silently dropped.
+        LightKind lamp = carryingLamp();
+        lines.add("light  " + renderer.lightCount() + " of " + MeshPass.MAX_LIGHTS
+                + " lit · "
+                + view.lights().burning() + "/" + view.lights().size() + " placed · "
+                + (lamp == null ? "hands empty" : "carrying " + lamp.displayName()));
         // What is hunting, and what is lying on the ground because it caught
         // somebody. Both are rare enough that these two numbers are zero nearly
         // always, and are exactly what somebody testing the mutants wants when
@@ -4184,6 +4345,43 @@ public class WatchScene extends AbstractScene {
         String text = breath <= 0 ? "Out of air — surfacing" : "Breath";
         label(target, text, x + width / 2 - target.textWidth(text, HUD_SMALL) / 2,
                 y - 5, HUD_SMALL, breath <= 0 ? HUD_WARN : HUD_DIM);
+    }
+
+    /** How far above the stillness bar the lamp gauge sits, past the other two. */
+    private int lampGaugeLift() {
+        int lift = 24;
+        if (breath < 0.999) lift += 24;
+        if (health < 0.999) lift += 24;
+        return lift;
+    }
+
+    /**
+     * What is burning in your hand, and how much of it is left.
+     *
+     * <p>Drawn in the light's own colour rather than in the HUD's, which is
+     * the whole of why it is worth a bar: three of the four lights in this game
+     * are a different colour and the bar says which one you are carrying
+     * without reading the label. An eternal light has nothing to run out, so it
+     * gets a full bar and the word rather than a countdown to a number that
+     * never falls.
+     */
+    private void drawLampGauge(DrawTarget target, int x, int y, int width) {
+        LightKind lamp = carryingLamp();
+        if (lamp == null) return;
+        WatchView.Walker me = view().self();
+        double left = lamp.eternal() || me == null ? 1
+                : Math.max(0, Math.min(1, me.lightHours() / lamp.burnHours()));
+        int height = 6;
+        target.fillRect(x, y, width, height, new Color(0, 0, 0, 140));
+        int rgb = lamp.rgb();
+        target.fillRect(x, y, (int) (width * left), height,
+                new Color((rgb >> 16) & 0xFF, (rgb >> 8) & 0xFF, rgb & 0xFF));
+        String text = lamp.eternal() ? lamp.displayName()
+                : left <= 0 ? lamp.displayName() + " — out"
+                : left < 0.2 ? lamp.displayName() + " — burning low"
+                : lamp.displayName();
+        label(target, text, x + width / 2 - target.textWidth(text, HUD_SMALL) / 2,
+                y - 5, HUD_SMALL, left < 0.2 && !lamp.eternal() ? HUD_WARN : HUD_DIM);
     }
 
     /**

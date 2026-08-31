@@ -292,7 +292,8 @@ public final class WatchServer implements WatchGame.Sink {
 
     private void broadcastState() {
         toAll(WatchProto.state(tick, game.clock().timeOfDay(), game.players(),
-                game.animals(), game.lures(), game.hurls(), game.weather().toMap()));
+                game.animals(), game.lures(), game.hurls(), game.lights().toRows(),
+                game.weather().toMap()));
         if (tick % WatchProto.WORLD_SYNC_TICKS == 0) sendWorld();
     }
 
@@ -413,6 +414,23 @@ public final class WatchServer implements WatchGame.Sink {
                 if (game.removeLure(id, WatchJson.big(message, "id", 0))) {
                     bagChanged(id, null);
                 }
+            }
+
+            // Light, douse or fill what is in the hand. The satchel channel,
+            // because filling a lantern spends sap out of it — and because the
+            // flame itself reaches everybody on the next snapshot, off the
+            // sender's own player row, with nothing else to send.
+            case "lamp" -> {
+                String line = game.tendLamp(id);
+                if (line != null) bagChanged(id, line);
+            }
+
+            // A light set down, or a fire built. Both channels: it costs the
+            // sender something out of their bag, and it puts a thing in the
+            // world that everybody has to see.
+            case "putlight" -> {
+                if (game.setDownLight(id) != null) bagChanged(id, null);
+                else toPlayer(id, WatchProto.info("Nowhere to put it, or nothing to put"));
             }
 
             case "plant" -> {

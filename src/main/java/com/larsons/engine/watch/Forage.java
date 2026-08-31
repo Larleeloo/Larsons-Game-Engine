@@ -332,6 +332,18 @@ public final class Forage {
         item(map, Spyglass.ITEM, "Spyglass", Kind.TOOL, 0, 0,
                 "Two lenses in a tube. Hold it up and the far shore comes to you.");
 
+        // The three things you can carry that burn. A campfire is not among
+        // them and cannot be: it is built where it stands out of branches and
+        // stones, which is what {@code LightKind.CAMPFIRE.cost()} says.
+        // See com.larsons.engine.watch.light.LightKind for what each one is
+        // worth once it is lit.
+        item(map, "lantern", "Lantern", Kind.TOOL, 0, 0,
+                "Resin oil behind glass. Nine hours, and it takes more sap.");
+        item(map, "torch", "Torch", Kind.TOOL, 0, 0,
+                "Bark, sap and a branch. Bright, brief, and gone when it is out.");
+        item(map, "spore_lantern", "Spore Lantern", Kind.TOOL, 0, 0,
+                "Glow spores in a jar. Cold green light that never goes out.");
+
         // Unmodifiable rather than Map.copyOf: the order is part of what this
         // returns. See ALL.
         return java.util.Collections.unmodifiableMap(map);

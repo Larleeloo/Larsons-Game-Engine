@@ -136,6 +136,46 @@ public final class WatchPlayer {
      */
     private boolean debug;
 
+    /**
+     * The forage key of the light this player is carrying <em>lit</em>, or
+     * {@code null} for empty hands.
+     *
+     * <p><b>Server state, and in the snapshot</b>, for {@link #glassPower}'s two
+     * reasons turned up a notch. It is the host that decides whether there is
+     * actually a lantern in the satchel to light and whether there is any oil
+     * left in it; and everybody else has to see it, because a lantern moving
+     * along the far side of a valley is the only way a party keeps track of each
+     * other after dark.
+     *
+     * <p>The item stays in the satchel while it is lit. That is not a
+     * simplification — it is what makes putting one down
+     * ({@code WatchGame.setDownLight}) and picking it back up the same object
+     * arriving and leaving, rather than an item and a separate "am I holding
+     * it" flag that can disagree.
+     */
+    private String lamp;
+
+    /**
+     * How many real hours of burning are left in the one in hand.
+     *
+     * <p>Per player rather than per item, because a satchel counts items rather
+     * than holding them: three lanterns in a bag are the number three. What is
+     * being tracked here is <em>the one in your hand</em>, and it keeps its
+     * remaining oil when it is put out, when it is set down and when it is
+     * picked back up — see
+     * {@link com.larsons.engine.watch.light.PlacedLight}, which is where the
+     * hours go when it leaves the hand.
+     *
+     * <p>Keeping it across a dousing is the whole reason there is a separate
+     * {@link #lampLit} flag rather than a null key meaning "not burning": a
+     * lamp that forgot its oil every time it was put out would make the fuel
+     * economy a formality, since putting a lantern out and lighting it again is
+     * two keypresses.
+     */
+    private double lampFuel;
+
+    private boolean lampLit;
+
     private final Satchel satchel = new Satchel();
     private final Fishing rod;
 
@@ -310,6 +350,82 @@ public final class WatchPlayer {
     }
 
     /** What they are carrying. */
+    /**
+     * The light in this player's hand and <em>burning</em>, or {@code null}.
+     *
+     * <p>This is the one the snapshot carries and the one every renderer hangs
+     * a light off, so it answers the question the picture asks — "is there a
+     * flame at this person" — rather than the question the satchel asks. For
+     * what is in the hand whether or not it is alight, see {@link #lamp()}.
+     */
+    public String carriedLight() { return lampLit ? lamp : null; }
+
+    /** What is in the hand, lit or not. */
+    public String lamp() { return lamp; }
+
+    /** Whether it is actually burning. */
+    public boolean lampLit() { return lampLit; }
+
+    /** How many real hours of burning are left in it. */
+    public double lampFuel() { return lampFuel; }
+
+    /**
+     * Take a light out of the satchel and light it.
+     *
+     * <p>A non-finite number of hours is taken as zero rather than kept, and
+     * that is not defensive noise: a light that never runs out reports its
+     * remaining fuel as {@link Double#POSITIVE_INFINITY}, which is a perfectly
+     * good answer to "how long has it got" and a terrible thing to put in a
+     * snapshot. An eternal lamp's fuel is simply never read.
+     */
+    public void carryLight(String itemKey, double fuelHours) {
+        this.lamp = itemKey;
+        this.lampFuel = Double.isFinite(fuelHours) ? Math.max(0, fuelHours) : 0;
+        this.lampLit = itemKey != null;
+    }
+
+    /** Fill the one in hand, and light it. */
+    public void fillLamp(double fuelHours) {
+        if (lamp == null) return;
+        this.lampFuel = Math.max(0, fuelHours);
+        this.lampLit = true;
+    }
+
+    /** Light one that is in the hand and out. */
+    public boolean relightLamp(boolean eternal) {
+        if (lamp == null || lampLit || (!eternal && lampFuel <= 0)) return false;
+        lampLit = true;
+        return true;
+    }
+
+    /** Put it out, keeping whatever is left in it. */
+    public void douseLamp() { this.lampLit = false; }
+
+    /** Hands empty — what setting one down, spending one and dying all do. */
+    public void dropLamp() {
+        this.lamp = null;
+        this.lampFuel = 0;
+        this.lampLit = false;
+    }
+
+    /**
+     * Burn the light in hand down by some real hours.
+     *
+     * <p>Whether a light is eternal — a jar of spores — is told by its
+     * {@link com.larsons.engine.watch.light.LightKind} and passed in, rather
+     * than known here: the caller is the thing holding the catalogue, and this
+     * class stays a bag of state.
+     *
+     * @return whether it went out on this step
+     */
+    public boolean burnLamp(double hours, boolean eternal) {
+        if (lamp == null || !lampLit || eternal || hours <= 0) return false;
+        lampFuel = Math.max(0, lampFuel - hours);
+        if (lampFuel > 0) return false;
+        lampLit = false;
+        return true;
+    }
+
     public Satchel satchel() { return satchel; }
 
     /** Their rod, and whatever it is doing. */
@@ -418,6 +534,16 @@ public final class WatchPlayer {
         if (respawns > 0) m.put("rs", respawns);
         if (boatId != 0) m.put("boat", boatId);
         if (glassing()) m.put("gl", glassPower);
+        // What is lit in their hand, for everybody's renderer to hang a light
+        // off. One short field, and only while something is actually burning.
+        if (carriedLight() != null) {
+            m.put("lt", carriedLight());
+            // …and how much is left in it, in hours, to the second or so. Only
+            // the owner's screen draws a gauge from it, but it rides on the
+            // ordinary player row rather than on a private message because it
+            // is three characters and the row is already going out.
+            m.put("lh", Math.round(lampFuel * 1000) / 1000.0);
+        }
         // In the snapshot as well as the save: a client has to know its own
         // satchel is bottomless or its build and cooking screens would grey out
         // everything the host would happily let it make.
@@ -429,6 +555,16 @@ public final class WatchPlayer {
     public Map<String, Object> toMap() {
         Map<String, Object> m = toSnapshot();
         m.put("bag", satchel.toMap());
+        // What is in the hand and how much is left in it. Only in the save:
+        // nobody else's renderer needs the number, and a snapshot twenty times
+        // a second is the wrong place for a figure that changes by a
+        // thousandth of an hour. The key goes in again because the snapshot's
+        // one is only there while it is <em>lit</em>, and a lamp put out for
+        // the walk home is still a lamp in your hand.
+        if (lamp != null) {
+            m.put("lamp", lamp);
+            m.put("ltf", lampFuel);
+        }
         return m;
     }
 
@@ -454,6 +590,14 @@ public final class WatchPlayer {
         // A glass is not left up across a save: you put it in the satchel when
         // you stop for the night like everybody else.
         glassPower = Spyglass.NONE;
+        // A lantern is the other way about, and deliberately: it burns for
+        // hours, it is the thing you were relying on when you stopped playing,
+        // and coming back to a dark wood with your lamp mysteriously out is the
+        // save file taking something away. It keeps whatever oil it had, and it
+        // is still burning if it was.
+        lamp = WatchJson.str(m, "lamp", WatchJson.str(m, "lt", null));
+        lampFuel = WatchJson.num(m, "ltf", 0);
+        lampLit = lamp != null && WatchJson.str(m, "lt", null) != null;
         satchel.load(WatchJson.map(m, "bag"));
         // …but debug mode does survive: a walk played with everything unlimited
         // is that walk when it is reopened, and the code turns it off as easily

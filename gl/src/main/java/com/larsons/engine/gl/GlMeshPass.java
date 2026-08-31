@@ -95,6 +95,20 @@ final class GlMeshPass implements MeshPass {
     private final List<Draw> translucent = new ArrayList<>();
 
     private GlTerrainProgram program;
+
+    /**
+     * The lights the next frame is lit by, and the hour's own colour.
+     *
+     * <p>Held between {@link #setLighting} and {@link #draw} rather than passed
+     * through {@code draw} because the two are set at different moments by the
+     * caller and because a backend that ignores lighting entirely — which is
+     * every backend but this one — should not have to have the parameter in its
+     * signature. See {@link MeshPass#setLighting}.
+     */
+    private final List<Light> lights = new ArrayList<>();
+
+    private float dayR = 1, dayG = 1, dayB = 1;
+
     private int texture = -1;
     private int textureRevision = -1;
     private boolean unavailable;
@@ -172,6 +186,20 @@ final class GlMeshPass implements MeshPass {
         } finally {
             MemoryUtil.memFree(pixels);
         }
+    }
+
+    @Override
+    public void setLighting(List<Light> frameLights, float r, float g, float b) {
+        lights.clear();
+        if (frameLights != null) {
+            for (Light light : frameLights) {
+                if (lights.size() >= MAX_LIGHTS) break;
+                if (light != null) lights.add(light);
+            }
+        }
+        dayR = r;
+        dayG = g;
+        dayB = b;
     }
 
     @Override
@@ -255,6 +283,10 @@ final class GlMeshPass implements MeshPass {
         program.use();
         program.setFog(fogArgb, fogStart, fogEnd, true);
         program.setAlphaCut(ALPHA_CUT);
+        // Once for the frame, for both passes: the hour, and every lamp in the
+        // world. `use` has just reset these to neutral, so a caller that never
+        // calls setLighting draws exactly what it drew before this existed.
+        program.setLighting(lights, eye, dayR, dayG, dayB);
         glActiveTexture(GL_TEXTURE0);
         glBindTexture(GL_TEXTURE_2D, texture);
 

@@ -60,6 +60,90 @@ public interface MeshPass {
     }
 
     /**
+     * How many point lights a frame may carry.
+     *
+     * <p><b>A shared constant rather than two numbers that have to match.</b>
+     * A backend sizes a uniform array with it and the caller sizes the list it
+     * sends with it; the two disagreeing is a shader that silently drops the
+     * last few lights of a camp, which is exactly the class of bug nobody finds
+     * by looking. Sixteen is what a camp with a fire, four lanterns and a
+     * mutant on the ridge actually needs, and it is small enough that a
+     * fragment walking all of them is a handful of instructions.
+     */
+    int MAX_LIGHTS = 16;
+
+    /**
+     * How much of a light a surface facing away from it still receives.
+     *
+     * <p><b>On the seam rather than in either implementation, because both have
+     * to use it.</b> A wrap term that differed between the two would be a
+     * campfire that lights the underside of a branch on a machine with a driver
+     * and not on one without, which is the class of difference nobody notices
+     * until they are comparing screenshots.
+     *
+     * <p>Why there is a wrap term at all: pure Lambert on flat-shaded low-poly
+     * geometry is black on everything not squarely facing the flame, and a wood
+     * at night is mostly surfaces that are not. A third of the light reaching
+     * the back of things is what makes a fire look like a fire in a clearing
+     * rather than a spotlight.
+     */
+    double LIGHT_WRAP = 0.32;
+
+    /**
+     * One point light, in world coordinates.
+     *
+     * <p>Positions are {@code double} and absolute for the same reason a
+     * {@link Draw}'s origin is: a world with no edge puts a campfire tens of
+     * thousands of metres out, and the subtraction that makes that expressible
+     * in {@code float} is the backend's to do, once, against the eye it is
+     * already given.
+     *
+     * <p>{@code radius} is where the light reaches nothing at all, not a
+     * half-life: the falloff is compact, so a light is either inside a
+     * fragment's reckoning or costs it nothing. {@code intensity} is what it
+     * contributes at the source, on the same scale as the daylight multiplier —
+     * {@code 1} is "as bright as noon, right next to it".
+     */
+    record Light(double x, double y, double z, float r, float g, float b,
+                 float radius, float intensity) {
+
+        /** A light of a packed {@code 0xRRGGBB} colour. */
+        public static Light of(double x, double y, double z, int rgb, double radius,
+                               double intensity) {
+            return new Light(x, y, z, ((rgb >> 16) & 0xFF) / 255f,
+                    ((rgb >> 8) & 0xFF) / 255f, (rgb & 0xFF) / 255f,
+                    (float) radius, (float) intensity);
+        }
+    }
+
+    /**
+     * The light the next {@link #draw} is lit by: the sky's own colour, and the
+     * point lights burning in the world.
+     *
+     * <p><b>Why this is a call and not part of the vertex format.</b>
+     * Everything a mesh knows about light is baked into its vertex colours when
+     * it is meshed — which is what lets a chunk be uploaded once and drawn for
+     * as long as it is in view — and a lantern somebody is <em>carrying</em>
+     * moves every frame. Re-meshing a forest because a walker took a step is
+     * not a lighting model, it is a stutter. So the static half stays baked and
+     * the moving half arrives here, as uniforms, and is applied per fragment by
+     * the card: the geometry never changes, and the light does.
+     *
+     * <p>The default does nothing, which is what keeps this optional. A backend
+     * that has not implemented it draws exactly what it drew before, and a
+     * caller that never calls it gets neutral daylight and no lamps.
+     *
+     * @param lights up to {@link #MAX_LIGHTS} of them; anything beyond is the
+     *               caller's to have already thrown away, nearest and brightest
+     *               first
+     * @param dayR   the hour's own light, as a per-channel multiplier — the
+     *               same three numbers {@code WatchClock.lightTint} hands the
+     *               painter, so both paths shade the same world at the same
+     *               hour
+     */
+    default void setLighting(List<Light> lights, float dayR, float dayG, float dayB) { }
+
+    /**
      * Hand over the texture every mesh samples.
      *
      * <p>Cheap to call with an unchanged image: implementations compare

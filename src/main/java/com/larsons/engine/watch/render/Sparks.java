@@ -5,6 +5,8 @@ import com.larsons.engine.watch.life.AnimalRegistry;
 import com.larsons.engine.watch.life.AnimalSkins;
 import com.larsons.engine.watch.life.Hurl;
 import com.larsons.engine.watch.life.Mutants;
+import com.larsons.engine.watch.light.LightKind;
+import com.larsons.engine.watch.light.PlacedLight;
 import com.larsons.engine.watch.world.WatchMaterial;
 import com.larsons.engine.watch.world.WatchMaterials;
 
@@ -83,6 +85,15 @@ public final class Sparks {
     /** How big one starts, in metres. */
     private static final double SIZE = 0.075;
 
+    /** How many embers a campfire throws up per second. */
+    private static final double FIRE_RATE = 14;
+
+    /** …how long one of those lives, in seconds. */
+    private static final double FIRE_LIFE = 1.4;
+
+    /** …and how many fires at once are worth the arithmetic. */
+    private static final int FIRE_LIMIT = 6;
+
     /**
      * One ember.
      *
@@ -115,12 +126,16 @@ public final class Sparks {
     /** How much of an ember is owed but not yet emitted, per shard. */
     private final Map<Long, Double> owed = new HashMap<>();
 
+    /** …and the same, per fire. Its own map because the ids are its own. */
+    private final Map<Long, Double> fireOwed = new HashMap<>();
+
     /** Forget everything — what entering a walk does. */
     public void clear() {
         embers.clear();
         was.clear();
         species.clear();
         owed.clear();
+        fireOwed.clear();
     }
 
     /** How many are alive; for the debug readout and a test. */
@@ -161,6 +176,8 @@ public final class Sparks {
             }
         }
 
+        fires(view, dt);
+
         // Anything that was in the air and is not any more has arrived
         // somewhere — a person, the ground, or the end of its life. All three
         // look the same from here and all three deserve a burst.
@@ -177,6 +194,69 @@ public final class Sparks {
         }
 
         advance(dt);
+    }
+
+    /**
+     * Embers off every campfire in sight.
+     *
+     * <p><b>Only the fires</b>, and that is the whole rule: a lantern is a
+     * flame behind glass and a jar of spores is not burning at all, so neither
+     * throws anything. A fire does, and it is the one thing a lit camp needs to
+     * stop reading as a lamp on the ground — sparks going up are what say the
+     * light is being made rather than being emitted.
+     *
+     * <p>Rate is per fire and independent of the frame rate, by the same
+     * fractional-owing arithmetic the shard trails use: a display running at
+     * three hundred frames a second and one running at thirty draw the same
+     * fire.
+     */
+    private void fires(WatchView view, double dt) {
+        int lit = 0;
+        for (PlacedLight light : view.lights().all()) {
+            if (light.kind() != LightKind.CAMPFIRE) continue;
+            if (!light.lit()) continue;
+            // A cap rather than a distance, because the distance that matters
+            // is not known here — the scene decides what is in view. Six fires'
+            // worth of embers is a well-lit camp and a bounded cost; a party
+            // that has built forty gets the first six of them throwing sparks
+            // and forty lights, which is the right way round.
+            if (++lit > FIRE_LIMIT) break;
+            long id = light.id();
+            double owe = fireOwed.getOrDefault(id, 0.0)
+                    + FIRE_RATE * light.burnBrightness() * dt;
+            int many = (int) owe;
+            fireOwed.put(id, owe - many);
+            for (int i = 0; i < many; i++) {
+                rise(light.x(), light.y(), light.flameZ() + 0.15,
+                        light.kind().rgb());
+            }
+        }
+        // Fires that have gone out or been left behind stop owing anything.
+        if (fireOwed.size() > FIRE_LIMIT * 4) fireOwed.clear();
+    }
+
+    /**
+     * One ember off a fire: small, hot, and <b>going up.</b>
+     *
+     * <p>{@link #spark} throws things outward from an impact and lets gravity
+     * have them, which is right for a shard and wrong for a hearth. This one
+     * leaves with more upward speed than {@link #GRAVITY} takes back inside its
+     * life, so it rises the whole way and goes out at the top — which is what
+     * an ember does and what makes the column above a fire read as heat.
+     */
+    private void rise(double x, double y, double z, int rgb) {
+        Ember ember = embers.size() >= LIMIT ? embers.remove(0) : new Ember();
+        ember.x = x + (rng.nextDouble() - 0.5) * 0.30;
+        ember.y = y + (rng.nextDouble() - 0.5) * 0.30;
+        ember.z = z + rng.nextDouble() * 0.12;
+        ember.vx = (rng.nextDouble() - 0.5) * 0.45;
+        ember.vy = (rng.nextDouble() - 0.5) * 0.45;
+        ember.vz = 1.5 + rng.nextDouble() * 1.4;
+        ember.age = 0;
+        ember.life = FIRE_LIFE * (0.6 + rng.nextDouble() * 0.7);
+        ember.size = SIZE * (0.35 + rng.nextDouble() * 0.5);
+        ember.colour = rgb;
+        embers.add(ember);
     }
 
     /** Move and age everything, and drop what has burned out. */

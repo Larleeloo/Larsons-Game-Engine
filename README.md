@@ -138,7 +138,10 @@ over in a generic, data-driven form and wired to the same toggles:
   cross-pollinate into hybrid species that were not in the world when you
   started; you fish, forage, cook, cultivate seed, set out feeders for the
   diets you are missing, tame a few, and build a house or a tree house out of
-  what you found. **The sun follows your own clock.**
+  what you found. **The sun follows your own clock** — and when it goes down you
+  build a campfire, carry a lantern or light a torch, all of them **lit on the
+  GPU**, per fragment, along with the burning ribcage of whatever is walking
+  toward you out of the treeline.
   See [Field Guide](#field-guide-animal-watching-1-8-online).
 - **Custom key binds** — every action in the engine, from *jump* to the
   creative editor's *undo* to the auto battler's *reroll*, is rebindable to
@@ -3266,6 +3269,42 @@ cannot play between dusk and dawn. In a hosted walk everyone runs on **the
 host's clock**, so a party spread over three time zones is out at the same
 hour.
 
+### Firelight
+
+The other half of the night: **four things that burn**, and on a card every one
+of them is lit per fragment
+([`watch/light`](src/main/java/com/larsons/engine/watch/light),
+[`MeshPass.setLighting`](src/main/java/com/larsons/engine/graphics/MeshPass.java)).
+
+| | Reach | Burns | Fed with |
+|---|---|---|---|
+| **Campfire** — built where it stands, out of three branches and two stones | 12 m | 4 h | branches |
+| **Lantern** — carried lit, or set down as a mark | 9 m | 9 h | sap |
+| **Torch** — cheap, bright, and gone when it is out | 6.5 m | 1.2 h | — |
+| **Spore Lantern** — cold green, from the mushroom hollow, never goes out | 7.5 m | for ever | — |
+
+<kbd>N</kbd> lights, douses or fills whatever is in your hand; <kbd>H</kbd> sets
+it down, or builds a fire when your hands are empty; <kbd>E</kbd> at one feeds
+it, lights it, or picks it back up still burning. Fuel runs on the **wall
+clock** like the trees do, so a fire lit before bed is out in the morning.
+Everybody sees everybody's lantern, which is how a party keeps track of each
+other after dark.
+
+**The three things that hunt you light the ground now** — each in its own glow
+colour, on a slow heartbeat, and deliberately only six metres of it: a wendigo
+that lit the wood like a campfire would make meeting one well lit, which is the
+wrong feeling entirely.
+
+None of the lighting travels: a fire's *existence* is replicated and every
+consequence of it is worked out on the machine drawing it. Up to sixteen lights
+a frame, ranked by how much lit ground each can put in front of the camera, so
+a camp of forty lanterns costs what sixteen do. The card derives the surface
+normal it needs from the depth gradient (`cross(dFdx, dFdy)`) rather than from a
+vertex attribute, so **no geometry is re-uploaded when a light moves** — which is
+what makes a carried lantern affordable at all. The Java2D path draws the same
+model per triangle, off the face's own normal, against lights culled per mesh.
+See [WATCH_PLAN §7j](WATCH_PLAN.md).
+
 ### The book
 
 <kbd>G</kbd> opens the field guide
@@ -3472,7 +3511,9 @@ changes its stop while it is up — <kbd>E</kbd> does whatever is in reach,
 <kbd>Tab</kbd> the satchel, <kbd>F</kbd> puts down a feeder, <kbd>R</kbd>
 plants, <kbd>C</kbd> cross-pollinates, <kbd>Y</kbd> boards and leaves a boat,
 <kbd>B</kbd> builds, <kbd>X</kbd> turns the piece, <kbd>V</kbd> casts and
-strikes, <kbd>M</kbd> draws a map (debug mode only, for now — see below),
+strikes, <kbd>N</kbd> lights, douses or fills whatever is in your hand,
+<kbd>H</kbd> sets a light down — or builds a campfire, when your hands are
+empty — <kbd>M</kbd> draws a map (debug mode only, for now — see below),
 <kbd>L</kbd> leaves. All rebindable from **Controls (Key Binds)** in
 the walk's own lobby, which shows this game's keys rather than the engine's.
 
