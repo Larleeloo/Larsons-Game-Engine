@@ -3005,7 +3005,10 @@ trees that take real days to grow and cross into varieties nobody has seen, a
 house you build out of what you picked up on the way, and trading posts out
 along the trails where a keeper will sell you materials for points and stamp a
 fresh page in your book — so that everything you have already seen is worth
-finding again, without ever leaving the guide.
+finding again, without ever leaving the guide. And, when a party wants to stop
+being quiet for twenty minutes, two games inside the game: a **round of tag**
+the whole walk has to vote for, and an **Eye Spy** board where one animal a day
+is worth points to whoever finds it first.
 
 ```
 ┌──────────────────────────────────────────────────────────────────────┐
@@ -3370,6 +3373,51 @@ rail. **The wares on the back shelves are that post's actual stock**, drawn with
 the same models the satchel uses, so you can read what a keeper sells before
 opening anything.
 
+### Two games inside the game
+
+Everything else in the Field Guide is something one person does. These two are
+things one person does *to everybody else*, which is why one of them has a vote
+in front of it and the other has a limit of one a day.
+
+**Tag** ([`Tag`](src/main/java/com/larsons/engine/watch/Tag.java)). Press
+<kbd>T</kbd> and the party is asked. It carries on a **strict majority of the
+walk, not of the votes cast** — an abstention is a no, or two people out of eight
+could start a chase while the other six were looking through spyglasses — and the
+poll closes the moment its answer can no longer change rather than sitting there
+for half a minute. Whoever asked is **it**, which is what stops "let's play tag"
+being a way of making somebody else run around for half an hour.
+
+Being it means three things: **1.3× speed**, a **water gun** that tags at range,
+and **thirty seconds of standing still** every time it changes hands — the count
+of the playground game, which scatters the field and makes tagging back the
+person who just tagged you impossible. The freeze is enforced by the host
+*refusing to write down where you say you are*, because a client is the authority
+on its own position and there is no other way to hold somebody still; your head
+still turns while it lasts, and watching everybody scatter is most of what those
+thirty seconds are for.
+
+Whoever is it also gets the **compass the chase needs**: a needle on the ordinary
+compass strip pointing at the nearest walker, with the distance. Only they see
+it — given to everybody it would end every round in about forty seconds, as the
+field spread out along the vectors they were shown — and nothing about it
+travels, because everybody's position is already in every snapshot.
+
+<kbd>T</kbd> again, during a round, asks the party to call it off. One key, one
+mechanism, and no way for whoever is losing to stop the game on their own. The
+round keeps running while the question is being asked.
+
+**Eye Spy** ([`Bounty`](src/main/java/com/larsons/engine/watch/Bounty.java)).
+<kbd>J</kbd> opens a board of animals that live where you are standing — the ones
+already in the book first — and pins one up as a bounty for the rest of the party
+to find. **The world prices it**, at somewhere between 10 and 100 points, chosen
+at random: a reward you set yourself is a reward you set to a hundred every time.
+**One a day, per walker**, on the real calendar, because a bounty should be a
+thing you thought about. And **whoever asked cannot answer it** — the next person
+to spot one claims it, their name goes on the posting, and the points go into the
+shared book like every other point in this game. Unclaimed bounties come down
+after a day, so the board is a list of things worth doing this week rather than
+an archive of everything anybody ever wondered about.
+
 ### One seed, no terrain on the wire
 
 The server owns one
@@ -3514,8 +3562,11 @@ plants, <kbd>C</kbd> cross-pollinates, <kbd>Y</kbd> boards and leaves a boat,
 strikes, <kbd>N</kbd> lights, douses or fills whatever is in your hand,
 <kbd>H</kbd> sets a light down — or builds a campfire, when your hands are
 empty — <kbd>M</kbd> draws a map (debug mode only, for now — see below),
-<kbd>L</kbd> leaves. All rebindable from **Controls (Key Binds)** in
-the walk's own lobby, which shows this game's keys rather than the engine's.
+<kbd>L</kbd> leaves. <kbd>T</kbd> suggests a game of tag, calls one off, or
+votes yes; <kbd>U</kbd> votes no; <kbd>Q</kbd> is the water gun while you are it;
+<kbd>J</kbd> opens the Eye Spy board. All rebindable from **Controls (Key
+Binds)** in the walk's own lobby, which shows this game's keys rather than the
+engine's.
 
 ### Maps (debug mode only, for now)
 

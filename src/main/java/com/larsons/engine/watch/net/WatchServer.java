@@ -82,6 +82,12 @@ public final class WatchServer implements WatchGame.Sink {
      */
     private final Map<Integer, Integer> respawnsSeen = new java.util.HashMap<>();
 
+    /** Who was it last tick, so a water gun changing hands can be pushed. */
+    private int itSeen;
+
+    /** What the bounty board's counter last read. See {@link #announceBounties}. */
+    private long bountiesSeen = -1;
+
     private record Request(Connection conn, Map<String, Object> message) {}
 
     public WatchServer(WatchGame.Config config) {
@@ -194,6 +200,8 @@ public final class WatchServer implements WatchGame.Sink {
                 dropSilent(now);
                 game.tick(1.0 / WatchProto.TICK_RATE);
                 announceDeaths();
+                announceTag();
+                announceBounties();
                 broadcastState();
                 tick++;
             } catch (RuntimeException e) {
@@ -268,6 +276,48 @@ public final class WatchServer implements WatchGame.Sink {
         if (died) sendWorld();
     }
 
+    /**
+     * Push the satchels of whoever has just gained or lost the water gun.
+     *
+     * <p>{@link #announceDeaths}'s trick on a different counter, and for the same
+     * reason: it changes hands deep inside the simulation — a jet arrives, a poll
+     * closes, somebody goes home — and the two bags it changes are on a private
+     * channel that only goes out when a request has been answered. Watching who
+     * is it costs one integer and catches every one of those paths, including the
+     * ones with no request behind them at all.
+     */
+    private void announceTag() {
+        int now = game.tag().itId();
+        if (now == itSeen) return;
+        int was = itSeen;
+        itSeen = now;
+        // The first tick of a walk has nothing to say: nobody was it, and nobody
+        // is. See announceDeaths, which skips its own first sighting of a player
+        // for the same reason.
+        if (was > 0) bagChanged(was, null);
+        if (now > 0) bagChanged(now, null);
+    }
+
+    /**
+     * Push the board, and the balance a claim moved.
+     *
+     * <p>Off {@code Bounty.version} rather than off any particular verb, because
+     * the three things that change the board arrive by three different routes: a
+     * posting is a request, a claim rides inside a sighting that already has a
+     * message of its own, and an expiry happens on a tick with nothing behind it.
+     * One counter covers all three, and a claim is the only event in this game
+     * that moves the shared balance without a purchase.
+     */
+    private void announceBounties() {
+        long now = game.bounties().version();
+        if (now == bountiesSeen) return;
+        boolean first = bountiesSeen < 0;
+        bountiesSeen = now;
+        if (first) return;
+        sendWorld();
+        sendLedger();
+    }
+
     /** The first player to have joined; whoever is "the host" for the lobby's list. */
     private int hostId() {
         for (WatchPlayer p : game.players()) return p.id();
@@ -293,14 +343,15 @@ public final class WatchServer implements WatchGame.Sink {
     private void broadcastState() {
         toAll(WatchProto.state(tick, game.clock().timeOfDay(), game.players(),
                 game.animals(), game.lures(), game.hurls(), game.lights().toRows(),
-                game.weather().toMap()));
+                game.weather().toMap(),
+                game.tag().idle() ? null : game.tag().toMap()));
         if (tick % WatchProto.WORLD_SYNC_TICKS == 0) sendWorld();
     }
 
     private void sendWorld() {
         toAll(WatchProto.world(game.grove().toMap(), game.crops().toMap(),
                 game.structure().toMap(), game.maps().toMap(), game.boats().toMap(),
-                game.spills().toMap(), game.takenLitter()));
+                game.spills().toMap(), game.bounties().toMap(), game.takenLitter()));
     }
 
     // --- requests -------------------------------------------------------------------
@@ -607,6 +658,31 @@ public final class WatchServer implements WatchGame.Sink {
                         WatchJson.big(message, "b", 0))) {
                     sendWorld();
                 }
+            }
+
+            // --- the party games -------------------------------------------
+            //
+            // The first three send nothing back and need to: a poll, a freeze
+            // and whoever is it all ride the snapshot, so the answer to any of
+            // them is on every screen within a twentieth of a second. What the
+            // sender is told is said to the whole party through the log, because
+            // all three are things the party is doing rather than things one
+            // person did.
+
+            case "tag" -> game.suggestTag(id);
+
+            case "vote" -> game.voteTag(id, WatchJson.bool(message, "y", true));
+
+            case "squirt" -> game.squirt(id);
+
+            case "bounty" -> {
+                // The one of the four with an answer only its sender wants: a
+                // refusal is "you have already had yours today", which is nobody
+                // else's business. A posting that succeeds says so to everybody
+                // out of the game itself, and the board reaches them through
+                // announceBounties.
+                String line = game.postBounty(id, WatchJson.str(message, "sp", ""));
+                if (line != null) conn.send(Protocol.encode(WatchProto.info(line)));
             }
 
             case "ping" -> conn.send(Protocol.encode(

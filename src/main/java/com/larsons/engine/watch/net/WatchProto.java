@@ -29,7 +29,7 @@ import java.util.Map;
  *   client → server   {"t":"move","x":..,"y":..,"z":..,"yaw":..,"p":..,"c":false}
  *   server → all      {"t":"state","tick":42,"time":0.61,
  *                      "players":[…],"animals":[…],"lures":[…],"hurls":[…],
- *                      "lights":[…]}
+ *                      "lights":[…],"tag":{…}}
  *
  *   client → server   {"t":"spot","a":animalId}     (0 = whatever I am looking at)
  *   server → all      {"t":"seen","a":id,"sp":"songbird_finch_banded","by":"Kara",
@@ -57,9 +57,14 @@ import java.util.Map;
  *
  *   client → server   {"t":"gather"}                  (take a dropped satchel)
  *
+ *   client → server   {"t":"tag"}                     (suggest a game, or an end to one)
+ *   client → server   {"t":"vote","y":true}
+ *   client → server   {"t":"squirt"}                  (the water gun, while it)
+ *   client → server   {"t":"bounty","sp":"otter_river_banded"}
+ *
  *   server → client   {"t":"bag","items":{…}}          (private, after any change)
  *   server → all      {"t":"world","grove":{…},"crops":{…},"built":{…},"maps":{…},
- *                      "spills":{…}}
+ *                      "spills":{…},"bounties":{…}}
  *   server → all      {"t":"guide","entries":[…],"pets":[…],"earned":…,"tally":[…]}
  *   both              info / error / ping / pong
  * </pre>
@@ -188,18 +193,28 @@ public final class WatchProto {
      * teleports to the position in the same snapshot. See
      * {@link WatchPlayer#respawns()} for why that is better than telling them
      * once and hoping.
+     *
+     * <p><b>So does a game of tag</b>, when there is one. It is on the snapshot
+     * rather than on an event for the shards' reason: a freeze counting down and
+     * a poll running out are things that <em>change every tick</em>, and a client
+     * told only "a round started" would have to run both clocks itself — which is
+     * two clocks disagreeing about whether somebody may move yet. Left out
+     * entirely while nothing is happening, which is every snapshot of nearly
+     * every walk. See {@link com.larsons.engine.watch.Tag}.
      */
     public static Map<String, Object> state(long tick, double timeOfDay,
                                             List<WatchPlayer> players,
                                             List<Animal> animals, List<Lure> lures,
                                             List<Hurl> hurls, List<Object> lights,
-                                            Map<String, Object> sky) {
+                                            Map<String, Object> sky,
+                                            Map<String, Object> tag) {
         Map<String, Object> m = msg("state");
         m.put("tick", tick);
         m.put("time", round(timeOfDay));
         // The weather rides along with the clock, and for the same reason: one
         // party, one sky. Four short fields per snapshot.
         if (sky != null) m.put("sky", sky);
+        if (tag != null && !tag.isEmpty()) m.put("tag", tag);
         List<Object> playerRows = new ArrayList<>();
         for (WatchPlayer p : players) playerRows.add(p.toSnapshot());
         m.put("players", playerRows);
@@ -370,6 +385,55 @@ public final class WatchProto {
         return m;
     }
 
+    // --- the party games ----------------------------------------------------------
+    //
+    // Four verbs, and between them they carry no rules. Whether a poll may open,
+    // whether a shot is allowed, what a bounty is worth and who may claim one are
+    // all the host's to decide — see com.larsons.engine.watch.Tag and
+    // com.larsons.engine.watch.Bounty, where every one of those lives.
+
+    /**
+     * Suggest a game of tag, or — while one is running — suggest calling it off.
+     *
+     * <p>No argument, deliberately. Which of the two this is depends on whether a
+     * round is on, and that is a fact about the host's world rather than about
+     * the keyboard: a client that sent its own idea of which it meant would be a
+     * client that could ask to end a round that had already ended.
+     */
+    public static Map<String, Object> tag() { return msg("tag"); }
+
+    /** Answer the open poll. */
+    public static Map<String, Object> vote(boolean yes) {
+        Map<String, Object> m = msg("vote");
+        m.put("y", yes);
+        return m;
+    }
+
+    /**
+     * Pull the trigger on the water gun.
+     *
+     * <p>Where the jet goes is not sent, because the host already knows: it
+     * leaves along the yaw and pitch on the sender's last {@code move}, which is
+     * the aim under their own crosshair. See {@code WatchScene.sendMove}, which
+     * is careful to send the aim rather than the heading for exactly this kind of
+     * reason.
+     */
+    public static Map<String, Object> squirt() { return msg("squirt"); }
+
+    /**
+     * Pin an Eye Spy bounty on a species.
+     *
+     * <p><b>What it is worth does not travel.</b> The host rolls the number, out
+     * of the world's own generator, and a client that sent one would be a client
+     * awarding itself a hundred points a day. All that goes up the wire is what
+     * somebody would like found.
+     */
+    public static Map<String, Object> bounty(String species) {
+        Map<String, Object> m = msg("bounty");
+        m.put("sp", species);
+        return m;
+    }
+
     // --- maps --------------------------------------------------------------------
     //
     // Six verbs, and between them they carry no pictures. A map's paper is a
@@ -486,11 +550,19 @@ public final class WatchProto {
                                             Map<String, Object> maps,
                                             Map<String, Object> boats,
                                             Map<String, Object> spills,
+                                            Map<String, Object> bounties,
                                             List<Long> taken) {
         Map<String, Object> m = msg("world");
         m.put("grove", grove);
         m.put("crops", crops);
         m.put("built", built);
+        // The Eye Spy board, on the slow channel with everything else the host
+        // owns. It changes when somebody pins one up, when somebody claims one
+        // and when one goes stale — a handful of times a day rather than a
+        // handful of times a second — and the sync goes out the instant any of
+        // the three happens, so it is never five seconds behind in practice. See
+        // com.larsons.engine.watch.Bounty.
+        if (bounties != null) m.put("bounties", bounties);
         // The dropped satchels. On the slow channel with everything else the
         // host owns, and not on the snapshot: a heap appears when somebody dies
         // and disappears when somebody picks it up, which is a handful of times

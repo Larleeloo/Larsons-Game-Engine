@@ -269,6 +269,24 @@ public final class WatchGame implements Animal.Surroundings {
     private final Spill spills = new Spill();
 
     private final FieldGuide guide = new FieldGuide();
+
+    /**
+     * The party game, and the vote that starts one.
+     *
+     * <p>Not saved, unlike everything else on this list — see {@link Tag}, which
+     * is weather in the same sense the animals are.
+     */
+    private final Tag tag = new Tag();
+
+    /**
+     * The Eye Spy board: what somebody has asked the rest of the party to find,
+     * and what it pays.
+     *
+     * <p>Saved and synced with the world it belongs to, because a bounty is a
+     * promise rather than a game in progress. See {@link Bounty}.
+     */
+    private final Bounty bounties = new Bounty();
+
     private final Grove grove = new Grove();
     private final Cultivation crops = new Cultivation();
     private final Structure structure = new Structure();
@@ -372,6 +390,12 @@ public final class WatchGame implements Animal.Surroundings {
 
     /** The shared book. */
     public FieldGuide guide() { return guide; }
+
+    /** Whether a game of tag is on, and who is it. */
+    public Tag tag() { return tag; }
+
+    /** What the party has put up for each other to find. */
+    public Bounty bounties() { return bounties; }
 
     /** Every tree anybody planted. */
     public Grove grove() { return grove; }
@@ -525,7 +549,14 @@ public final class WatchGame implements Animal.Surroundings {
     /** Somebody leaves. Their pets stay in the book; their feeders stay standing. */
     public synchronized void leave(int id) {
         WatchPlayer gone = players.remove(id);
-        if (gone != null) say(gone.name() + " headed home");
+        if (gone == null) return;
+        say(gone.name() + " headed home");
+        // A game of tag cannot outlive the person being chased or the person
+        // doing the chasing. See Tag.left, which decides which of those this was.
+        if (tag.left(id, players.size())) {
+            takeGuns();
+            say("The tag is off — " + gone.name() + " went home");
+        }
     }
 
     /**
@@ -536,11 +567,25 @@ public final class WatchGame implements Animal.Surroundings {
      * heightfield everybody has. It is the same rule the speed derivation
      * follows and for the same reason — the breath meter is the only thing in
      * this game that runs out, so it should not be a number a client hands over.
+     *
+     * <p><b>A freeze is enforced here, and it is the only place it could be.</b>
+     * A client is the authority on where it is standing, so the host cannot move
+     * somebody by writing a position into a snapshot — the next {@code move}
+     * would simply put them back. What it can do is refuse to <em>take</em> one,
+     * which is this: whoever has just been tagged keeps the position they were
+     * tagged at for {@link Tag#FREEZE_SECONDS} seconds however far their own
+     * client thinks it has walked. Their head still turns, because being frozen
+     * is standing still and counting rather than being switched off, and watching
+     * everybody scatter is most of what those thirty seconds are for.
      */
     public synchronized void move(int id, double x, double y, double z, double yaw, double pitch,
                      boolean crouching, double dt) {
         WatchPlayer player = players.get(id);
         if (player == null) return;
+        if (tag.frozen(id)) {
+            player.moveTo(player.x(), player.y(), player.z(), yaw, pitch, crouching, dt);
+            return;
+        }
         player.moveTo(x, y, z, yaw, pitch, crouching, dt);
         player.setSubmerged(player.eyeZ() < TerrainField.WATER_LEVEL - 0.05, dt);
     }
@@ -782,12 +827,232 @@ public final class WatchGame implements Animal.Surroundings {
             say(player.name() + " logged a " + def.name() + " — " + worth
                     + (worth == 1 ? " point" : " points"));
         }
+        // …and whatever somebody had put up for it. Every sighting asks, because
+        // the board is the one thing in this game that turns an animal nobody
+        // would have looked twice at into the reason for an afternoon.
+        claimBounty(def.key(), player);
         return light;
     }
 
     /** Adopt a spotlight sent by the host — what a client does. */
     public synchronized void addSpotlight(Spotlight light) {
         if (light != null) spotlights.add(light);
+    }
+
+    // --- tag -------------------------------------------------------------------------
+
+    /**
+     * Put a game of tag to the party — or, while one is on, put an end to it.
+     *
+     * <p>One verb for both, because they are the same question asked of the same
+     * people under the same rules, and because a second key for "stop" would be a
+     * key that did nothing for ninety-nine walks out of a hundred. Which of the
+     * two it is depends only on whether a round is already running. See
+     * {@link Tag#suggest}.
+     *
+     * @return a line for whoever asked, or {@code null} if there is no such player
+     */
+    public synchronized String suggestTag(int playerId) {
+        WatchPlayer player = players.get(playerId);
+        if (player == null) return null;
+        if (players.size() < Tag.LEAST_PLAYERS) {
+            return "Tag wants somebody to chase — this is a walk for one";
+        }
+        if (tag.polling()) return "There is already a vote open";
+        if (!tag.suggest(playerId, player.name(), players.size())) return null;
+        say(tag.question() + "  ·  " + (int) Tag.VOTE_SECONDS + "s to answer");
+        return tag.question();
+    }
+
+    /**
+     * One answer to the open poll.
+     *
+     * <p>The result is not decided here — see {@link Tag#tick}, which closes the
+     * poll on the world's clock whether it was settled by the last vote or by
+     * running out of time. Both paths through one piece of code is what stops a
+     * walk where everybody answers at once behaving differently from a walk where
+     * one person is making tea.
+     */
+    public synchronized boolean voteTag(int playerId, boolean yes) {
+        WatchPlayer player = players.get(playerId);
+        if (player == null || !tag.vote(playerId, yes)) return false;
+        say(player.name() + (yes ? " is in" : " would rather not") + "  ·  " + tag.tally());
+        return true;
+    }
+
+    /**
+     * Pull the trigger.
+     *
+     * <p><b>Refused to anybody who is not it</b>, and to whoever is it while they
+     * are still frozen — the gun is in the satchel and the satchel is not what
+     * decides. A jet that has left is an ordinary thing in the air from there on;
+     * what it does when it arrives is in {@link #flyHurls}.
+     *
+     * @return whether a jet left the barrel
+     */
+    public synchronized boolean squirt(int playerId) {
+        WatchPlayer player = players.get(playerId);
+        if (player == null || !tag.isIt(playerId)) return false;
+        if (tag.frozen(playerId) || !tag.loaded(playerId)) return false;
+        tag.fired(playerId);
+        long id = nextHurlId++;
+        double x = player.x() + Math.sin(player.yaw()) * Tag.BARREL_AHEAD;
+        double y = player.y() - Math.cos(player.yaw()) * Tag.BARREL_AHEAD;
+        hurls.put(id, Hurl.squirted(id, Tag.JET, player.name(), x, y,
+                player.z() + Tag.BARREL_Z, player.yaw(), player.pitch(), Tag.JET_SPEED));
+        return true;
+    }
+
+    /**
+     * Somebody has been caught.
+     *
+     * <p>Three things and they are one sentence: it changes hands, the gun goes
+     * with it, and the party is told. The gun moving is what makes the round
+     * legible from outside — a walker across the clearing can see who is carrying
+     * it — and it is why the item exists at all, given that {@link #squirt} asks
+     * the round rather than the satchel whether a shot is allowed.
+     */
+    private void soak(WatchPlayer caught, String by) {
+        WatchPlayer thrower = playerNamed(by);
+        if (!tag.pass(caught.id(), caught.name(), by)) return;
+        if (thrower != null) thrower.satchel().take(Tag.GUN, thrower.satchel().count(Tag.GUN));
+        caught.satchel().add(Tag.GUN, 1);
+        say((by == null ? "Somebody" : by) + " soaked " + caught.name()
+                + " — they are it, and frozen for " + (int) Tag.FREEZE_SECONDS + " seconds");
+    }
+
+    /**
+     * Take every water gun in the party back.
+     *
+     * <p>A sweep rather than a hand-back from whoever is it, because the round
+     * can end while the gun is somewhere else: its owner may have been killed by
+     * a wendigo and dropped the whole satchel, or left the walk carrying it. One
+     * loop over eight bags costs nothing and cannot leave a toy behind.
+     */
+    private void takeGuns() {
+        for (WatchPlayer player : players.values()) {
+            player.satchel().take(Tag.GUN, player.satchel().count(Tag.GUN));
+        }
+    }
+
+    /**
+     * Hand the poll's answer, and the freeze's end, to the party.
+     *
+     * <p>Called from the tick with whatever {@link Tag#tick} decided. The round
+     * itself has already started or ended by the time this runs — {@code Tag}
+     * applies its own outcome — so this is only the announcements and the gun.
+     */
+    private void settleTag(Tag.Tick played) {
+        switch (played.poll()) {
+            case STARTED -> {
+                WatchPlayer it = players.get(tag.itId());
+                if (it != null) it.satchel().add(Tag.GUN, 1);
+                say("Tag! " + tag.it() + " is it — frozen for "
+                        + (int) Tag.FREEZE_SECONDS + " seconds, then a water gun and "
+                        + Tag.IT_SPEED + "× pace");
+            }
+            case STOPPED -> {
+                takeGuns();
+                say("The tag is over" + scoreline());
+            }
+            case REFUSED -> say("The party said no");
+            case NOTHING -> { }
+        }
+        // Said last, because a poll closing on the same tick a freeze ends is the
+        // ordinary case rather than a corner of one: a call-off suggested the
+        // instant somebody was tagged runs on that tag's own clock.
+        if (played.thawed() && tag.running()) {
+            say(tag.it() + " can move — look out");
+        }
+    }
+
+    /** Who tagged whom, for the line that ends a round. */
+    private String scoreline() {
+        Map<String, Integer> board = tag.scoreboard();
+        if (board.isEmpty()) return " — nobody was caught";
+        StringBuilder sb = new StringBuilder(" — ");
+        for (Map.Entry<String, Integer> entry : board.entrySet()) {
+            if (sb.length() > 3) sb.append(", ");
+            sb.append(entry.getKey()).append(' ').append(entry.getValue());
+        }
+        return sb.toString();
+    }
+
+    // --- the bounty board -------------------------------------------------------------
+
+    /**
+     * Pin up an Eye Spy bounty — <b>one per walker per day.</b>
+     *
+     * <p>The species travels and the price does not: a client naming what it
+     * would like found is a request like every other one here, and a client
+     * naming what that is worth would be a client with a hundred points a day to
+     * award itself. The host rolls it, out of the world's own generator. See
+     * {@link Bounty}.
+     *
+     * @return a line for whoever asked, refusal included, or {@code null} when
+     *         there is no such player or no such species
+     */
+    public synchronized String postBounty(int playerId, String speciesKey) {
+        WatchPlayer player = players.get(playerId);
+        AnimalDef def = AnimalRegistry.byKey(speciesKey);
+        if (player == null || def == null) return null;
+        // A walk that can never hold anybody else is a walk where a bounty could
+        // never be claimed — see Bounty, where the poster is the one walker who
+        // may not answer their own question. Refused on the <em>cap</em> rather
+        // than on how many are currently out, because a hosted walk somebody
+        // happens to be alone on this afternoon is a walk with seven seats in it.
+        if (config.maxPlayers() < Tag.LEAST_PLAYERS) {
+            return "A bounty is for somebody else to find — this is a walk for one";
+        }
+        long now = System.currentTimeMillis();
+        if (bounties.postedToday(player.name(), now)) {
+            long hours = bounties.hoursUntilNextPosting(player.name(), now);
+            return "One bounty a day — yours comes round again in " + hours
+                    + (hours == 1 ? " hour" : " hours");
+        }
+        if (bounties.open(speciesKey)) {
+            return "There is already a bounty on the " + def.name();
+        }
+        Bounty.Posting posting = bounties.post(speciesKey, Bounty.roll(rng),
+                player.name(), now);
+        if (posting == null) return null;
+        say(player.name() + " wants a " + def.name() + " found — "
+                + posting.points() + " points to whoever spots one");
+        return "Pinned up — " + posting.describe();
+    }
+
+    /**
+     * Settle whatever was on the board for a species somebody has just seen.
+     *
+     * <p>Called from both places a sighting is written — a spot and a landed fish
+     * — because a bounty is about the species being <em>found</em> and the game
+     * has two ways of finding one. It answers {@code null} for the ordinary case,
+     * which is nearly every sighting of nearly every walk.
+     */
+    private Bounty.Posting claimBounty(String species, WatchPlayer finder) {
+        Bounty.Posting claimed = bounties.claim(species, finder.name(),
+                System.currentTimeMillis());
+        if (claimed == null) return null;
+        guide.reward(claimed.points());
+        say(finder.name() + " claimed " + claimed.poster() + "'s bounty on the "
+                + claimed.name() + " — " + claimed.points() + " points to the book");
+        return claimed;
+    }
+
+    /**
+     * What a screen offers somebody about to post a bounty, for where they are
+     * standing.
+     *
+     * <p>Here as well as on {@link Bounty} so that a solo walk and a client both
+     * ask the same object the same question about the same biome. The list is a
+     * convenience rather than a rule — see {@link Bounty#choices}, which explains
+     * why the host does not check a posting against it.
+     */
+    public synchronized List<AnimalDef> bountyChoices(int playerId) {
+        WatchPlayer player = players.get(playerId);
+        if (player == null) return List.of();
+        WatchBiome biome = field.biomeAt(player.x(), player.y());
+        return bounties.choices(guide, biome.key(), Bounty.CHOICES);
     }
 
     // --- foraging --------------------------------------------------------------------
@@ -1926,6 +2191,10 @@ public final class WatchGame implements Animal.Surroundings {
             say(player.name() + " landed a " + fish.name() + " — " + worth
                     + (worth == 1 ? " point" : " points"));
         }
+        // A fish is a sighting, so it settles a bounty like any other. Somebody
+        // who puts a hundred points on a species that can only be caught has
+        // asked for a fishing trip, which is a perfectly good thing to ask for.
+        claimBounty(fish.key(), player);
         return fish;
     }
 
@@ -2026,6 +2295,21 @@ public final class WatchGame implements Animal.Surroundings {
         spotlights.replaceAll(light -> light.aged(dt));
         spotlights.removeIf(light -> !light.alive());
         lures.values().removeIf(Lure::spoiled);
+
+        // The party game: the poll's clock, the freeze, and whatever the party
+        // decided. Tag applies its own outcome; what comes back is the news.
+        Tag.Tick played = tag.tick(dt);
+        if (!played.quiet()) settleTag(played);
+
+        // …and anything nobody claimed in time. On the wall clock like the trees
+        // and the fires, because a day has to mean a day: a bounty pinned up
+        // before bed is stale in the morning whether or not anybody was logged in.
+        if (realHours > 0) {
+            for (Bounty.Posting lapsed : bounties.expire(now)) {
+                say("Nobody found " + lapsed.poster() + "'s " + lapsed.name()
+                        + " — the bounty has come down");
+            }
+        }
 
         mutantCooldown = Math.max(0, mutantCooldown - dt);
 
@@ -2439,15 +2723,27 @@ public final class WatchGame implements Animal.Surroundings {
      * watch shards pass through three people to reach the fourth, and the
      * obvious tactic against a wendigo would be to stand behind a friend
      * without it costing them anything.
+     *
+     * <p>Two things fly and the difference between them is only what happens on
+     * arrival — a bone shard wounds, a jet of water makes somebody it. The one
+     * extra rule the jet needs is that it cannot catch the person who fired it:
+     * it leaves half a metre in front of their chest, which is well inside
+     * {@link Hurl#HIT_RADIUS} of it. See {@link Tag}.
      */
     private void flyHurls(double dt) {
         if (hurls.isEmpty()) return;
         for (Hurl hurl : List.copyOf(hurls.values())) {
             if (!hurl.step(dt, field.heightAt(hurl.x(), hurl.y()))) continue;
+            boolean jet = Tag.JET.equals(hurl.species());
             for (WatchPlayer player : players.values()) {
                 if (!player.alive()) continue;
+                if (jet && player.name().equals(hurl.owner())) continue;
                 if (!hurl.hits(player.x(), player.y(), player.z())) continue;
                 hurl.expire();
+                if (jet) {
+                    soak(player, hurl.owner());
+                    break;
+                }
                 // Through the same door a swipe goes through, so a death by
                 // shard drops the satchel and respawns exactly as a death by
                 // claw does. The attacker's name comes off the species the
@@ -2617,6 +2913,12 @@ public final class WatchGame implements Animal.Surroundings {
         m.put("maps", cartography.toMap());
         m.put("sky", weather.toMap());
         m.put("boats", boats.toMap());
+        // The Eye Spy board, which is the one thing here that is a promise: a
+        // party that logs off with four bounties open should log back on to four
+        // bounties open, and to the day-per-walker limit remembering that it has
+        // already been spent. The tag round is deliberately not saved beside it —
+        // see Tag.
+        m.put("bounties", bounties.toMap());
         // Dropped satchels. The one thing on the floor of this world that is
         // not a function of the seed, and the one whose loss a player would
         // actually feel: reopening a walk to find the bag you died with gone is
@@ -2663,6 +2965,7 @@ public final class WatchGame implements Animal.Surroundings {
         cartography.load(WatchJson.map(m, "maps"));
         weather.load(WatchJson.map(m, "sky"));
         boats.load(WatchJson.map(m, "boats"));
+        bounties.load(WatchJson.map(m, "bounties"));
         spills.load(WatchJson.map(m, "spills"));
         lights.load(WatchJson.map(m, "lights"));
         lures.clear();
@@ -2707,6 +3010,10 @@ public final class WatchGame implements Animal.Surroundings {
             // same reason. A camp left lit a week ago is a cold hearth, not a
             // week-old fire.
             lights.burn(hours);
+            // A bounty nobody claimed while the walk was closed has still gone
+            // stale: a board reopened after a fortnight is a board with nothing
+            // on it, not one holding a fortnight of unanswered questions.
+            bounties.expire(System.currentTimeMillis());
         }
         lastRealMillis = System.currentTimeMillis();
     }

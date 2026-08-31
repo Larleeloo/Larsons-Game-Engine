@@ -991,8 +991,45 @@ public final class ItemModel {
                     // light that looks the same in a satchel as on a post.
                     1, 0, scale * 0.75);
             case "torch" -> LightModel.torch(mesh, x, y, z, yaw, 0, 0, scale * 0.42);
+            case com.larsons.engine.watch.Tag.GUN ->
+                    waterGun(mesh, x, y, z, scale, yaw, uv, colour);
             default -> trowel(mesh, x, y, z, scale, yaw, uv, colour);
         }
+    }
+
+    /**
+     * A water gun: a tank, a barrel out of the front of it, and a grip.
+     *
+     * <p>Built along the yaw rather than up the z, unlike every other tool here,
+     * because it is the one item whose <em>direction</em> is what a player reads:
+     * somebody across a clearing has to be able to tell which way it is pointed,
+     * and a shape drawn standing up says nothing about that.
+     */
+    private static void waterGun(Mesh.Builder mesh, double x, double y, double z,
+                                 double scale, double yaw, float[] uv, int colour) {
+        double fx = Math.sin(yaw), fy = -Math.cos(yaw);
+        WatchMaterials.uv(WatchMaterial.CLAY, uv);
+        // The tank, which is most of it.
+        Shapes.box(mesh, x - fx * 0.030 * scale, y - fy * 0.030 * scale,
+                z + 0.070 * scale, 0.040 * scale, 0.075 * scale, 0.032 * scale,
+                yaw, uv, colour);
+        // The water in it: a paler band along the top, so the thing reads as a
+        // vessel rather than a block.
+        Shapes.box(mesh, x - fx * 0.030 * scale, y - fy * 0.030 * scale,
+                z + 0.104 * scale, 0.030 * scale, 0.062 * scale, 0.010 * scale,
+                yaw, uv, lerp(colour, 0xE8F6FF, 0.7));
+        // The barrel, and a nozzle on the end of it.
+        Shapes.strut(mesh, x + fx * 0.050 * scale, y + fy * 0.050 * scale,
+                z + 0.072 * scale, x + fx * 0.146 * scale, y + fy * 0.146 * scale,
+                z + 0.072 * scale, 0.013 * scale, 0.013 * scale, uv,
+                shade(colour, 0.8));
+        Shapes.blob(mesh, x + fx * 0.152 * scale, y + fy * 0.152 * scale,
+                z + 0.072 * scale, 0.015 * scale, 0.015 * scale, 0.015 * scale,
+                uv, 0xF2C23A);
+        // The grip, under the back of the tank.
+        Shapes.box(mesh, x - fx * 0.052 * scale, y - fy * 0.052 * scale,
+                z + 0.026 * scale, 0.020 * scale, 0.016 * scale, 0.030 * scale,
+                yaw, uv, shade(colour, 0.7));
     }
 
     /** A rod: a tapered pole, a grip, and a line off the tip. */
@@ -1257,6 +1294,10 @@ public final class ItemModel {
         m.put("feeder", 0xA37C4C);
         m.put("journal", 0x6A4A34);
         m.put("spyglass", 0xB08A3C);
+        // The one thing in this wood that is not made of wood, bark or bone, and
+        // it is meant to look it: the tag round is a game inside the game, and a
+        // bright plastic toy is the honest picture of that.
+        m.put(com.larsons.engine.watch.Tag.GUN, 0x3AA8D8);
         // The lights. Their models build their own colours out of
         // LightKind.rgb(), so these are only what a satchel row's rarity dot
         // and any future flat draw would use — the colour of the object, not

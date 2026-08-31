@@ -4,7 +4,8 @@ import java.util.LinkedHashMap;
 import java.util.Map;
 
 /**
- * A shard of bone the wendigo has thrown at somebody.
+ * A shard of bone the wendigo has thrown at somebody — or a jet of water out of
+ * a water gun, which is the same problem with a different consequence.
  *
  * <h2>Why there is a projectile in a game about watching birds</h2>
  *
@@ -41,6 +42,21 @@ import java.util.Map;
  *
  * <p>It is not saved. A shard in the air when a walk closes is weather, exactly
  * as the animals are.
+ *
+ * <h2>The second thing that flies</h2>
+ *
+ * <p>A game of tag ({@code com.larsons.engine.watch.Tag}) tags at range, with a
+ * jet of water, and that is this class again rather than a second copy of it:
+ * a thing let go at a speed, in a direction, that arcs, that is checked against
+ * people every tick and dies on the ground. What differs is only what happens on
+ * a hit, and that is the world's business rather than the projectile's — see
+ * {@code WatchGame.flyHurls}, which reads {@link #species()} and either wounds
+ * somebody or makes them it.
+ *
+ * <p>The one thing the jet needs that a shard does not is {@link #owner()}: it
+ * leaves from half a metre in front of the person who fired it, which is well
+ * inside {@link #HIT_RADIUS} of their own chest, so without knowing whose it is
+ * every shot would tag the shooter on the tick they fired it.
  */
 public final class Hurl {
 
@@ -72,6 +88,15 @@ public final class Hurl {
     private final long id;
     private final String species;
     private final String target;
+
+    /**
+     * The walker who fired it, or {@code null} when something threw it.
+     *
+     * <p>Set by {@link #squirted} and by nothing else, and read for exactly one
+     * purpose: to be skipped when a flying thing is checked against the people
+     * it might have hit.
+     */
+    private String owner;
 
     private double x, y, z;
 
@@ -180,6 +205,29 @@ public final class Hurl {
                 ranged.damage());
     }
 
+    /**
+     * Fire one along a bearing, from a person rather than at one.
+     *
+     * <p>The other half of {@link #thrown}, and the difference is the whole
+     * point: a shard is <em>aimed</em>, so its launch angle is solved backwards
+     * from where its target is standing, and a jet is <em>pointed</em>, so it
+     * simply goes where the barrel goes. A player who misses has missed by
+     * aiming badly, which is what a water gun is for.
+     *
+     * @param by    who fired it — see {@link #owner()}
+     * @param yaw   the direction, in the engine's own convention
+     * @param pitch how far above the flat, in radians
+     * @param speed how fast it leaves the barrel, in metres a second
+     */
+    public static Hurl squirted(long id, String species, String by, double x, double y,
+                                double z, double yaw, double pitch, double speed) {
+        double cos = Math.cos(pitch);
+        Hurl jet = new Hurl(id, species, null, x, y, z, Math.sin(yaw) * cos * speed,
+                -Math.cos(yaw) * cos * speed, Math.sin(pitch) * speed, 0);
+        jet.owner = by;
+        return jet;
+    }
+
     /** Which shard this is. */
     public long id() { return id; }
 
@@ -188,6 +236,9 @@ public final class Hurl {
 
     /** Who it was thrown at, or {@code null} — unused today, kept for the log. */
     public String target() { return target; }
+
+    /** The walker who fired it, or {@code null} when something threw it. */
+    public String owner() { return owner; }
 
     public double x() { return x; }
 

@@ -146,6 +146,23 @@ public final class WatchView {
     private Shops shops = new Shops(0);
 
     /**
+     * Whether a game of tag is on, who is it, and what the party is being asked.
+     *
+     * <p>The one thing on this view that the screen reads back into how the local
+     * player <em>moves</em>: {@code WatchScene.walk} takes its speed multiplier
+     * off {@link Tag#speed} and refuses to move at all while
+     * {@link Tag#frozen(int)}. That is a rule the client follows rather than one
+     * it decides — the host enforces the freeze by refusing positions — but it
+     * has to be here, because a client that walked on and was silently pulled
+     * back twenty times a second would be a client that had lost control of its
+     * own feet.
+     */
+    private final Tag tag = new Tag();
+
+    /** What the party has put up for each other to find. */
+    private final Bounty bounties = new Bounty();
+
+    /**
      * The satchels lying where somebody died.
      *
      * <p>Beside the grove and the buildings rather than beside the litter,
@@ -235,6 +252,38 @@ public final class WatchView {
 
     /** Every satchel lying where somebody died. */
     public Spill spills() { return spills; }
+
+    /** Whether a game of tag is on, and who is it. */
+    public Tag tag() { return tag; }
+
+    /** The Eye Spy board. */
+    public Bounty bounties() { return bounties; }
+
+    /**
+     * The nearest other walker to a point, or {@code null} — <b>the compass
+     * needle, and the whole of it.</b>
+     *
+     * <p>Nothing about this travels and nothing needs to: every walker's position
+     * is already in every snapshot, so the machine that has to draw the needle is
+     * the machine that already knows where everybody is. A host that answered
+     * this question would be a host answering a question twenty times a second
+     * that its client can answer for free — and a needle that lagged a snapshot
+     * behind at a dead run is a needle pointing where somebody used to be.
+     */
+    public Walker nearestOther(int selfId, double x, double y) {
+        Walker best = null;
+        double bestDistance = Double.MAX_VALUE;
+        for (Walker walker : walkers) {
+            if (walker.id() == selfId) continue;
+            double dx = walker.x() - x, dy = walker.y() - y;
+            double d = dx * dx + dy * dy;
+            if (d < bestDistance) {
+                bestDistance = d;
+                best = walker;
+            }
+        }
+        return best;
+    }
 
     /** The last few things that happened. */
     public List<String> log() { return List.copyOf(log); }
@@ -344,6 +393,13 @@ public final class WatchView {
         structure.load(game.structure().toMap());
         cartography.load(game.maps().toMap());
         spills.load(game.spills().toMap());
+        // The two party games. Copied across on the same line of thinking as
+        // everything else here — the screen reads this and never the game — even
+        // though a solo walk can have neither a poll nor a round in it: the
+        // alternative is a scene that asks the local game one question and the
+        // view another, which is exactly the drift this class exists to prevent.
+        tag.load(game.tag().toMap());
+        bounties.load(game.bounties().toMap());
         takenLitter.clear();
         takenLitter.addAll(game.takenLitter());
     }

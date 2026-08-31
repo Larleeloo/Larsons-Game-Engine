@@ -594,6 +594,8 @@ party spread across the map costs what it should.
 | 1000+ animals | `AnimalRegistry` (asserted in tests) |
 | Pets | `AnimalDef.tameable`, `Animal.trust`, `FieldGuide.pets` |
 | Click to highlight for everyone | `WatchGame.spot` → `Spotlight` → `WatchProto.seen` |
+| Tag: a voted-for round, 1.3× speed, a 30 s freeze, a water gun, a compass to the nearest player | `watch/Tag`, `WatchGame.suggestTag`/`voteTag`/`squirt`, `Hurl.squirted`, `WatchView.nearestOther` — see §7k |
+| Eye Spy: a random 10–100 point bounty on an animal, once a day, for everybody but the poster | `watch/Bounty`, `WatchGame.postBounty`, `FieldGuide.reward` — see §7k |
 
 ---
 
@@ -2333,6 +2335,179 @@ carries no knowledge of the catalogue.
 
 ---
 
+## 7k. Two games inside the game: tag, and Eye Spy
+
+Two things a party can do to each other rather than to the wood. They are
+grouped here because they share a problem the rest of this game does not have:
+**every other verb in the Field Guide is something one person does, and both of
+these are things one person does *to everybody else*.** Picking a berry costs
+nobody anything. Starting a chase costs seven other people their afternoon.
+
+That is why one of them has a vote in front of it and the other has a limit of
+one a day. Neither restriction is about balance; both are about consent.
+
+### Tag (`watch/Tag`)
+
+A round has one person **it**, who moves at **1.3×**, **cannot move at all for
+the first thirty seconds** after becoming it, and carries a **water gun** that
+tags at range.
+
+**The vote.** Pressing <kbd>T</kbd> opens a poll rather than starting a game.
+It carries on a **strict majority of the party, not of the votes cast** — an
+abstention is a no. That distinction is the whole rule: without it, two people
+out of eight could start a chase while the other six were looking through
+spyglasses. The poll closes early the moment its answer can no longer change
+(everybody has answered, or enough have said yes, or enough have not), so a
+party that is paying attention never waits out the half minute.
+
+**The same key ends it.** <kbd>T</kbd> during a round suggests calling it off,
+on identical terms. One verb, one mechanism, and no way for whoever is losing to
+stop the game on their own. The round **keeps running while the party is being
+asked** — a poll that paused it would hand whoever is it their freeze back — so
+a round and a poll are two booleans on `Tag` rather than one state.
+
+**Whoever asked is it.** Not a dice roll: it is what stops "let's play tag"
+being a way of making somebody else run around for half an hour.
+
+**The freeze is a refusal, not a request.** A client is the authority on where
+it is standing, so the host cannot move somebody by writing a position into a
+snapshot — the next `move` would put them back. What it *can* do is decline to
+take one, and that is exactly what `WatchGame.move` does for thirty seconds:
+
+```java
+if (tag.frozen(id)) {
+    player.moveTo(player.x(), player.y(), player.z(), yaw, pitch, crouching, dt);
+    return;
+}
+```
+
+Their head still turns. Being frozen is standing still and counting, not being
+switched off, and watching everybody scatter is most of what those thirty
+seconds are for.
+
+The screen obeys the same rule from the other side (`WatchScene.walk` zeroes the
+input while `Tag.speed` is nothing), and that is not the rule said twice: without
+it a player would walk away from their own body and be silently pulled back
+twenty times a second, which reads as the game having broken rather than as a
+count of thirty.
+
+**The water gun is a `Hurl`.** The one other thing in this world that flies is a
+wendigo's bone shard, and a jet of water is the same problem — a thing let go at
+a speed, in a direction, that arcs, that is checked against people every tick and
+dies on the ground. So it is that class again rather than a second copy of it,
+and the only difference is what happens on arrival: `flyHurls` reads the species
+key and either wounds somebody or makes them it. A **contact** tag was never an
+option: positions are only as synchronised as the last snapshot, so walking into
+somebody would be a tag that landed on one screen and missed on another.
+
+The one rule a jet needs that a shard does not is `Hurl.owner()`. It leaves half
+a metre in front of the shooter's chest, which is well inside `HIT_RADIUS` of it
+— without knowing whose it is, **every shot would tag the person who fired it on
+the tick they fired it.**
+
+The gun is a real item in a real satchel (`Forage`, `ItemModel`) so the hands
+hold it and the party can see who has it, but whether a shot is allowed is asked
+of the *round*, never of the bag: a gun dropped by dying must not be a way to
+keep tagging people.
+
+**The compass is not in this class, deliberately.** Every walker's position is
+already in every snapshot, so the needle that points at the nearest one is
+something each screen works out for itself (`WatchView.nearestOther`,
+`WatchScene.drawQuarry`) — drawn on the compass strip, because it is a bearing
+and that strip is where this game keeps bearings. A host answering it would be
+answering a question twenty times a second that its client can answer for free,
+and a needle a snapshot behind at a dead run points where somebody used to be.
+It is shown **only to whoever is it**: given to everybody it would end every
+round in about forty seconds, as the field simply spread out along the vectors
+they were shown.
+
+**It is weather.** Nothing about a round is saved. A poll that was open when
+somebody closed the game is not a poll anybody is still thinking about, and a
+walk reopened three days later with one player unable to move for half a minute
+is a bug however faithfully it restores what was happening.
+
+### Eye Spy (`watch/Bounty`)
+
+One walker names an animal; the **world** prices it at somewhere between ten and
+a hundred points; anybody but the person who asked can claim it by spotting one.
+
+**The host rolls the number.** A reward somebody sets themselves is a reward they
+set to a hundred every time, and a board of hundreds is a board with no news on
+it. Only the species travels — `WatchProto.bounty` carries no price, because a
+client that sent one would be a client awarding itself a hundred points a day.
+
+**One a day, per walker,** on the real calendar (`Bounty.dayOf`), which is the
+only clock this game has ever used. The point of the limit is that a bounty is a
+thing you thought about.
+
+**Whoever asked cannot answer**, which is the one rule the whole board rests on
+and is a single `continue` in `Bounty.claim`. The points go into the **shared**
+ledger, like every other point in this game — there is one book, one page and one
+purse — and the finder's name goes on the posting rather than on the money.
+`FieldGuide.reward` exists for this and only this: a claim cannot go through
+`credit`, which is about a species and refuses anything already on the open page,
+and a bounty on a wren you have logged forty times is still a bounty.
+
+**A sighting is a sighting**, so both places one is written ask the board: a
+spot, and a landed fish. Somebody who puts a hundred points on something that can
+only be caught has asked for a fishing trip, which is a perfectly good thing to
+ask for.
+
+**The shortlist is a convenience, not a rule.** Thirteen hundred species is not a
+menu, so the screen offers a dozen: the biome underfoot, with the ones already in
+the book first, and never one the board is already carrying. Both ends compute it
+from the registry, the shared book and where you are standing — three things a
+client already has — so nothing about the list travels and the host validates
+only what it has to: the species exists, the walker has not posted today, and the
+board has no open bounty on it already. A bounty on something nobody has ever
+seen is a perfectly good bounty and is arguably the best kind.
+
+**It is kept**, unlike the tag round beside it, because a bounty is a promise: a
+party that logs off with four open should log back on to four open, and to the
+day limit remembering that it has been spent. They expire after twenty-four real
+hours, so a board is a list of things worth doing this week rather than an
+archive of every animal anybody ever wondered about.
+
+### What travels
+
+The **round** rides the snapshot, beside the shards and for their reason: a
+freeze counting down and a poll running out change every tick, and a client told
+only "a round started" would be running both clocks itself — which is two clocks
+disagreeing about whether somebody may move yet. The field is left out entirely
+while nothing is happening, which is every snapshot of nearly every walk, and it
+is *replaced* rather than merged for `FieldGuide`'s tally's reason: a round that
+has ended is an absence.
+
+The **board** rides the five-second world sync with the grove and the buildings,
+because it changes a handful of times a day rather than a handful of times a
+second. What makes that bearable is `Bounty.version`: three things change the
+board and they arrive by three different routes — a posting is a request, a claim
+rides inside a sighting that already has a message of its own, and an expiry
+happens on a tick with nothing behind it at all — so `WatchServer` watches one
+counter instead of three verbs, exactly as `announceDeaths` watches the respawn
+counter. `announceTag` does the same for the water gun changing hands, which
+moves two satchels on a channel that otherwise only fires when a request has been
+answered.
+
+### The keys
+
+| Key | What |
+|---|---|
+| <kbd>T</kbd> | Suggest a game · suggest calling one off · vote yes |
+| <kbd>U</kbd> | Vote no |
+| <kbd>Q</kbd> | Water gun (only while it, and only once thawed) |
+| <kbd>J</kbd> | The Eye Spy board |
+
+<kbd>T</kbd> does three things because they are one intention with a state
+attached, in the same way <kbd>N</kbd> lights and douses one lamp. Both vote keys
+are read **above the panel branch**, so a poll can be answered from the satchel
+screen — a poll is open for half a minute and an abstention is a no, and somebody
+who happened to be reading a recipe should not be voted against by their own
+inventory. The card is drawn over the panels for the same reason, beside the
+damage flash.
+
+---
+
 ## 8. Tests
 
 `src/test/java/com/larsons/engine/watch/`
@@ -2438,6 +2613,41 @@ carries no knowledge of the catalogue.
   about any of this, drawing exactly what it drew before.
 * `WatchSceneTest` — the mini game is on the launch strip, the scenes register,
   the lobby's menu offers what it should.
+* `TagTest` — the four rules of §7k, in order. **The party decides**: a walk for
+  one cannot have a round at all, suggesting it counts as wanting it, two votes
+  out of four do not carry and three do, and a poll closes the moment its answer
+  can no longer change rather than waiting out its clock. **The freeze is
+  enforced, not requested**: a walker who has just become it sends a position
+  forty metres away and the world keeps the one they were tagged at, their head
+  still turns while it does, and both of those stop the moment the count runs
+  out — after which they are measurably 1.3× and everybody else is not. **The
+  water gun tags**: it is refused to everybody but whoever is it and to whoever is
+  it while they are still counting, it will not fire twice without reloading, a
+  jet fired at nobody cannot tag the person who fired it (which is the bug
+  `Hurl.owner` exists for), and one that lands makes its target it, freezes them
+  from the top, moves the gun into their satchel and credits the tag. **It is
+  weather**: a save carries no round and no poll, and a client that stops being
+  told about one forgets it rather than leaving somebody frozen for the rest of
+  the walk. Then the same thing twice more from outside: two real clients on a
+  socket voting themselves into a round and watching the gun appear in one
+  satchel, and the walk itself — a scene, no window — holding a frozen walker
+  still while <kbd>W</kbd> is held down, letting them run once the count is over,
+  and answering a poll with <kbd>U</kbd> from a screen.
+* `BountyTest` — the four rules of Eye Spy. **The world prices it**: five hundred
+  rolls are inside the band, and genuinely vary, which is the one of the three
+  that a fixed price list would also satisfy. **One a day**: the second posting of
+  a day is refused with a reason a player can act on, another walker's allowance
+  is their own, and tomorrow comes round. **Whoever asked cannot answer**: the
+  poster spotting their own quarry takes nothing and leaves it up for somebody who
+  can have it, and the next walker to see one is paid — through the real
+  simulation, with the animal summoned rather than waited for, because a test
+  that walked about hoping the right species turned up would fail by seed. **It is
+  kept**: the board and the day limit both survive a save and the wire, an id from
+  a loaded board is never reissued, and an unclaimed bounty comes down after a
+  day. Plus what a screen offers — the shortlist is short, is the biome's own,
+  puts what is in the book first, and never offers something the board is already
+  carrying. Then the board through the walk: <kbd>J</kbd> opens it, Enter pins up
+  what the cursor is on, and the species that goes up is the one that was shown.
 * `WeatherTest` — it changes, it never changes into what is already up, a
   desert does not snow and a tundra does, the transition is gradual, and it
   round-trips through a snapshot.

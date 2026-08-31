@@ -220,6 +220,24 @@ public final class FieldGuide {
         earned += points;
     }
 
+    /**
+     * Points that came from somewhere other than a sighting.
+     *
+     * <p>Today that is exactly one thing — a claimed {@link Bounty} — and it
+     * cannot go through {@link #credit}, which is about a species and refuses
+     * anything already on the open page. A bounty on a wren you have logged forty
+     * times is still a bounty, and paying it must neither be blocked by the tally
+     * nor put the wren on it.
+     *
+     * <p>It goes into the <b>shared</b> balance, like every other point in this
+     * game. There is one book, one page and one purse; the finder's name goes on
+     * the posting rather than on the money. See {@link Bounty} on why that is the
+     * right answer rather than a shortcut.
+     */
+    public void reward(int points) {
+        if (points > 0) earned += points;
+    }
+
     /** Whether a species is in the book — ever, on any page. */
     public boolean seen(String species) { return first.containsKey(species); }
 
