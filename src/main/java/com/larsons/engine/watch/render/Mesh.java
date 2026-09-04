@@ -38,6 +38,12 @@ public final class Mesh {
     private final double originX, originY, originZ;
     private final boolean translucent;
     private final boolean casts;
+
+    /**
+     * The extent, as the seam wants it — built once here rather than per frame,
+     * because {@link #toDraw} is called every frame and this never changes.
+     */
+    private final com.larsons.engine.graphics.MeshPass.Bounds bounds;
     private final float minX, minY, minZ, maxX, maxY, maxZ;
     private final int revision;
     private final double sortBias;
@@ -55,6 +61,10 @@ public final class Mesh {
         this.revision = b.revision;
         this.sortBias = b.sortBias;
         this.casts = b.casts;
+        this.bounds = vertexCount == 0
+                ? com.larsons.engine.graphics.MeshPass.Bounds.NOTHING
+                : new com.larsons.engine.graphics.MeshPass.Bounds(minX, minY, minZ,
+                        maxX, maxY, maxZ);
     }
 
     /** A mesh with nothing in it, at an origin. Never uploaded, never drawn. */
@@ -165,7 +175,8 @@ public final class Mesh {
      */
     public com.larsons.engine.graphics.MeshPass.Draw toDraw(long key) {
         return new com.larsons.engine.graphics.MeshPass.Draw(key, revision, vertices,
-                colours, vertexCount, originX, originY, originZ, translucent, casts);
+                colours, vertexCount, originX, originY, originZ, translucent, casts,
+                bounds);
     }
 
     /**

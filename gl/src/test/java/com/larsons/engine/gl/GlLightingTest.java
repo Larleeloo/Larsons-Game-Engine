@@ -295,6 +295,65 @@ class GlLightingTest {
         }
     }
 
+    /**
+     * <b>A lamp lights across the join between two meshes.</b>
+     *
+     * <p>Which lamps reach which mesh is decided per mesh on the CPU, because
+     * a fragment shader that walks a list walks all of it and a camp was
+     * costing the whole screen. The way that goes wrong is not a crash: it is a
+     * lamp that stops at a chunk boundary, leaving a straight edge of darkness
+     * across ground the player is walking over — a seam that moves with them
+     * and reads as "the lighting is broken".
+     *
+     * <p>So: two pieces of ground meeting at a line, a lamp standing over one
+     * of them and reaching well into the other, and the pool of light sampled
+     * either side of the join. It has to cross.
+     */
+    @Test
+    void aLampLightsAcrossTheJoinBetweenTwoMeshes() {
+        EyeCamera eye = new EyeCamera(WIDTH, HEIGHT);
+        eye.place(0, 14, 15);
+        eye.look(0, -0.85);
+
+        // The lamp stands over the western half and reaches nine metres into
+        // the eastern one, so the eastern mesh is lit by a lamp that is not
+        // standing on it — which is exactly the case a box test gets wrong if
+        // it is written as "is the lamp inside this mesh".
+        List<MeshPass.Light> lamp = List.of(
+                MeshPass.Light.of(-3, 0, 2.0, 0xFFC46A, 12, 1.2));
+        int[] pixels = render(eye, scattering(0), lamp, halves());
+        assumeTrue(pixels != null, "no offscreen surface to draw into");
+
+        int west = luma(pixels, eye, -0.8, 0);
+        int east = luma(pixels, eye, 0.8, 0);
+        assertTrue(Math.abs(west - east) <= 8,
+                "the light stops at the join: " + west + "/255 on one side of it "
+                        + "and " + east + " on the other");
+
+        // …and it really is lit rather than uniformly dark, or the assertion
+        // above would pass on a frame with no lamp in it at all.
+        int far = luma(pixels, eye, 17, 0);
+        assertTrue(east - far > 18,
+                "the eastern half is no brighter under the lamp than it is "
+                        + "seventeen metres away, so nothing was lit");
+    }
+
+    /**
+     * Two pieces of ground meeting along {@code x = 0}, as two separate meshes
+     * with separate origins — which is what makes them cull separately.
+     */
+    private static List<MeshPass.Draw> halves() {
+        return List.of(halfGround(-10, 1), halfGround(10, 2));
+    }
+
+    private static MeshPass.Draw halfGround(double originX, long key) {
+        Mesh.Builder mesh = Mesh.builder(originX, 0, 0, false, 1);
+        float[] uv = new float[4];
+        WatchMaterials.uv(WatchMaterial.GRASS, uv);
+        mesh.quad(-10, -10, 0, 10, -10, 0, 10, 10, 0, -10, 10, 0, uv, 0xFF9AA88A);
+        return mesh.build().toDraw(key);
+    }
+
     /** One frame into a bound surface, read back. */
     private static int[] frame(GlSurface surface, GlMeshPass pass,
                                List<MeshPass.Draw> draws, EyeCamera eye) {
@@ -354,6 +413,14 @@ class GlLightingTest {
      */
     private int[] render(EyeCamera eye, MeshPass.Sky sky, List<MeshPass.Light> lights,
                          boolean canopy) {
+        List<MeshPass.Draw> scene = canopy
+                ? List.of(ground().toDraw(1), canopy().toDraw(2))
+                : List.of(ground().toDraw(1));
+        return render(eye, sky, lights, scene);
+    }
+
+    private int[] render(EyeCamera eye, MeshPass.Sky sky, List<MeshPass.Light> lights,
+                         List<MeshPass.Draw> scene) {
         GlSurface surface = new GlSurface(0);
         GlMeshPass pass = new GlMeshPass(() -> null);
         try {
@@ -363,10 +430,6 @@ class GlLightingTest {
             glClearColor(0, 0, 0, 1);
             glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
 
-            List<MeshPass.Draw> draws = new ArrayList<>();
-            draws.add(ground().toDraw(1));
-            if (canopy) draws.add(canopy().toDraw(2));
-
             pass.setTexture(WatchMaterials.atlas(), WatchMaterials.revision());
             // Half daylight, so a shadow has somewhere to go and the sun has
             // somewhere to come from.
@@ -375,7 +438,7 @@ class GlLightingTest {
             // Fog pushed out past the far corner of the clearing: this is a
             // test about light, and haze over it would only add a term both
             // frames share.
-            pass.draw(draws, eye, 0x000000, 400, 800);
+            pass.draw(scene, eye, 0x000000, 400, 800);
             return surface.readPixels();
         } catch (RuntimeException e) {
             return null;

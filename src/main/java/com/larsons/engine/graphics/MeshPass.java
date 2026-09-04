@@ -55,15 +55,58 @@ public interface MeshPass {
      *                    submission — a field of grass blades is a quarter of a
      *                    frame's triangles and its shadows are smaller than a
      *                    texel of any map that would hold them
+     * @param bounds      how far the vertices reach from the origin. <b>The
+     *                    caller has this for nothing</b> — a mesher tracks it
+     *                    as it appends — and a backend cannot recover it
+     *                    without walking every vertex, so before this was here
+     *                    every backend-side cull had to guess an extent and be
+     *                    generous by it. What it buys is exact: which lamps can
+     *                    touch this mesh, and whether it can cast into the
+     *                    sun's box at all
      */
     record Draw(long key, int revision, float[] vertices, int[] colours, int vertexCount,
                 double originX, double originY, double originZ, boolean translucent,
-                boolean casts) {
+                boolean casts, Bounds bounds) {
 
         /** Triangles in this mesh. */
         public int triangleCount() { return vertexCount / 3; }
 
         public boolean isEmpty() { return vertexCount == 0; }
+    }
+
+    /**
+     * A mesh's extent, relative to its own origin.
+     *
+     * <p>Its own type rather than six more components on {@link Draw} because
+     * a mesh's extent does not change when anything else about the draw does:
+     * a mesher builds one of these once and hands the same instance to every
+     * frame's draw, so this costs no allocation per frame and reads as the one
+     * thing it is.
+     */
+    record Bounds(float minX, float minY, float minZ,
+                  float maxX, float maxY, float maxZ) {
+
+        /** Nothing at all, at the origin — what an empty mesh reports. */
+        public static final Bounds NOTHING = new Bounds(0, 0, 0, 0, 0, 0);
+
+        public double centreX() { return (minX + maxX) * 0.5; }
+
+        public double centreY() { return (minY + maxY) * 0.5; }
+
+        public double centreZ() { return (minZ + maxZ) * 0.5; }
+
+        /**
+         * The radius of a sphere around the whole box, from its centre.
+         *
+         * <p>What the cheap tests want: a sphere is one subtraction and one
+         * comparison against anything, where a box is six, and every cull in
+         * this engine is conservative anyway.
+         */
+        public double radius() {
+            double dx = (maxX - minX) * 0.5, dy = (maxY - minY) * 0.5;
+            double dz = (maxZ - minZ) * 0.5;
+            return Math.sqrt(dx * dx + dy * dy + dz * dz);
+        }
     }
 
     /**

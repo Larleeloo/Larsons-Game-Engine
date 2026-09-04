@@ -2667,6 +2667,67 @@ instructions. The guard that did help was on the exponential in the
 in-scattering term, which is now skipped entirely when there is no fog to
 scatter through.
 
+### …and then the lamps
+
+The shadow pass was not the only thing costing a frame. A lamp cost **a little
+over two milliseconds a frame at 720p, whatever it was doing**, because a
+fragment shader that walks a list walks all of it: a campfire reaches twelve
+metres, the view reaches two hundred and sixty, and every fragment on the
+screen was working out that every lamp in the world was too far away to matter.
+A camp at night was the one place left where the frame rate fell over.
+
+Measured on the same fixed scene, as the cost of the lamps over the same frame
+with none:
+
+| lamps | before | after |
+|---|---|---|
+| 4, standing in the camp | +9.8 ms | **+6.2 ms** |
+| 8 | +18.4 ms | **+12.1 ms** |
+| 16 | +38.5 ms | **+20.9 ms** |
+| 16, camp forty-five metres off | +50.6 ms | **+18.3 ms** |
+
+Four changes:
+
+1. **Opaque meshes are drawn near to far.** They arrived in whatever order the
+   caller built them in, because a depth test makes opaque geometry
+   order-independent — but "the answer does not depend on the order" is not
+   "the work does not". Drawn far first, a hillside is shaded in full, with
+   every lamp and the shadow lookup and the fog, and then covered by the tree
+   in front of it. Drawn near first, the depth buffer already holds the tree
+   and the hillside is rejected before it is shaded. In a wood, which is
+   nothing but things in front of other things, that is most of the fragments
+   in the frame — and it makes everything cheaper, not only the lamps.
+2. **Lamps are culled per mesh** (`graphics/LightCull`), which is what the
+   painter has always done and the card never did. This needed
+   `MeshPass.Draw` to start carrying the mesh's extent: the mesher has it for
+   nothing and the backend cannot recover it, so before this every cull on the
+   backend side had to guess an extent and be generous by it.
+3. **The cull asks two questions, because a lamp affects a mesh two ways.** It
+   lights the *surface*, which depends only on how far it is from the mesh; and
+   it lights the *air in front of it*, which depends on how far it is from the
+   view rays — a lantern at your feet does nothing to a hillside a hundred
+   metres off and a great deal to the mist between you and it. So the shader
+   takes two counts over one array, surface-lit lamps first, and runs two loops.
+4. **The air term is rationed to eight lamps**, ranked by how much lit air each
+   can put in front of the camera. It is the one term no geometry test can
+   bound: when you are standing *inside* a lamp, which is what standing at your
+   own campfire means, every ray in the frame really does begin in its glow.
+   What is dropped is the ninth-brightest glow in a pool of eight brighter ones,
+   and only on meshes the lamp is not otherwise touching — a lamp always lights
+   the air where it actually stands. Every one of them still lights the ground.
+
+The arithmetic in the loop was rewritten around reciprocals — `1/radius` comes
+up from the CPU, `inversesqrt` replaces a square root and three divides, and
+the in-scattering integral is done in units of the lamp's own radius so there
+is nothing left to divide by. That is a strict reduction in instructions and
+worth a good deal on a card, where a divide is several times a multiply; it
+measured as nothing at all on the software rasteriser used here, which is why
+it is reported as reasoning rather than as a number.
+
+**A four-lamp camp is pixel-identical before and after**, which is the check
+that matters for the culling: a cull that is too tight is a seam of darkness
+along a chunk boundary, moving with the player.
+
 ### Lamps light the air
 
 "Broad rays across the landscape" is not the pool on the ground; it is the
@@ -2840,6 +2901,16 @@ and the same camp, drawn once with a sun in it and once without.
   the camera creeps forward — with the unsnapped matrix as a control, because a
   test that passes on a matrix that never snapped anything is not measuring the
   shimmer.
+  `LightCullTest` guards the cull that keeps a camp affordable, and guards it
+  the way a conservative test has to be guarded — not "does it say yes to the
+  cases somebody thought of" but **"does it ever say no when the answer is
+  yes"**, over a few thousand random arrangements: every lamp that lights a
+  mesh must also light the air in front of it (the GL backend's two lists are
+  built on that containment), and for every arrangement the cull rejects, forty
+  rays are walked through the mesh's ball in thirty-two steps looking for one
+  that runs through the lamp anyway. Plus the two cases that skip straight to
+  yes — standing inside a lamp, standing inside the mesh — and the ranking the
+  air budget spends itself by.
   `gl/…/GlLightingTest` then draws it, on a driver: the sky's uniforms survive
   the link, a whole sky uploads cleanly, **a canopy puts a shadow on the ground
   under it** — against the same frame with the strength turned down, which is
@@ -2848,7 +2919,11 @@ and the same camp, drawn once with a sun in it and once without.
   that catches acne. And that **the air carries a lantern's light**: a patch of
   ground eleven metres from a lamp that reaches six, so its surface term is
   exactly zero, gets brighter when the scattering is turned up, because the view
-  ray passes within half a metre of the flame.
+  ray passes within half a metre of the flame. And that **a lamp lights across
+  the join between two meshes** — two pieces of ground meeting at a line with a
+  lamp standing over one and reaching into the other, sampled either side of
+  the join, because the way per-mesh culling goes wrong is not a crash but a
+  straight edge of darkness across ground the player is walking over.
 * `WatchSceneTest` — the mini game is on the launch strip, the scenes register,
   the lobby's menu offers what it should.
 * `TagTest` — the four rules of §7k, in order. **The party decides**: a walk for

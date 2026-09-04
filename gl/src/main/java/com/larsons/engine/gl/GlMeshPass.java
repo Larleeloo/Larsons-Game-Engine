@@ -1,6 +1,7 @@
 package com.larsons.engine.gl;
 
 import com.larsons.engine.graphics.EyeCamera;
+import com.larsons.engine.graphics.LightCull;
 import com.larsons.engine.graphics.Mat4;
 import com.larsons.engine.graphics.MeshPass;
 import org.lwjgl.system.MemoryUtil;
@@ -164,6 +165,39 @@ final class GlMeshPass implements MeshPass {
 
     /** Whether the last frame actually redrew the map; for the debug readout. */
     private boolean shadowsDrawn;
+
+    /**
+     * How many of a frame's lamps are allowed to light the <em>air</em>.
+     *
+     * <p><b>The one term in the whole shader whose cost a cull cannot bound.</b>
+     * A lamp lights the surface of the few meshes near it and nothing else, so
+     * {@link LightCull#touchesBox} throws nearly all of that away — but a lamp
+     * lights the air along every view ray that passes near it, and when you are
+     * standing <em>inside</em> one, which is what standing at your own campfire
+     * means, that is every ray in the frame. Measured at a little under two
+     * milliseconds per lamp per frame at 720p, and no geometry test can remove
+     * it, because the light really is there.
+     *
+     * <p>So it is rationed instead, by the same measure {@code LightField} uses
+     * when it caps a frame at sixteen: how much lit air each lamp can put in
+     * front of the camera. Six is a fire and five lanterns, which is a large
+     * camp; what is dropped beyond that is the seventh-brightest glow in a pool
+     * of six brighter ones, and the pop as one swaps for another is a few
+     * percent of a soft gradient. Every one of them still lights the ground.
+     */
+    private static final int MAX_AIR_LIGHTS = 8;
+
+    /**
+     * Scratch for {@link #chooseLights}: which of the frame's lamps this mesh
+     * wants, the ones lighting its surface first.
+     */
+    private final int[] lightOrder = new int[MAX_LIGHTS];
+    private int surfaceLights, airLights;
+    private long lightSubset;
+
+    /** Which lamps are in the frame's air budget; see {@link #MAX_AIR_LIGHTS}. */
+    private final boolean[] litsAir = new boolean[MAX_LIGHTS];
+    private final double[] airScores = new double[MAX_LIGHTS];
 
     /**
      * Whether anything in the atlas is see-through enough to be discarded.
@@ -373,6 +407,21 @@ final class GlMeshPass implements MeshPass {
         // the same trade the block path makes at the arena.
         translucent.sort(Comparator.comparingDouble(
                 (Draw d) -> -distanceSquared(d, eye)));
+        // <b>And near to far for the opaque half — not for correctness, for
+        // cost.</b> A depth test makes opaque geometry order-independent, which
+        // is why this list arrived in whatever order the caller built it in;
+        // but "the answer does not depend on the order" is not "the work does
+        // not". Drawn far first, a hillside is shaded in full and then covered
+        // by the tree in front of it, and everything that shader did — the
+        // hemisphere, the shadow lookup, every lamp in the frame, the fog — is
+        // thrown away. Drawn near first, the depth buffer already holds the
+        // tree and the hillside behind it is rejected before it is shaded at
+        // all.
+        //
+        // In a wood, which is nothing but things in front of other things, that
+        // is most of the fragments in the frame. One sort of a few hundred
+        // entries buys it.
+        opaque.sort(Comparator.comparingDouble((Draw d) -> distanceSquared(d, eye)));
 
         // Everything the card can actually draw this frame, resolved before
         // either pass touches it. Opaque first so that when the upload budget
@@ -443,6 +492,7 @@ final class GlMeshPass implements MeshPass {
         // world. `use` has just reset these to neutral, so a caller that never
         // calls setLighting draws exactly what it drew before this existed.
         program.setLighting(lights, eye, dayR, dayG, dayB);
+        rationAir(eye);
         // …and the sun, the weather and the grade, likewise once. The shadow
         // term switches itself off when there is no map to read: see
         // GlTerrainProgram.setSky.
@@ -562,9 +612,76 @@ final class GlMeshPass implements MeshPass {
         return dx * dx + dy * dy + dz * dz;
     }
 
+    /**
+     * Which of the frame's lamps are allowed to light the air this frame.
+     *
+     * <p>A selection sort over at most sixteen entries, once a frame — the list
+     * is tiny and the alternative is sorting an index array, which allocates.
+     * See {@link #MAX_AIR_LIGHTS} for why there is a budget at all and
+     * {@link LightCull#airScore} for what it is spent on.
+     */
+    private void rationAir(EyeCamera eye) {
+        int count = lights.size();
+        for (int i = 0; i < count; i++) {
+            airScores[i] = LightCull.airScore(lights.get(i), eye.x(), eye.y(), eye.z());
+            litsAir[i] = false;
+        }
+        for (int taken = 0; taken < Math.min(MAX_AIR_LIGHTS, count); taken++) {
+            int best = -1;
+            for (int i = 0; i < count; i++) {
+                if (!litsAir[i] && (best < 0 || airScores[i] > airScores[best])) best = i;
+            }
+            if (best < 0) break;
+            litsAir[best] = true;
+        }
+    }
+
+    /**
+     * Which of the frame's lamps can touch this mesh, and how.
+     *
+     * <p>Two lists in one array, the surface-lit lamps first — see
+     * {@link LightCull} for why the two questions have different answers and
+     * {@code GlTerrainProgram}'s two loops for what is done with the split. The
+     * subset is also summarised as a bitmask so that the long runs of meshes
+     * wanting the same lamps, which is most of a frame and usually means none
+     * at all, cost one uniform upload between them.
+     */
+    private void chooseLights(Draw draw, EyeCamera eye) {
+        surfaceLights = 0;
+        airLights = 0;
+        lightSubset = 0;
+        if (lights.isEmpty()) return;
+        Bounds bounds = draw.bounds();
+        double centreX = draw.originX() + bounds.centreX();
+        double centreY = draw.originY() + bounds.centreY();
+        double centreZ = draw.originZ() + bounds.centreZ();
+        double radius = bounds.radius();
+
+        long surfaceMask = 0, airMask = 0;
+        // Two passes so that the surface-lit ones land first without a sort.
+        for (int i = 0; i < lights.size(); i++) {
+            if (LightCull.touchesBox(lights.get(i), centreX, centreY, centreZ, radius)) {
+                lightOrder[surfaceLights++] = i;
+                surfaceMask |= 1L << i;
+            }
+        }
+        airLights = surfaceLights;
+        for (int i = 0; i < lights.size(); i++) {
+            if ((surfaceMask & (1L << i)) != 0) continue;
+            if (litsAir[i] && LightCull.touchesWedge(lights.get(i),
+                    eye.x(), eye.y(), eye.z(), centreX, centreY, centreZ, radius)) {
+                lightOrder[airLights++] = i;
+                airMask |= 1L << i;
+            }
+        }
+        lightSubset = (surfaceMask << 32) | airMask;
+    }
+
     /** Set the matrices for one prepared mesh and issue it. */
     private void issue(Ready row, Mat4 projection, EyeCamera eye) {
         Draw draw = row.draw;
+        chooseLights(draw, eye);
+        program.setMeshLights(lightOrder, surfaceLights, airLights, lightSubset);
 
         // Vertices reach the card measured from the mesh's own origin, and the
         // origin reaches it measured from the eye, in double: a world with no
