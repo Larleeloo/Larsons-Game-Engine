@@ -186,6 +186,150 @@ class GpuTerrainTest {
         eye.look(Math.atan2(dx, -dy), Math.atan2(dz, Math.hypot(dx, dy)));
     }
 
+    // --- the camera a third time, from the sun --------------------------------------
+
+    /** Where the sun is, for the shadow tests: high, and off to one side. */
+    private static final double[] SUN = unit(0.30, 0.22, 0.93);
+
+    /** How far shadows reach, and how deep the box that holds their casters is. */
+    private static final double SHADOW_REACH = 100, SHADOW_DEPTH = 420;
+
+    /** A shadow map's edge, in texels. */
+    private static final int SHADOW_TEXELS = 2048;
+
+    /**
+     * <b>The sun's box holds the ground in front of the camera, and orders it
+     * by how near the sun it is.</b>
+     *
+     * <p>{@link Mat4#sunlight} is where every silent way a shadow map can fail
+     * is decided, and the loudest of them is a sign. Aim the box along
+     * {@code +sun} rather than {@code −sun} and the depth test comes out
+     * inverted: the ground shadows the canopy, which on a hillside at a
+     * distance looks like nothing much and is completely wrong. There is no
+     * context here to draw with, and there does not need to be — the whole
+     * question is arithmetic.
+     */
+    @Test
+    void theSunsBoxHoldsTheGroundInFrontOfTheCameraAndOrdersItByDepth() {
+        // A long way from the origin on purpose: a world this size does not fit
+        // in a float, and the subtraction that makes it fit is this method's.
+        double ex = 18_400.5, ey = -9_120.25, ez = 62;
+        double cx = ex, cy = ey - 55, cz = ez;
+        Mat4 sun = Mat4.sunlight(SUN[0], SUN[1], SUN[2], cx, cy, cz, ex, ey, ez,
+                SHADOW_REACH, SHADOW_DEPTH, SHADOW_TEXELS);
+
+        double[] middle = clip(sun, cx - ex, cy - ey, cz - ez);
+        assertTrue(Math.abs(middle[0]) < 0.05 && Math.abs(middle[1]) < 0.05,
+                "the middle of the box did not land in the middle of the map: "
+                        + middle[0] + ", " + middle[1]);
+        assertTrue(Math.abs(middle[2]) < 0.05,
+                "the middle of the box is not halfway through its depth, so half "
+                        + "of what casts is behind the near plane: " + middle[2]);
+
+        // A tree at the far edge of the reach is still on the map; one well
+        // outside it is not, which is what the shader's rim fade is for.
+        double[] edge = clip(sun, -SHADOW_REACH * 0.8, -55, 0);
+        assertTrue(Math.abs(edge[0]) < 1 && Math.abs(edge[1]) < 1,
+                "ground eighty metres to the side fell off the shadow map");
+        double[] beyond = clip(sun, -SHADOW_REACH * 3, -55, 0);
+        assertTrue(Math.abs(beyond[0]) > 1 || Math.abs(beyond[1]) > 1,
+                "ground three hundred metres away is somehow on a hundred-metre map");
+
+        // The canopy over that ground is inside the box too — a depth range that
+        // clipped it would be a wood whose trees cast nothing.
+        double[] canopy = clip(sun, 0, -55, 40);
+        assertTrue(canopy[2] > -1 && canopy[2] < 1,
+                "a tree forty metres up is outside the sun's depth range: " + canopy[2]);
+
+        // …and it is *nearer* the sun than the ground under it. This is the sign.
+        double[] ground = clip(sun, 0, -55, 0);
+        assertTrue(canopy[2] < ground[2],
+                "the sun sees the ground before the tree above it, so every shadow "
+                        + "in the world is inside out");
+    }
+
+    /**
+     * <b>The box moves in whole texels, so the shadows do not crawl.</b>
+     *
+     * <p>The one thing about a shadow map that is worse than not having one. A
+     * map is a grid; a grid whose origin slides with the player re-decides
+     * which texel every leaf edge falls in on every frame, and the whole wood
+     * sparkles. {@link Mat4#sunlight} quantises the box's centre to whole
+     * texels to prevent it — and has to do that quantising against the
+     * <em>world</em>, not against the camera, because the camera is the thing
+     * that is moving.
+     *
+     * <p>So: slide the camera twenty centimetres in one-centimetre steps, with
+     * the box centred on it as a real renderer centres it, and watch where one
+     * fixed tree lands on the map. Snapped, every step moves it by a whole
+     * number of texels — nearly always none. Unsnapped, which is exactly what a
+     * snap applied to the wrong quantity gives, it creeps a tenth of a texel at
+     * a time, and that creep is the shimmer.
+     */
+    @Test
+    void theSunsBoxMovesInWholeTexelsSoTheShadowsDoNotCrawl() {
+        double[] snapped = whereATreeLands(SHADOW_TEXELS);
+        double worstFraction = 0;
+        boolean everHeldStill = false;
+        for (int i = 1; i < snapped.length; i++) {
+            double moved = Math.abs(snapped[i] - snapped[i - 1]);
+            worstFraction = Math.max(worstFraction, Math.abs(moved - Math.rint(moved)));
+            if (moved < 0.02) everHeldStill = true;
+        }
+        assertTrue(worstFraction < 0.02,
+                "the shadow map slid by " + worstFraction + " of a texel between two "
+                        + "frames a centimetre apart, which is the crawl this snapping "
+                        + "exists to prevent");
+        assertTrue(everHeldStill,
+                "a centimetre of walking moved the map every single frame, so it is "
+                        + "not being snapped at all");
+
+        // The control. Without the snap the same walk creeps by a fraction of a
+        // texel per frame — if it did not, this test would pass on a matrix
+        // that never snapped anything.
+        double[] free = whereATreeLands(0);
+        double creep = Math.abs(free[1] - free[0]);
+        assertTrue(creep > 0.02 && creep < 0.5,
+                "an unsnapped map is meant to creep by a fraction of a texel and "
+                        + "moved by " + creep + " instead; this test is not measuring "
+                        + "what it thinks it is");
+    }
+
+    /**
+     * Where one fixed tree lands on the shadow map, in texels, as the camera
+     * creeps twenty centimetres forward.
+     *
+     * @param texels the map's resolution, or {@code 0} for no snapping at all
+     */
+    private static double[] whereATreeLands(int texels) {
+        double treeX = 12_040, treeY = -8_990, treeZ = 14;
+        double[] at = new double[21];
+        for (int step = 0; step < at.length; step++) {
+            double ex = 12_000 + step * 0.01, ey = -9_000, ez = 8;
+            Mat4 sun = Mat4.sunlight(SUN[0], SUN[1], SUN[2],
+                    ex, ey - 55, ez, ex, ey, ez,
+                    SHADOW_REACH, SHADOW_DEPTH, texels);
+            // Normalised device coordinates span the map's whole width, so one
+            // texel is two divided by its resolution.
+            at[step] = clip(sun, treeX - ex, treeY - ey, treeZ - ez)[0]
+                    * (SHADOW_TEXELS / 2.0);
+        }
+        return at;
+    }
+
+    /** A point, through a matrix, into normalised device coordinates. */
+    private static double[] clip(Mat4 m, double x, double y, double z) {
+        double[] out = new double[4];
+        m.transform(x, y, z, out);
+        double w = out[3] == 0 ? 1 : out[3];
+        return new double[] {out[0] / w, out[1] / w, out[2] / w};
+    }
+
+    private static double[] unit(double x, double y, double z) {
+        double length = Math.sqrt(x * x + y * y + z * z);
+        return new double[] {x / length, y / length, z / length};
+    }
+
     /** Depth comes out inside the buffer's range, and grows with distance. */
     @Test
     void depthIsMonotonicAndInsideTheBuffer() {

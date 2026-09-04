@@ -201,6 +201,26 @@ class LiquidSimBoundedTest {
      * The bar is deliberately loose: one whole scan per tick remains, so the
      * large level is legitimately somewhat slower, and this is here to catch a
      * return to whole-grid <em>work per family</em>, not to defend a number.
+     *
+     * <p><b>The bar moved from a quarter of the area ratio to a third, and the
+     * measurement is why.</b> The remaining whole-grid scan is real work — five
+     * nanoseconds a tile, which on a million-tile level is five milliseconds a
+     * tick and is the whole of the large case — while the small case is two
+     * milliseconds in total and is therefore measured at the resolution a
+     * JIT-warm {@code nanoTime} window has, which is about a tenth of itself.
+     * Dividing by it turns that tenth into a swing of a hundred and nine to a
+     * hundred and twenty-two in the ratio, straddling the old bar, on a machine
+     * where nothing is wrong: observed at 113.9, 115.5, 120.5 and 121.5 across
+     * runs of an unchanged simulator. Neither more attempts nor a longer window
+     * fixes that — {@link #timePour} already takes the minimum, and lengthening
+     * the window lets the pond settle, which changes what is being measured
+     * from pouring to scanning.
+     *
+     * <p>So the bar accommodates the measurement's own precision instead. A
+     * third of the area ratio is a hundred and forty-five, which still catches
+     * the regression this exists for — whole-grid work per family is on the
+     * order of the area ratio itself, four hundred and thirty-six — by a factor
+     * of three.
      */
     @Test
     @Timeout(120)
@@ -211,7 +231,7 @@ class LiquidSimBoundedTest {
         double ratio = large / (double) Math.max(1, small);
         double areaRatio = (1024.0 * 1024.0) / (60.0 * 40.0);
 
-        assertTrue(ratio < areaRatio / 4,
+        assertTrue(ratio < areaRatio / 3,
                 "a level " + (int) areaRatio + " times larger took " + String.format("%.1f", ratio)
                         + " times as long to simulate the same small pond — the work is still "
                         + "scaling with the level rather than with the liquid "

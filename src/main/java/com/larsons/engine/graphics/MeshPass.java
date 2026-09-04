@@ -144,6 +144,97 @@ public interface MeshPass {
     default void setLighting(List<Light> lights, float dayR, float dayG, float dayB) { }
 
     /**
+     * <b>The air and the sun</b> — everything about a frame's light that is not
+     * a lamp.
+     *
+     * <p>{@link #setLighting} carries the two things a picture cannot be drawn
+     * without: how bright the hour is, and what is burning. This carries the
+     * things that make it look like somewhere. They are separate calls because
+     * they are separately optional: a backend that implements neither draws
+     * what it always drew, and a backend that implements only the first gets a
+     * correct, flat world at the right time of day.
+     *
+     * <p><b>Every field is a description of the world rather than an
+     * instruction to a shader.</b> "The sun is over there and this colour",
+     * not "multiply by 0.7" — because the two backends have wildly different
+     * budgets and the one with a graphics card should be allowed to spend it.
+     * The painter answers this with a flat multiplier it already had; the card
+     * answers it with a per-fragment hemisphere, a shadow map and lit air. Both
+     * are drawing the same described world.
+     *
+     * @param sunX      the direction the sun is <em>in</em>, as a unit vector in
+     *                  world coordinates; its {@code z} is negative when the
+     *                  sun is down
+     * @param sunR      the sun's own colour, already scaled by how much of it
+     *                  there is — {@code 0,0,0} at night and under a storm
+     * @param skyR      what a surface facing straight up receives from the sky,
+     *                  as a multiplier around {@code 1}
+     * @param groundR   …and what one facing straight down receives back off the
+     *                  ground. The pair is a two-colour ambient: it costs one
+     *                  {@code mix} and it is the difference between a low-poly
+     *                  world that reads as carved and one that reads as flat
+     * @param shadow    how much of the sun a shadowed surface loses, {@code 0}
+     *                  to {@code 1}. A backend with nowhere to put a shadow map
+     *                  ignores it; {@code 0} means "do not spend the pass"
+     * @param haze      weather's own thickness, as extinction per metre, on top
+     *                  of whatever {@link #draw}'s fog range already does. This
+     *                  is the number that makes fog <em>weather</em> rather
+     *                  than a shorter view distance
+     * @param hazeFloor the world height the ground fog pools at — mist sits in
+     *                  the valleys and a ridge stands out of it, which is the
+     *                  whole of why fog is worth having in a world with hills
+     * @param hazeDepth how many metres above {@code hazeFloor} that mist takes
+     *                  to thin out
+     * @param scatter   how much of a lamp's light the air itself carries back
+     *                  to the eye. Zero is a vacuum, where a campfire lights
+     *                  only what it touches; anything above it is the broad
+     *                  cone of glow you actually see round a fire at night
+     * @param vibrance  one knob for the grade: {@code 0} leaves the colour
+     *                  exactly as it was computed, and upwards of that lifts
+     *                  saturation and rolls the highlights off so a lamp's own
+     *                  pool keeps its colour instead of clipping to white
+     * @param seconds   the drawing clock, for anything that drifts
+     */
+    record Sky(double sunX, double sunY, double sunZ,
+               float sunR, float sunG, float sunB,
+               float skyR, float skyG, float skyB,
+               float groundR, float groundG, float groundB,
+               float shadow, float haze, double hazeFloor, float hazeDepth,
+               float scatter, float vibrance, float seconds) {
+
+        /**
+         * No sun, no weather, no grade — <b>the world exactly as it was drawn
+         * before any of this existed.</b>
+         *
+         * <p>Load-bearing rather than a convenience: a backend shares one
+         * shader between this path and the voxel world, whose shading is baked
+         * into its vertex colours and must not be touched. Everything here is
+         * therefore the identity of its own term, and a caller that never
+         * mentions the sky gets it.
+         */
+        public static final Sky PLAIN = new Sky(0, 0, 1, 0, 0, 0, 1, 1, 1, 1, 1, 1,
+                0, 0, 0, 1, 0, 0, 0);
+
+        /** Whether there is any sun to cast anything. */
+        public boolean sunUp() {
+            return sunZ > 0 && (sunR > 0 || sunG > 0 || sunB > 0);
+        }
+
+        /** Whether a shadow map would earn its pass this frame. */
+        public boolean castsShadows() {
+            return shadow > 0.01f && sunUp();
+        }
+    }
+
+    /**
+     * Describe the sky the next {@link #draw} happens under.
+     *
+     * <p>Does nothing by default, which is what keeps it optional — see
+     * {@link Sky#PLAIN} for what a caller that never calls this gets.
+     */
+    default void setSky(Sky sky) { }
+
+    /**
      * Hand over the texture every mesh samples.
      *
      * <p>Cheap to call with an unchanged image: implementations compare

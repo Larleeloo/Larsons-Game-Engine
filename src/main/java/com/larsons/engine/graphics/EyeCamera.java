@@ -335,7 +335,20 @@ public final class EyeCamera {
      * allocation would cost more than the arithmetic.
      */
     public void toEye(double wx, double wy, double wz, double[] out) {
-        double dx = wx - x, dy = wy - y, dz = wz - z;
+        toEyeDirection(wx - x, wy - y, wz - z, out);
+    }
+
+    /**
+     * A world <em>direction</em> in the eye's own frame — the same rotation
+     * {@link #toEye} applies, without moving the origin.
+     *
+     * <p>What a shader needs for anything that has a bearing but no position:
+     * which way the sun is, and which way is up. Subtracting the camera from
+     * those would turn a unit vector into a point tens of thousands of metres
+     * away and light the world from whichever corner of it the player happened
+     * to be standing in.
+     */
+    public void toEyeDirection(double dx, double dy, double dz, double[] out) {
         // Yaw, on the ground plane: the eye turns about the world's vertical.
         double right = dx * cosYaw + dy * sinYaw;
         double forward = dx * sinYaw - dy * cosYaw;

@@ -47,6 +47,7 @@ import com.larsons.engine.watch.life.Mutants;
 import com.larsons.engine.watch.light.LightField;
 import com.larsons.engine.watch.light.LightKind;
 import com.larsons.engine.watch.light.PlacedLight;
+import com.larsons.engine.watch.light.SkyLight;
 import com.larsons.engine.watch.net.WatchSession;
 import com.larsons.engine.watch.render.AnimalPortrait;
 import com.larsons.engine.watch.render.BoardImage;
@@ -3249,6 +3250,7 @@ public class WatchScene extends AbstractScene {
         lights.gather(view(), eye.x(), eye.y(), eye.z(), drawClock);
         renderer.setLights(lights.lights());
         applyVisibility(weather);
+        applyAtmosphere(weather);
         if (frame == 2) applyDistanceSettings();
 
         // <b>The moving meshes go first, and the order is not cosmetic.</b>
@@ -3341,6 +3343,32 @@ public class WatchScene extends AbstractScene {
         // has to meet the sky in the same colour. See WatchRenderer.sky.
         double start = Math.min(end * 0.92, reach * 0.45 * scale * lens);
         renderer.setFogRange(start, end);
+    }
+
+    /**
+     * The sun and the air this frame is standing in.
+     *
+     * <p>Everything here is already on screen somewhere: the weather decides
+     * how far you can see, and it decides in exactly the same breath how thick
+     * the air between you and the treeline looks and whether there is a sun
+     * behind it. {@code Weather.visibility} is the one number both are taken
+     * from, because it is the one the weather already interpolates across a
+     * change — deriving the haze from anything else would give a world whose
+     * fog thickened smoothly and whose sun switched off.
+     *
+     * <p>Only the GL backend does anything with this; see
+     * {@link WatchRenderer#setAtmosphere}.
+     */
+    private void applyAtmosphere(Weather weather) {
+        double visibility = submerged
+                ? Math.min(weather.visibility(), UNDERWATER_VISIBILITY)
+                : weather.visibility();
+        double haze = Math.max(0, 1 - visibility);
+        renderer.setAtmosphere(haze, SkyLight.overcastFrom(visibility), submerged,
+                // Where the mist lies: the ground under the player's own feet,
+                // which is the only height in view this scene actually knows
+                // without asking the streamer for a hillside it has not meshed.
+                streamer.groundAt(px, py), drawClock);
     }
 
     /** A biome colour, pushed toward the weather's own grey. */
@@ -4371,6 +4399,19 @@ public class WatchScene extends AbstractScene {
                 + " lit · "
                 + view.lights().burning() + "/" + view.lights().size() + " placed · "
                 + (lamp == null ? "hands empty" : "carrying " + lamp.displayName()));
+        // …and the sky the card is drawing under, which is otherwise invisible
+        // to everything but a screenshot. The shadow figure is the one to watch
+        // while tuning: it is what turns the second pass on, so a zero here
+        // with a sun in the frame is a wood that has quietly stopped costing
+        // anything and quietly stopped having shadows in it.
+        MeshPass.Sky sky = renderer.atmosphere();
+        lines.add("sky    sun " + Math.round(Math.toDegrees(Math.asin(
+                Math.max(-1, Math.min(1, sky.sunZ()))))) + "° · shadow "
+                + String.format(java.util.Locale.ROOT, "%.2f", sky.shadow())
+                + " · haze " + String.format(java.util.Locale.ROOT, "%.4f", sky.haze())
+                + "/m · air " + String.format(java.util.Locale.ROOT, "%.2f",
+                        sky.scatter())
+                + (renderer.acceleratedByGpu() ? "" : " (painter: none of it)"));
         // What is hunting, and what is lying on the ground because it caught
         // somebody. Both are rare enough that these two numbers are zero nearly
         // always, and are exactly what somebody testing the mutants wants when
@@ -4846,8 +4887,21 @@ public class WatchScene extends AbstractScene {
                 == Weather.Condition.FOG) {
             double fogAmount = condition == Weather.Condition.FOG
                     ? weather.blend() : 1 - weather.blend();
+            // A flat wash over the finished frame, and on the painter path it
+            // is the whole of the fog: that backend's haze is a distance fade
+            // and nothing else, so without this a fog bank ten metres away is
+            // as clear as a clear day.
+            //
+            // <b>On a card it is a quarter of that</b>, because the world
+            // underneath already has real fog in it — an exponential with a
+            // height to it, drifting, and lit by whatever lamps are standing in
+            // it. Laying an opaque grey rectangle over that would flatten the
+            // one thing it is for. What is left is the part a depth-aware fog
+            // genuinely cannot do, which is the haze on the inside of your own
+            // eye. See SkyLight.
+            double wash = renderer.acceleratedByGpu() ? 28 : 110;
             target.fillRect(0, 0, viewportWidth, viewportHeight,
-                    new Color(206, 212, 216, (int) (110 * fogAmount)));
+                    new Color(206, 212, 216, (int) (wash * fogAmount)));
         }
         if (!condition.precipitates()) return;
 

@@ -515,6 +515,7 @@ A new, narrow core interface:
 public interface MeshPass {
     void setTexture(BufferedImage atlas, int revision);
     void setLighting(List<Light> lights, float dayR, float dayG, float dayB);
+    void setSky(Sky sky);
     void draw(List<Mesh.Draw> draws, EyeCamera eye, int fogArgb,
               double fogStart, double fogEnd);
 }
@@ -522,16 +523,25 @@ public interface MeshPass {
 
 `setLighting` arrived with §7j and is the one thing here that is not baked into
 the geometry: the hour's own multiplier, and up to `MAX_LIGHTS` point lights in
-world coordinates. It has a do-nothing default, so a backend that ignores it —
-and `GlTerrainPass`, which shares the shader — draws exactly what it drew
-before.
+world coordinates. `setSky` arrived with §7l and is the rest of the environment
+— the sun, the two-colour ambient, the shadow strength, the weather's own haze
+and what the air does with a lamp. Both have do-nothing defaults, so a backend
+that ignores them — and `GlTerrainPass`, which shares the shader — draws exactly
+what it drew before.
+
+They are two calls rather than one because they are separately optional, and
+because they are different kinds of thing: the first is a multiplier, the second
+is a *description* of an environment that each backend answers as its budget
+allows. The painter answers it by ignoring it.
 
 `TerrainPass.meshPass()` returns one (default `null`). `GlMeshPass` uploads each
 mesh once into a VBO keyed by the mesh's identity and revision, re-uses it until
 the mesh changes, and draws with a depth test, back-face culling, alpha testing
 and the same fog curve as the CPU path — so the two look the same, which is what
-makes it possible to develop on either. The core never imports LWJGL;
-`ModuleBoundaryTest` and `verifyNoRuntimeDependencies` still hold.
+makes it possible to develop on either. Where there is a sun it also draws the
+opaque half a second time, from the sun, into `GlShadowMap`'s depth texture. The
+core never imports LWJGL; `ModuleBoundaryTest` and `verifyNoRuntimeDependencies`
+still hold.
 
 ### 5.4 Threads
 
@@ -2508,6 +2518,136 @@ damage flash.
 
 ---
 
+## 7l. The sky, and what a card is for
+
+> Asked for: vibrant shading and lighting on the GL backend — shadows under the
+> trees, lanterns and campfires casting broad rays across the landscape, fog in
+> weather that feels immersive.
+
+§7j gave the world lights it did not have and fixed the seam they arrive on. It
+left the *other* half of the light exactly where it found it: one per-channel
+multiplier, `WatchClock.lightTint`, applied to every colour in the world
+regardless of which way the surface faces.
+
+That is a complete lighting model for a renderer with no normals and no budget,
+and the painter is still that renderer. It is not a complete model for a machine
+with a graphics card sitting idle, and the symptom was not subtle — a wood at
+noon and the same wood under a storm differed by a brightness, a hillside facing
+the sun and one facing away were the same green, and a tree cast nothing at all.
+
+### The seam: a description, not a number
+
+`MeshPass.Sky` sits beside `MeshPass.setLighting` and carries **what it is like
+out** rather than what to multiply by: where the sun is and what colour, what a
+surface facing up gets from the sky and one facing down gets back off the
+ground, how much of the sun a shadow takes, how thick the air is and where the
+mist is lying in it, how much of a lamp that air carries back, and one knob of
+grade.
+
+The shape of that is the whole design. The two backends have wildly different
+budgets and the one with a card should be allowed to spend it, so the seam
+describes an environment and lets each answer as it can. `Sky.PLAIN` is the
+identity of every term in it, which is what lets **one shader draw both this
+world and the voxel one** — `GlTerrainPass` shares `GlTerrainProgram` and its
+shading is baked into vertex colours by `SectionMesher`, so every default has to
+be the value that makes its own term vanish. Equal ambients, so their mix is
+exactly one; no sun; no shadow; no weather; no grade.
+
+`SkyLight` (in `watch/light`, beside `LightField`) is where the hour becomes
+that description, and it is deliberately backend-neutral and headless: every
+number in it is chosen where a test can read it rather than in a shader where
+only a screenshot can.
+
+### Chosen against a mesh that is already shaded
+
+`TerrainMesher` bakes a fixed key light from the north-west into every vertex
+colour, with a generous ambient floor. That bake cannot move — it would mean
+re-meshing the world at sunrise — and it is not trying to: it is **form**, the
+shape of the ground, and it is what makes a ridge read as a ridge at a distance
+no dynamic light could afford to reach.
+
+So what is added is the **hour**, and the two do overlap: a north face is
+darkened twice at noon. The amplitudes are picked knowing that. The sun takes
+over half the light and the ambient gives up rather less than the sun adds, so a
+sunlit slope is *brighter* than it was under the flat multiplier while a shaded
+one is only a little darker. A physically careful model that conserved light
+exactly could only redistribute the brightness the world already had, and would
+have missed the point of being asked.
+
+### Trees cast shadows (`GlShadowMap`)
+
+Every other term is local — a fragment knows its own normal, its own distance
+and where the lamps are. A shadow is the one question a fragment cannot answer
+about itself, because the answer is about the branch four metres above it. There
+is no trick: either the frame is drawn twice or the wood has no shadows in it.
+
+A 2048² depth map, from the sun, over a hundred metres of world round the
+camera. Four things about it are load-bearing:
+
+* **Snapped to whole texels** (`Mat4.sunlight`), and against the *world* rather
+  than against the camera — quantising a centre that is already measured from a
+  camera that moves quantises the wrong quantity, and the grid slides anyway.
+  An unsnapped map crawls as the player walks and looks worse than no shadows.
+* **Alpha-tested against the same atlas**, so a canopy throws dapple rather than
+  the shadow of its own bounding box, and no cull, because half of what casts is
+  a single-sided leaf sheet that one winding or the other would delete.
+* **A slope-scaled bias**, because the error grows with how obliquely the sun
+  strikes and a flat bias large enough for a grazing hillside detaches every
+  shadow in the frame from the thing casting it.
+* **Faded at the rim, and skipped when nothing would see it** — at night, under
+  a storm, under water, and for every mesh outside the box. One uniform switches
+  the lookup off and the frame is the frame it was before the pass existed.
+
+The pass forced one structural change: buffers are now resolved **before** either
+pass runs. Uploads are bounded per frame, and doing them inside the first pass
+would let the shadow map hold a mesh the main pass had to skip — a tree casting a
+shadow it is not standing in.
+
+`-Dlarsons.render.gl.shadowmap=N` sets the edge in texels, `0` skips it.
+
+### Lamps light the air
+
+"Broad rays across the landscape" is not the pool on the ground; it is the
+**space above the pool**. The point-light loop already knows where every lamp is
+relative to the fragment, and for one more dot product it can have where the
+lamp sits relative to the *view ray* and how much of that ray lies inside the
+lamp's reach. That chord is the in-scattered light, and it is what makes a
+campfire light a clearing rather than a disc of grass.
+
+Two corrections, and without either one a fire in fog is a wall of white: the
+falloff is averaged along the chord rather than taken at its peak, and the light
+is attenuated by the same air that is carrying it. Leaving out the second was
+the one error that could not be tolerated, because thick fog is exactly when the
+term is largest.
+
+### Fog with a height to it
+
+Linear-in-distance haze was doing the whole job, and it is a shorter draw
+distance rather than weather. What is there now is that curve — squared, which
+also **fixed a real mismatch**, since the painter had been squaring it and the
+shader had not — plus an exponential whose density falls off above a floor.
+Mist lies in the hollows, a ridge stands out of it, the bank drifts, and it is
+bright toward the sun and dim away from it, which is most of why standing in fog
+at dawn feels like anything. There is mist at dawn whatever the forecast says:
+it is the hour the game is best in and the hour the weather table already
+weights fog toward.
+
+The 2D grey wash `drawWeatherOverlay` lays over the finished frame is **a
+quarter of its old strength on a card**, because it is now sitting on top of fog
+that is actually there. On the painter it is unchanged, and it is still the
+whole of that backend's fog.
+
+### What stayed the same
+
+Both paths agree on the hour, on the fog's colour and range, and on every lamp.
+They differ in how richly the same described world is drawn, and that is the
+only divergence: a directional term on the painter would cost a normal for every
+triangle in the frame rather than only the ones near a flame, on the thread that
+is also running the game. A player switching backends sees the same time of day
+and the same camp, drawn once with a sun in it and once without.
+
+---
+
 ## 8. Tests
 
 `src/test/java/com/larsons/engine/watch/`
@@ -2611,6 +2751,42 @@ damage flash.
   written past the array, and binding the program leaves the block neutral —
   which is what keeps `GlTerrainPass`, which shares the shader and knows nothing
   about any of this, drawing exactly what it drew before.
+* `SkyLightTest` — §7l's numbers, headless, because every one of them is a
+  question about the picture that can be asked as arithmetic. **The sun** rises
+  in the east, sets in the west, is high but never overhead (it tracks the
+  southern sky, which is why a north slope is in shade all day), and is warmer
+  on the horizon than at noon. **Midnight has a moon and no shadows** — a
+  directional term you can read the ground's shape by, and no second pass over
+  every mesh in view for a term a hundredth of the frame wide. **Cloud takes the
+  sun and the shadows with it**, off the same number the fog range comes from,
+  because the weather is always halfway through changing. **The hemisphere**:
+  what faces up gets more than what faces down, each in its own colour, and the
+  underside of things is a bounce rather than a hole. **The hour is not counted
+  twice** — it reaches the card by `setLighting` and the ambients here are
+  multipliers around one at every hour, which is the invariant that stops this
+  becoming a second, competing clock. **The air**: clear weather is clear, fog
+  is thick, mist follows the ground it was given up the hill, there is always
+  something lying in the valley at dawn, a lamp glows most through night air and
+  fog, and the grade backs off exactly as far as the weather comes on. And
+  finally that `Sky.PLAIN` is the identity of every term it names, which is the
+  promise the shared shader rests on, and that no hour of any forecast — a black
+  sky at midnight under water included — produces a NaN.
+  `GpuTerrainTest` holds the matrix half: the sun's box holds the ground in
+  front of the camera, orders it so a tree is nearer the sun than the ground
+  under it (the sign that decides whether shadows are inside out), keeps a
+  forty-metre canopy inside its depth range, and **moves in whole texels** as
+  the camera creeps forward — with the unsnapped matrix as a control, because a
+  test that passes on a matrix that never snapped anything is not measuring the
+  shimmer.
+  `gl/…/GlLightingTest` then draws it, on a driver: the sky's uniforms survive
+  the link, a whole sky uploads cleanly, **a canopy puts a shadow on the ground
+  under it** — against the same frame with the strength turned down, which is
+  also the frame a machine with no depth framebuffer sees — and open ground five
+  metres clear of that canopy comes back *unchanged*, which is the assertion
+  that catches acne. And that **the air carries a lantern's light**: a patch of
+  ground eleven metres from a lamp that reaches six, so its surface term is
+  exactly zero, gets brighter when the scattering is turned up, because the view
+  ray passes within half a metre of the flame.
 * `WatchSceneTest` — the mini game is on the launch strip, the scenes register,
   the lobby's menu offers what it should.
 * `TagTest` — the four rules of §7k, in order. **The party decides**: a walk for
