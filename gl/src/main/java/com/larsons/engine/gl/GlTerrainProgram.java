@@ -206,8 +206,9 @@ final class GlTerrainProgram implements AutoCloseable {
             uniform float uAlphaCut;  // discard below this; 0 in the blended pass
 
             uniform vec3 uDaylight;   // the hour, as a per-channel multiplier
-            uniform int uLightCount;
-            uniform vec4 uLightPos[MAX_LIGHTS];    // xyz eye-space, w = radius
+            uniform int uLightCount;  // lamps that light this mesh's surface …
+            uniform int uAirCount;    // … and those, plus the ones lighting the air
+            uniform vec4 uLightPos[MAX_LIGHTS];    // xyz eye-space, w = 1 / radius
             uniform vec4 uLightColour[MAX_LIGHTS]; // rgb, a = intensity
 
             uniform vec3 uSunDir;     // eye space, unit, pointing at the sun
@@ -298,6 +299,57 @@ final class GlTerrainProgram implements AutoCloseable {
                 return uHaze * through * mass * drift;
             }
 
+            /**
+             * What one lamp puts into the air between the eye and this
+             * fragment.
+             *
+             * <p>The eye is the origin of this frame, so the nearest the ray
+             * passes to the lamp is one dot product, and how much of the ray
+             * lies inside the lamp's sphere is the chord at that distance,
+             * clipped to the part in front of the fragment. That is the glow
+             * round a fire.
+             *
+             * <p><b>All of it in units of the lamp's own radius</b>, which is
+             * what removes the divides: the chord, the span and the falloff are
+             * all ratios to it, so scaling every length by 1/radius up front
+             * leaves nothing to divide by later.
+             */
+            vec3 scattered(int i, vec3 ray, float viewLen, float invView, float mass) {
+                if (uScatter <= 0.0) return vec3(0.0);
+                vec3 at = uLightPos[i].xyz;
+                float invR = uLightPos[i].w;
+                float along = clamp(dot(at, ray), 0.0, viewLen);
+                vec3 offset = at - ray * along;
+                float missSq = dot(offset, offset) * invR * invR;
+                float reach = max(0.0, 1.0 - sqrt(missSq));
+                float chord = sqrt(max(0.0, 1.0 - missSq));
+                float a = along * invR;
+                float span = max(0.0, min(viewLen * invR, a + chord)
+                        - max(0.0, a - chord));
+                // Two corrections, and without either of them a fire in fog is
+                // a wall of white.
+                //
+                // CHORD, because `reach` is the falloff where the ray passes
+                // closest and the rest of the chord is further out than that;
+                // taking the peak over the whole length roughly doubles the
+                // answer.
+                //
+                // And the transmittance, because this light also has to get
+                // back to the eye through the same air that is carrying it.
+                // Left out, thick fog would scatter light to the camera from
+                // any distance for free — which is the one direction the error
+                // cannot be tolerated in, since thick fog is exactly when the
+                // term is largest. The exponential only when there is air to
+                // speak of: `mass` is the same for every lamp on this fragment,
+                // so the branch is coherent, and in clear weather it takes
+                // sixteen exponentials a fragment down to none.
+                float back = mass > 0.002
+                        ? exp(-mass * clamp(along * invView, 0.0, 1.0))
+                        : 1.0;
+                return uLightColour[i].rgb * (uLightColour[i].a * reach * reach
+                        * span * CHORD * uScatter * back);
+            }
+
             void main() {
                 // The face's own normal, out of the screen-space gradient of the
                 // eye-space position. This world is flat shaded, so the plane a
@@ -323,8 +375,13 @@ final class GlTerrainProgram implements AutoCloseable {
                 vec4 colour = texture(uAtlas, vUV) * vColor;
                 if (colour.a < uAlphaCut) discard;
 
-                float viewLen = length(vEye);
-                vec3 ray = vEye / max(viewLen, 0.0001);
+                // One reciprocal square root for all three of these. A divide
+                // is several times the cost of a multiply on most cards and
+                // this loop is about to do a great many of them.
+                float eye2 = max(dot(vEye, vEye), 1e-8);
+                float invView = inversesqrt(eye2);
+                float viewLen = eye2 * invView;
+                vec3 ray = vEye * invView;
                 // How much air the view ray came through, once, for both the
                 // fog and the lamps that are shining into it.
                 float mass = airMass(viewLen);
@@ -347,64 +404,39 @@ final class GlTerrainProgram implements AutoCloseable {
                     light += uSunColour * (ndl * (1.0 - uShadow * shadowed(ndl)));
                 }
 
+                // <b>Two loops over one array, and the split is a cull.</b>
+                // The lamps that light this mesh's surface come first and are
+                // the ones near it; after them come the lamps that light only
+                // the air in front of it — a lantern at your feet does nothing
+                // to a hillside a hundred metres off and a great deal to the
+                // mist between you and it. Everything past uAirCount is
+                // somewhere else in the world entirely and is never read.
+                // See LightCull, which decides both on the CPU.
                 vec3 air = vec3(0.0);
                 for (int i = 0; i < uLightCount; i++) {
                     vec3 at = uLightPos[i].xyz;
-                    float radius = max(uLightPos[i].w, 0.0001);
+                    // The *reciprocal* of the radius, worked out once on the
+                    // CPU. Every use of a radius in here is either a division
+                    // by it or a comparison against it, and this loop runs
+                    // sixteen times for every fragment on the screen.
+                    float invR = uLightPos[i].w;
                     vec3 to = at - vEye;
-                    float away = length(to);
+                    float d2 = max(dot(to, to), 1e-8);
+                    float invD = inversesqrt(d2);
+                    float away = d2 * invD;
                     // Compact falloff: a light is either inside a fragment's
                     // reckoning or costs it nothing. Squared, so the pool under
                     // a lantern has an edge that reads as light rather than as a
                     // circle drawn on the ground.
-                    float fall = max(0.0, 1.0 - away / radius);
+                    float fall = max(0.0, 1.0 - away * invR);
                     fall *= fall;
-                    float ndotl = max(0.0, dot(n, to / max(away, 0.0001)));
+                    float ndotl = max(0.0, dot(n, to * invD));
                     light += uLightColour[i].rgb * (uLightColour[i].a * fall
                             * (WRAP + (1.0 - WRAP) * ndotl));
-
-                    if (uScatter > 0.0) {
-                        // …and the air on the way here. The eye is the origin of
-                        // this frame, so the nearest the ray passes to the lamp
-                        // is one dot product, and how much of the ray lies
-                        // inside the lamp's sphere is the chord at that
-                        // distance, clipped to the part in front of the
-                        // fragment. That is the glow round a fire.
-                        float along = clamp(dot(at, ray), 0.0, viewLen);
-                        float miss = length(at - ray * along);
-                        float reach = max(0.0, 1.0 - miss / radius);
-                        float chord = sqrt(max(0.0, radius * radius - miss * miss));
-                        float span = max(0.0, min(viewLen, along + chord)
-                                - max(0.0, along - chord)) / radius;
-                        // Two corrections, and without either of them a fire in
-                        // fog is a wall of white.
-                        //
-                        // CHORD, because `reach` is the falloff where the ray
-                        // passes closest and the rest of the chord is further
-                        // out than that; taking the peak over the whole length
-                        // roughly doubles the answer.
-                        //
-                        // And the transmittance, because this light also has to
-                        // get back to the eye through the same air that is
-                        // carrying it. Left out, thick fog would scatter light
-                        // to the camera from any distance for free — which is
-                        // the one direction the error cannot be tolerated in,
-                        // since thick fog is exactly when the term is largest.
-                        // Scaled from the ray's own optical depth by how far
-                        // along it the light sits, which is a straight line
-                        // through a medium that is very nearly uniform over the
-                        // few metres a lamp reaches.
-                        // The exponential only when there is air to speak of.
-                        // `mass` is the same for every lamp on this fragment, so
-                        // this branch is coherent across a warp, and in clear
-                        // weather it takes sixteen exponentials a fragment down
-                        // to none.
-                        float back = mass > 0.002
-                                ? exp(-mass * clamp(along / max(viewLen, 0.0001), 0.0, 1.0))
-                                : 1.0;
-                        air += uLightColour[i].rgb * (uLightColour[i].a * reach * reach
-                                * span * CHORD * uScatter * back);
-                    }
+                    air += scattered(i, ray, viewLen, invView, mass);
+                }
+                for (int i = uLightCount; i < uAirCount; i++) {
+                    air += scattered(i, ray, viewLen, invView, mass);
                 }
                 colour.rgb *= light;
 
@@ -468,6 +500,7 @@ final class GlTerrainProgram implements AutoCloseable {
     private final int uAlphaCut;
     private final int uDaylight;
     private final int uLightCount;
+    private final int uAirCount;
     private final int uLightPos;
     private final int uLightColour;
     private final int uSunDir;
@@ -488,6 +521,26 @@ final class GlTerrainProgram implements AutoCloseable {
     /** Reused, so setting the lights on a frame allocates nothing. */
     private final float[] lightPos = new float[MAX_LIGHTS * 4];
     private final float[] lightColour = new float[MAX_LIGHTS * 4];
+
+    /**
+     * The frame's lamps in eye space, in the order the caller gave them.
+     *
+     * <p>Worked out once a frame and then <em>gathered</em> from, because the
+     * subset of lamps that matters is now decided per mesh: a frame of three
+     * hundred meshes would otherwise put the same sixteen lamps through the
+     * same camera transform three hundred times over.
+     */
+    private final float[] frameLightPos = new float[MAX_LIGHTS * 4];
+    private final float[] frameLightColour = new float[MAX_LIGHTS * 4];
+    private int frameLightCount;
+
+    /**
+     * Which subset was last uploaded, and how it was split.
+     *
+     * <p>Most meshes in a frame have the same answer — usually none at all —
+     * and a uniform upload that changes nothing is still a uniform upload.
+     */
+    private long uploadedSubset = Long.MIN_VALUE;
     private final double[] inEyeSpace = new double[3];
     private final float[] identity = identityMatrix();
 
@@ -504,6 +557,7 @@ final class GlTerrainProgram implements AutoCloseable {
         uAlphaCut = glGetUniformLocation(program, "uAlphaCut");
         uDaylight = glGetUniformLocation(program, "uDaylight");
         uLightCount = glGetUniformLocation(program, "uLightCount");
+        uAirCount = glGetUniformLocation(program, "uAirCount");
         // An array's location is the location of its first element, and that is
         // the spelling a driver answers to. `uLightPos` on its own returns −1 on
         // some of them, which is a silent no-op rather than an error.
@@ -536,7 +590,7 @@ final class GlTerrainProgram implements AutoCloseable {
      * dim" for an afternoon.
      */
     boolean lightingUniformsResolved() {
-        return uDaylight >= 0 && uLightCount >= 0 && uLightPos >= 0
+        return uDaylight >= 0 && uLightCount >= 0 && uAirCount >= 0 && uLightPos >= 0
                 && uLightColour >= 0;
     }
 
@@ -570,6 +624,7 @@ final class GlTerrainProgram implements AutoCloseable {
         // the frame this shader drew before there was one, to the bit.
         glUniform3f(uDaylight, 1f, 1f, 1f);
         glUniform1i(uLightCount, 0);
+        glUniform1i(uAirCount, 0);
         glUniform3f(uSunDir, 0f, 0f, 1f);
         glUniform3f(uSunColour, 0f, 0f, 0f);
         glUniform3f(uSkyTint, 1f, 1f, 1f);
@@ -603,25 +658,63 @@ final class GlTerrainProgram implements AutoCloseable {
     void setLighting(List<MeshPass.Light> lights, EyeCamera eye,
                      float dayR, float dayG, float dayB) {
         glUniform3f(uDaylight, dayR, dayG, dayB);
-        int count = lights == null ? 0 : Math.min(lights.size(), MAX_LIGHTS);
-        glUniform1i(uLightCount, count);
-        if (count == 0 || eye == null) return;
-        for (int i = 0; i < count; i++) {
+        frameLightCount = lights == null || eye == null
+                ? 0 : Math.min(lights.size(), MAX_LIGHTS);
+        for (int i = 0; i < frameLightCount; i++) {
             MeshPass.Light light = lights.get(i);
             eye.toEye(light.x(), light.y(), light.z(), inEyeSpace);
-            lightPos[i * 4] = (float) inEyeSpace[0];
-            lightPos[i * 4 + 1] = (float) inEyeSpace[1];
-            lightPos[i * 4 + 2] = (float) inEyeSpace[2];
-            lightPos[i * 4 + 3] = light.radius();
-            lightColour[i * 4] = light.r();
-            lightColour[i * 4 + 1] = light.g();
-            lightColour[i * 4 + 2] = light.b();
-            lightColour[i * 4 + 3] = light.intensity();
+            frameLightPos[i * 4] = (float) inEyeSpace[0];
+            frameLightPos[i * 4 + 1] = (float) inEyeSpace[1];
+            frameLightPos[i * 4 + 2] = (float) inEyeSpace[2];
+            // The reciprocal, not the radius: see the note in the shader. A
+            // divide done once here is sixteen divides per fragment saved
+            // there.
+            frameLightPos[i * 4 + 3] = 1f / Math.max(light.radius(), 1e-4f);
+            frameLightColour[i * 4] = light.r();
+            frameLightColour[i * 4 + 1] = light.g();
+            frameLightColour[i * 4 + 2] = light.b();
+            frameLightColour[i * 4 + 3] = light.intensity();
         }
-        // The whole array goes up rather than the used prefix, so this costs no
-        // allocation on a frame: sixty-four floats is nothing to upload, and
-        // the entries past uLightCount are never read because the shader's loop
-        // is bounded by it.
+        // Nothing lit until a mesh asks for something: which lamps reach which
+        // mesh is now decided per mesh, by setMeshLights.
+        uploadedSubset = Long.MIN_VALUE;
+        glUniform1i(uLightCount, 0);
+        glUniform1i(uAirCount, 0);
+    }
+
+    /**
+     * The lamps that matter to the mesh about to be drawn.
+     *
+     * <p><b>Per mesh rather than per frame, which is the whole of what makes a
+     * camp affordable.</b> A fragment shader walking a list walks all of it,
+     * and a lamp reaches twelve metres out of a view two hundred and sixty
+     * deep; sending every frame's lamps to every mesh meant the far hillside
+     * paying for the campfire behind you — a little over two milliseconds per
+     * lamp per frame at 720p, measured, whatever the lamp was doing. See
+     * {@link com.larsons.engine.graphics.LightCull} for how the two lists are
+     * chosen.
+     *
+     * @param order        indices into the frame's lamps, surface-lit first
+     * @param surfaceCount how many of them light this mesh's own surface
+     * @param airCount     how many entries of {@code order} are used at all
+     * @param subset       a value identifying this exact selection, so that a
+     *                     run of meshes wanting the same lamps — which is most
+     *                     of a frame, and usually means none — costs one upload
+     *                     between them rather than one each
+     */
+    void setMeshLights(int[] order, int surfaceCount, int airCount, long subset) {
+        if (subset == uploadedSubset) return;
+        uploadedSubset = subset;
+        glUniform1i(uLightCount, surfaceCount);
+        glUniform1i(uAirCount, airCount);
+        if (airCount == 0) return;
+        for (int slot = 0; slot < airCount; slot++) {
+            System.arraycopy(frameLightPos, order[slot] * 4, lightPos, slot * 4, 4);
+            System.arraycopy(frameLightColour, order[slot] * 4, lightColour, slot * 4, 4);
+        }
+        // The whole array goes up rather than the used prefix: sixty-four
+        // floats is nothing to upload, and the entries past uAirCount are never
+        // read because both of the shader's loops are bounded by it.
         glUniform4fv(uLightPos, lightPos);
         glUniform4fv(uLightColour, lightColour);
     }

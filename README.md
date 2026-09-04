@@ -3344,7 +3344,11 @@ spends real work on it:
   instead of clipping to white. It backs off exactly as far as the weather
   comes on, because a storm is meant to look like a storm.
 
-The pass is drawn **once and then kept**: a shadow map is a function of where
+Lamps are **culled per mesh** and drawn near-to-far, so a campfire costs the
+part of the screen it actually lights rather than all of it; the glow it puts
+in the air is rationed to the eight lamps that fill most of the view, since
+that is the one term standing inside a light makes global. The shadow pass is
+drawn **once and then kept**: a shadow map is a function of where
 its box is and what stands in it, and a player who is not walking has moved
 neither — so standing still costs it nothing at all, and walking costs about a
 fifth of what it did. `-Dlarsons.render.gl.shadowmap=N` sets the map's edge in
