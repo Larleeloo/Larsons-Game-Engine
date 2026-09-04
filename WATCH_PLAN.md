@@ -2605,6 +2605,68 @@ shadow it is not standing in.
 
 `-Dlarsons.render.gl.shadowmap=N` sets the edge in texels, `0` skips it.
 
+### …and then making it affordable
+
+The first version of the pass halved the frame rate, which is not a tax worth
+paying for shadows. Measured on one fixed scene — three hundred and nineteen
+thousand triangles, 1280×720 — against the same frame with the pass switched
+off:
+
+| | before | after |
+|---|---|---|
+| standing still | **+57 ms** | **+4 ms** |
+| walking | +57 ms | **+12 ms** |
+
+Six changes, in rough order of what they were worth:
+
+1. **The map is drawn once and then kept.** It is a pure function of where its
+   box is and what is standing in it. The box is snapped to whole texels
+   already — that is what stops the shadows crawling — so snapping it to
+   *sixteen* texels instead means it holds still for two and a half metres of
+   walking rather than sixteen centimetres, and a player who is not walking at
+   all is asking for the map that is already there. **The comparison is of the
+   box, not the matrix**: the matrix is expressed relative to the camera, so it
+   changes on every frame a player leans, while the box it describes has not
+   moved. And the sun is rounded to a fifth of a degree before the box is built
+   from it, because this clock is the wall clock and an exact comparison would
+   say "moved" on every frame for a sun that travels a fifteen-thousandth of a
+   degree per frame.
+2. **The box no longer follows the view.** Pushing it half its reach down the
+   view axis is the textbook arrangement and is wrong here: turning to follow a
+   bird would drag it across the wood and rebuild it, and turning to follow a
+   bird is the game. It costs the far half of the forward reach, which the rim
+   fade was taking anyway.
+3. **The depth pass lost its fragment shader.** A shader that can `discard`
+   makes a fragment's depth unknowable until it has run, so a card cannot use
+   early-depth rejection — which is the whole reason a depth-only pass is
+   cheaper than a shaded one. The alpha test was there for cutout leaves, and
+   this game has none: `WatchMaterials` paints every opaque material at full
+   alpha. `GlMeshPass` now looks at the atlas as it uploads it and picks the
+   empty shader when nothing in it has a hole, so a texture pack that adds one
+   turns the test back on by itself.
+4. **A quarter of the pixels**: 1024² over eighty metres rather than 2048² over
+   a hundred. That is a sixteen-centimetre texel instead of ten — less than the
+   width of the kernel filtering it — against a map that had been rasterising
+   four and a half times a 720p frame every frame.
+5. **Four hardware taps instead of nine hand-written ones.** With a comparison
+   mode set on the texture, one fetch through a `sampler2DShadow` returns the
+   fraction of four texels that pass, filtered — so four of them see sixteen
+   texels, softer than the nine and less than half the fetches.
+6. **Grass does not cast, and neither does anything rebuilt per frame.** A
+   chunk of grass is a quarter of the triangles and a third of the draw calls,
+   and a blade's shadow is narrower than a texel. Animals and the player's own
+   hands are excluded for a second reason: they are rebuilt every frame by
+   construction, so leaving them in would mean the map could never be reused.
+   Everything still *receives* shadows.
+
+One thing that looked like an optimisation and was not: an early `continue` in
+the point-light loop, to skip the lamps a view ray passes nowhere near. It
+measured **thirty-five percent slower** in a lit camp — the branch stops the
+compiler unrolling the loop, and the loop is sixteen iterations of a dozen
+instructions. The guard that did help was on the exponential in the
+in-scattering term, which is now skipped entirely when there is no fog to
+scatter through.
+
 ### Lamps light the air
 
 "Broad rays across the landscape" is not the pool on the ground; it is the

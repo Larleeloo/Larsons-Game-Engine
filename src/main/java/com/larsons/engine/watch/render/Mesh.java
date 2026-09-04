@@ -37,6 +37,7 @@ public final class Mesh {
     private final int vertexCount;
     private final double originX, originY, originZ;
     private final boolean translucent;
+    private final boolean casts;
     private final float minX, minY, minZ, maxX, maxY, maxZ;
     private final int revision;
     private final double sortBias;
@@ -53,6 +54,7 @@ public final class Mesh {
         this.maxX = b.maxX; this.maxY = b.maxY; this.maxZ = b.maxZ;
         this.revision = b.revision;
         this.sortBias = b.sortBias;
+        this.casts = b.casts;
     }
 
     /** A mesh with nothing in it, at an origin. Never uploaded, never drawn. */
@@ -87,6 +89,20 @@ public final class Mesh {
 
     /** Whether this has to be drawn after everything opaque, back to front. */
     public boolean translucent() { return translucent; }
+
+    /**
+     * Whether this mesh is worth putting into a shadow map.
+     *
+     * <p>True unless a mesher said otherwise, and the one that does is the
+     * grass: a chunk of it is thousands of separate blades, a quarter of a
+     * frame's triangles and a third of its draw calls, and each blade's shadow
+     * is narrower than a texel of any map large enough to hold the wood. The
+     * ground under grass is already darkened by the grass standing on it.
+     *
+     * <p>It still <em>receives</em> shadows — a canopy's shadow falls across a
+     * meadow exactly as it should. This is only about the second submission.
+     */
+    public boolean casts() { return casts; }
 
     /**
      * How far toward the eye this mesh's triangles are <em>sorted</em>, in
@@ -149,7 +165,7 @@ public final class Mesh {
      */
     public com.larsons.engine.graphics.MeshPass.Draw toDraw(long key) {
         return new com.larsons.engine.graphics.MeshPass.Draw(key, revision, vertices,
-                colours, vertexCount, originX, originY, originZ, translucent);
+                colours, vertexCount, originX, originY, originZ, translucent, casts);
     }
 
     /**
@@ -166,6 +182,7 @@ public final class Mesh {
         private final boolean translucent;
         private final int revision;
         private double sortBias;
+        private boolean casts = true;
         private float minX = Float.MAX_VALUE, minY = Float.MAX_VALUE, minZ = Float.MAX_VALUE;
         private float maxX = -Float.MAX_VALUE, maxY = -Float.MAX_VALUE, maxZ = -Float.MAX_VALUE;
 
@@ -180,6 +197,12 @@ public final class Mesh {
         /** Sort this mesh's triangles as if they were nearer. See {@link #sortBias()}. */
         public Builder sortBias(double metres) {
             this.sortBias = Math.max(0, metres);
+            return this;
+        }
+
+        /** Keep this mesh out of a backend's shadow map. See {@link #casts()}. */
+        public Builder casts(boolean into) {
+            this.casts = into;
             return this;
         }
 

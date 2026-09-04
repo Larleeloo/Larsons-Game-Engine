@@ -231,6 +231,17 @@ public final class WatchRenderer {
     public MeshPass.Sky atmosphere() { return sky; }
 
     /**
+     * Whether the last frame rebuilt a shadow map or reused the one it had.
+     *
+     * <p>For the debug readout, and it is the number to watch when this feels
+     * slow: the map is a function of where the sun's box is and what is
+     * standing in it, and a player who is not walking has moved neither.
+     */
+    public boolean redrewShadows() {
+        return meshPass != null && meshPass.redrewShadowsLastFrame();
+    }
+
+    /**
      * The lights this frame is lit by — <b>everything that is burning.</b>
      *
      * <p>Called after {@link #begin} and before anything is submitted, because

@@ -15,7 +15,9 @@ import org.junit.jupiter.api.Timeout;
 import java.util.ArrayList;
 import java.util.List;
 
+import static org.junit.jupiter.api.Assertions.assertArrayEquals;
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.junit.jupiter.api.Assumptions.assumeTrue;
 import static org.lwjgl.opengl.GL33C.GL_COLOR_BUFFER_BIT;
@@ -233,6 +235,73 @@ class GlLightingTest {
         assertTrue(glow > 12, "the air carried nothing: ground the lamp cannot reach "
                 + "came back " + glow + "/255 brighter with the scattering on, and "
                 + "the ray goes straight through the flame");
+    }
+
+    /**
+     * <b>A shadow map is drawn once and then kept until something moves.</b>
+     *
+     * <p>The pass is the most expensive thing in a frame — a second submission
+     * of every opaque mesh, rasterised into a map larger than the screen — and
+     * a shadow map is a pure function of where its box is and what is standing
+     * in it. Neither moves while the player is still, so a frame that redraws
+     * it anyway is paying twice for the same depth values, and that was the
+     * whole of the frame rate this feature cost when it first shipped.
+     *
+     * <p><b>The second assertion is the one that makes the first safe.</b>
+     * Reusing the map means reusing the matrix it was drawn with, and the main
+     * pass has to look it up through that same matrix even though the camera
+     * has since moved; get that wrong and the shadows slide off their trees
+     * while the frame rate looks wonderful. So the two frames are compared
+     * pixel for pixel and must be identical.
+     */
+    @Test
+    void aStillCameraDrawsTheShadowMapOnceAndThenKeepsIt() {
+        EyeCamera eye = clearing();
+        GlSurface surface = new GlSurface(0);
+        GlMeshPass pass = new GlMeshPass(() -> null);
+        try {
+            surface.resize(WIDTH, HEIGHT);
+            surface.bind();
+            glViewport(0, 0, WIDTH, HEIGHT);
+            pass.setTexture(WatchMaterials.atlas(), WatchMaterials.revision());
+            pass.setLighting(List.of(), 0.5f, 0.5f, 0.5f);
+            pass.setSky(sunny(0.75f));
+
+            List<MeshPass.Draw> draws = List.of(ground().toDraw(1), canopy().toDraw(2));
+            int[] first = frame(surface, pass, draws, eye);
+            assertTrue(pass.redrewShadowsLastFrame(),
+                    "the very first frame had no map and did not draw one");
+
+            int[] second = frame(surface, pass, draws, eye);
+            assertFalse(pass.redrewShadowsLastFrame(),
+                    "a second frame from a camera that has not moved, of a wood that "
+                            + "has not moved, drew the whole shadow map again");
+            assertArrayEquals(first, second,
+                    "the reused map did not draw the same picture — which means the "
+                            + "matrix the main pass looks it up through is no longer "
+                            + "the one it was drawn with");
+
+            // …and it does not keep it for ever. Twenty metres is well past the
+            // step the box is snapped to.
+            EyeCamera moved = clearing();
+            moved.place(eye.x() + 20, eye.y(), eye.z());
+            frame(surface, pass, draws, moved);
+            assertTrue(pass.redrewShadowsLastFrame(),
+                    "the box did not follow the player twenty metres down the field");
+        } finally {
+            pass.dispose();
+            surface.close();
+            GlSurface.unbind();
+        }
+    }
+
+    /** One frame into a bound surface, read back. */
+    private static int[] frame(GlSurface surface, GlMeshPass pass,
+                               List<MeshPass.Draw> draws, EyeCamera eye) {
+        glClearColor(0, 0, 0, 1);
+        glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
+        pass.draw(draws, eye, 0x000000, 400, 800);
+        return surface.readPixels();
     }
 
     // --- the fixtures --------------------------------------------------------------
