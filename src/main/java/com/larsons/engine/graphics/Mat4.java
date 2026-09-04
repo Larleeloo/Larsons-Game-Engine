@@ -293,13 +293,37 @@ public final class Mat4 {
      * @param depth  how deep the box is along the sun's own axis; everything
      *               within it can cast, and anything above the top of it casts
      *               nothing
-     * @param texels the shadow map's resolution, for the snapping; {@code 0}
-     *               or less leaves the box exactly where it was asked for
+     * @param texels how many quantisation steps the box's centre may take
+     *               across its own width — a shadow map's resolution, or a
+     *               fraction of it where the caller would rather the box held
+     *               still for several metres at a time. {@code 0} or less
+     *               leaves the box exactly where it was asked for
      */
     public static Mat4 sunlight(double sunX, double sunY, double sunZ,
                                 double centreX, double centreY, double centreZ,
                                 double fromX, double fromY, double fromZ,
                                 double radius, double depth, int texels) {
+        return sunlight(sunX, sunY, sunZ, centreX, centreY, centreZ,
+                fromX, fromY, fromZ, radius, depth, texels, null);
+    }
+
+    /**
+     * The same, reporting where the snapping actually put the box.
+     *
+     * <p>For a caller deciding whether it needs to <em>redraw</em> a shadow map
+     * rather than merely where to draw it. The snapped centre is the whole of
+     * the answer to "is this the same box as last frame", and it cannot be
+     * recovered from the matrix: the matrix also carries the camera, which
+     * moves continuously even while the box it describes is standing still.
+     *
+     * @param snappedCentre filled with the box's centre in the light's own
+     *                      frame, or left alone when {@code null}
+     */
+    public static Mat4 sunlight(double sunX, double sunY, double sunZ,
+                                double centreX, double centreY, double centreZ,
+                                double fromX, double fromY, double fromZ,
+                                double radius, double depth, int texels,
+                                double[] snappedCentre) {
         Mat4 rotation = lookAlong(-sunX, -sunY, -sunZ);
         double[] centre = new double[4];
         rotation.transform(centreX, centreY, centreZ, centre);
@@ -307,6 +331,19 @@ public final class Mat4 {
             double texel = 2 * radius / texels;
             centre[0] = Math.floor(centre[0] / texel) * texel;
             centre[1] = Math.floor(centre[1] / texel) * texel;
+            // The depth axis too, and it is not the shimmer this one prevents —
+            // sliding the near plane along the sun changes no pixel of the map,
+            // because every depth in it slides by the same amount and the
+            // comparison uses the same matrix. What it prevents is a *caller*
+            // being unable to tell that the box has not moved: leave this axis
+            // free and the box's own description changes on every frame the
+            // camera does, so a map that could have been reused never is.
+            centre[2] = Math.floor(centre[2] / texel) * texel;
+        }
+        if (snappedCentre != null) {
+            snappedCentre[0] = centre[0];
+            snappedCentre[1] = centre[1];
+            snappedCentre[2] = centre[2];
         }
         double[] from = new double[4];
         rotation.transform(fromX, fromY, fromZ, from);

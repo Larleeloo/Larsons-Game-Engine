@@ -3344,8 +3344,12 @@ spends real work on it:
   instead of clipping to white. It backs off exactly as far as the weather
   comes on, because a storm is meant to look like a storm.
 
-`-Dlarsons.render.gl.shadowmap=N` sets the map's edge in texels, or `0` to skip
-the pass entirely. **The Java2D path is untouched by every line of this**: both
+The pass is drawn **once and then kept**: a shadow map is a function of where
+its box is and what stands in it, and a player who is not walking has moved
+neither — so standing still costs it nothing at all, and walking costs about a
+fifth of what it did. `-Dlarsons.render.gl.shadowmap=N` sets the map's edge in
+texels, or `0` to skip it entirely. See
+[WATCH_PLAN §7l](WATCH_PLAN.md) for the measurements. **The Java2D path is untouched by every line of this**: both
 backends still agree on the hour, the fog's colour and range and every lamp,
 and they differ only in how richly the same described world is drawn. A
 directional term on the painter would cost a normal for every triangle in the

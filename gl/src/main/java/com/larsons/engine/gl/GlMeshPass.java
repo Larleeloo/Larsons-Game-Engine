@@ -161,6 +161,25 @@ final class GlMeshPass implements MeshPass {
 
     private int texture = -1;
     private int textureRevision = -1;
+
+    /** Whether the last frame actually redrew the map; for the debug readout. */
+    private boolean shadowsDrawn;
+
+    /**
+     * Whether anything in the atlas is see-through enough to be discarded.
+     *
+     * <p><b>Discovered rather than assumed, and it decides how expensive the
+     * shadow pass is.</b> A depth-only pass that can {@code discard} cannot use
+     * a card's early-depth rejection, which is the thing that makes a depth
+     * pass two to four times cheaper than a shaded one — so the alpha test in
+     * {@link GlShadowMap} is worth paying for only when some texel would
+     * actually fail it. The Field Guide's atlas has no holes at all
+     * ({@code WatchMaterials} paints every opaque material at full alpha), so
+     * on that world this is always false and the shadow pass gets an empty
+     * fragment shader; a texture pack that adds a cutout turns the test back on
+     * by itself.
+     */
+    private boolean atlasHasCutouts;
     private boolean unavailable;
     private int frameStamp;
     private int uploadsThisFrame;
@@ -227,7 +246,9 @@ final class GlMeshPass implements MeshPass {
          * (an animal, the hands) would sample the map at whatever that pointed
          * at and wear somebody else's shadow.
          */
-        float[] lightMvp;
+        final float[] lightMvp = new float[16];
+        /** Whether {@link #lightMvp} has been filled for this frame. */
+        boolean lit;
         /** Whether it is near enough the box to put anything <em>into</em> it. */
         boolean casts;
     }
@@ -238,13 +259,20 @@ final class GlMeshPass implements MeshPass {
         int w = atlas.getWidth(), h = atlas.getHeight();
         int[] argb = atlas.getRGB(0, 0, w, h, null, 0, w);
         ByteBuffer pixels = MemoryUtil.memAlloc(w * h * 4);
+        boolean cutouts = false;
+        int cut = Math.round(ALPHA_CUT * 255);
         try {
             for (int p : argb) {
                 pixels.put((byte) ((p >> 16) & 0xFF));
                 pixels.put((byte) ((p >> 8) & 0xFF));
                 pixels.put((byte) (p & 0xFF));
                 pixels.put((byte) ((p >>> 24) & 0xFF));
+                // Free, because this loop is already walking every texel, and
+                // it saves the shadow pass a fragment shader. See
+                // atlasHasCutouts.
+                if ((p >>> 24) < cut) cutouts = true;
             }
+            atlasHasCutouts = cutouts;
             pixels.flip();
             if (texture < 0) texture = glGenTextures();
             int previous = glGetInteger(GL_TEXTURE_BINDING_2D);
@@ -349,34 +377,46 @@ final class GlMeshPass implements MeshPass {
         // Everything the card can actually draw this frame, resolved before
         // either pass touches it. Opaque first so that when the upload budget
         // runs out it is the water that waits.
-        boolean casting = shadows.begin(sky, eye);
-        try {
-            readyCount = 0;
-            for (Draw draw : opaque) prepare(draw, casting);
-            opaqueReady = readyCount;
-            for (Draw draw : translucent) prepare(draw, casting);
+        boolean casting = shadows.aim(sky, eye, atlasHasCutouts);
+        // Whether the sun's box has moved must be settled *before* the casters
+        // are chosen, because which meshes are in the box is a question about
+        // which box. See GlShadowMap.adoptBox.
+        boolean redraw = casting && shadows.boxMoved();
+        if (redraw) shadows.adoptBox();
 
-            if (casting) {
+        readyCount = 0;
+        for (Draw draw : opaque) prepare(draw, casting);
+        opaqueReady = readyCount;
+        for (Draw draw : translucent) prepare(draw, casting);
+
+        // …and then whether what is standing in that box has changed. Standing
+        // still in a wood, neither has, and the map already on the card is the
+        // one this frame wants. See GlShadowMap.boxMoved.
+        long casters = casting ? casterSignature() : 0;
+        if (casting && !redraw && shadows.castersChanged(casters)) redraw = true;
+        shadowsDrawn = redraw;
+        if (redraw) {
+            shadows.openPass(casters);
+            try {
                 glActiveTexture(GL_TEXTURE0 + GlTerrainProgram.UNIT_ATLAS);
                 glBindTexture(GL_TEXTURE_2D, texture);
-                // Only the opaque half. A sheet of water casting a shadow of
-                // itself onto the lake bed is not a shadow, it is a lake that
-                // has gone dark, and grass sheets would fill the map with noise
-                // a texel wide.
+                // Only the opaque half, and only what asked to cast. A sheet of
+                // water casting a shadow of itself onto the lake bed is not a
+                // shadow, it is a lake that has gone dark.
                 for (int i = 0; i < opaqueReady; i++) {
                     Ready row = ready.get(i);
                     if (row.casts) {
                         shadows.cast(row.buffer.vao, row.buffer.vertexCount, row.lightMvp);
                     }
                 }
+            } finally {
+                // Whatever happened, the caller's framebuffer goes back.
+                // Everything after this — including the outer method's own
+                // state restoration — is written on the assumption that it is
+                // drawing into the frame, and an exception that left the sun's
+                // depth texture bound would send the rest of the frame into it.
+                shadows.end();
             }
-        } finally {
-            // Whatever happened, the caller's framebuffer goes back. Everything
-            // after this — including the outer method's own state restoration —
-            // is written on the assumption that it is drawing into the frame,
-            // and an exception that left the sun's depth texture bound would
-            // send the whole rest of the frame into it.
-            if (casting) shadows.end();
         }
 
         Mat4 projection = Mat4.perspective(eye.fov(),
@@ -409,11 +449,12 @@ final class GlMeshPass implements MeshPass {
         program.setSky(sky, eye, casting ? shadows.texel() : 0f,
                 shadows.flatBias(), shadows.slopeBias());
         glActiveTexture(GL_TEXTURE0 + GlTerrainProgram.UNIT_SHADOW);
-        // Something valid on the shadow unit whatever happens. The shader never
-        // samples it unless there is a map — but a sampler bound to nothing at
-        // all is the sort of thing one driver in ten decides to have an opinion
-        // about, and the atlas is already here.
-        glBindTexture(GL_TEXTURE_2D, casting ? shadows.texture() : texture);
+        // The depth map, or nothing at all. Never the atlas: that unit is a
+        // `sampler2DShadow` now, and a colour texture bound to one is a
+        // mismatched sampler — harmless while the shader does not read it, and
+        // exactly the sort of thing a driver is entitled to complain about
+        // whether or not it is read.
+        glBindTexture(GL_TEXTURE_2D, casting ? shadows.texture() : 0);
         glActiveTexture(GL_TEXTURE0 + GlTerrainProgram.UNIT_ATLAS);
         glBindTexture(GL_TEXTURE_2D, texture);
 
@@ -426,6 +467,35 @@ final class GlMeshPass implements MeshPass {
         for (int i = opaqueReady; i < readyCount; i++) issue(ready.get(i), projection, eye);
 
         evict();
+    }
+
+    /**
+     * What is standing in the sun's box, as one number.
+     *
+     * <p>Combined commutatively — added rather than folded in sequence —
+     * because the order meshes arrive in is the order of a hash map's values
+     * and can change between frames without anything having moved. An
+     * order-sensitive summary would report a change that was not one, which
+     * costs a redraw rather than correctness, but would cost it constantly.
+     *
+     * <p>What has to be in it: which meshes cast, which build of each, and
+     * where each one is. A chunk that finishes re-meshing changes its revision;
+     * an animal that walks changes its origin; a tree that comes into range
+     * changes the count. Any of those changes the map.
+     */
+    private long casterSignature() {
+        long mixed = 0;
+        for (int i = 0; i < opaqueReady; i++) {
+            Ready row = ready.get(i);
+            if (!row.casts) continue;
+            long one = row.draw.key() * 0x9E3779B97F4A7C15L;
+            one ^= (long) row.draw.revision() * 0xC2B2AE3D27D4EB4FL;
+            one ^= Double.doubleToLongBits(row.draw.originX()) * 0x165667B19E3779F9L;
+            one ^= Double.doubleToLongBits(row.draw.originY()) * 0x27D4EB2F165667C5L;
+            one ^= Double.doubleToLongBits(row.draw.originZ()) * 0x85EBCA77C2B2AE63L;
+            mixed += one ^ (one >>> 29);
+        }
+        return mixed;
     }
 
     /**
@@ -469,14 +539,19 @@ final class GlMeshPass implements MeshPass {
         // One matrix per mesh, computed once and used by both passes — the
         // shadow map is written through it and then read back through it, and
         // deriving it twice is how the two come to differ by a rounding.
-        row.lightMvp = casting
-                ? shadows.matrixFor(draw.originX(), draw.originY(), draw.originZ())
-                : null;
+        row.lit = casting;
+        if (casting) {
+            // Into the row's own array rather than out of a fresh one: this
+            // runs once per mesh per frame, and a frame holds several hundred
+            // meshes.
+            shadows.matrixInto(draw.originX(), draw.originY(), draw.originZ(),
+                    row.lightMvp);
+        }
         // Casting is the expensive half and is worth culling: at a
         // five-hundred-metre render distance most of a frame is nowhere near
         // the sun's two hundred metres of map, and submitting it would be
         // drawing the horizon twice to have it clipped away.
-        row.casts = casting
+        row.casts = casting && draw.casts()
                 && shadows.casts(draw.originX(), draw.originY(), draw.originZ());
     }
 
@@ -505,7 +580,7 @@ final class GlMeshPass implements MeshPass {
                 draw.originX(), draw.originY(), draw.originZ());
         program.setMatrices(projection.times(modelView).columnMajor(),
                 modelView.columnMajor());
-        program.setLightMatrix(row.lightMvp);
+        program.setLightMatrix(row.lit ? row.lightMvp : null);
         // Where in the world this mesh is, for the two things a fragment cannot
         // work out from an eye-relative position: how high above the mist it
         // stands, and where it sits in the drift. Wrapped here, in double,
@@ -603,6 +678,9 @@ final class GlMeshPass implements MeshPass {
 
     @Override
     public int uploadsLastFrame() { return uploadsThisFrame; }
+
+    @Override
+    public boolean redrewShadowsLastFrame() { return shadowsDrawn; }
 
     /** Release everything on the card. */
     void dispose() {

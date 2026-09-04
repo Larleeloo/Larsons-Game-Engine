@@ -3467,7 +3467,16 @@ public class WatchScene extends AbstractScene {
         // the note on GlMeshPass.Buffer.originX for what happens when a cached
         // buffer and a moved origin are allowed to disagree.
         double ox = Math.floor(px), oy = Math.floor(py);
-        Mesh.Builder mesh = Mesh.builder(ox, oy, 0, false, frame);
+        // <b>Not a shadow caster</b>, and that is a framerate decision rather
+        // than an artistic one. This mesh is rebuilt from scratch every frame —
+        // that is what "dynamic" means — so a backend caching a shadow map
+        // against what is standing in it would find this changed on every
+        // single frame and rebuild the map for the whole wood, throwing away
+        // the one saving that makes the pass affordable while walking. What is
+        // lost is a shadow under a moving animal, at a texel size where it
+        // would have crawled anyway; what is kept is the trees'. See
+        // Mesh.casts.
+        Mesh.Builder mesh = Mesh.builder(ox, oy, 0, false, frame).casts(false);
         float[] uv = new float[4];
 
         for (WatchView.Creature creature : view.creatures()) {
@@ -4088,7 +4097,12 @@ public class WatchScene extends AbstractScene {
      * every time somebody twitched the mouse.
      */
     private Mesh buildViewMesh() {
-        Mesh.Builder mesh = Mesh.builder(eye.x(), eye.y(), eye.z(), false, frame);
+        // Your own hands, held a foot from the camera and rebuilt every frame.
+        // They cast nothing, for buildDynamicMesh's reason and one of their
+        // own: a hand's shadow would be thrown across the whole clearing by a
+        // low sun, from a piece of geometry that is not really in the world.
+        Mesh.Builder mesh = Mesh.builder(eye.x(), eye.y(), eye.z(), false, frame)
+                .casts(false);
         int sleeve = WalkerModel.coatFor(session.selfId());
         // What is being carried, in the right hand, when there is something
         // worth showing: a rod that is out, or the last thing picked up.
@@ -4411,7 +4425,9 @@ public class WatchScene extends AbstractScene {
                 + " · haze " + String.format(java.util.Locale.ROOT, "%.4f", sky.haze())
                 + "/m · air " + String.format(java.util.Locale.ROOT, "%.2f",
                         sky.scatter())
-                + (renderer.acceleratedByGpu() ? "" : " (painter: none of it)"));
+                + (renderer.acceleratedByGpu()
+                        ? " · map " + (renderer.redrewShadows() ? "redrawn" : "kept")
+                        : " (painter: none of it)"));
         // What is hunting, and what is lying on the ground because it caught
         // somebody. Both are rare enough that these two numbers are zero nearly
         // always, and are exactly what somebody testing the mutants wants when

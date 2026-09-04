@@ -197,7 +197,10 @@ final class GlTerrainProgram implements AutoCloseable {
             in vec4 vShadow;
 
             uniform sampler2D uAtlas;
-            uniform sampler2D uShadowMap;
+            // A *shadow* sampler: the texture unit does the depth comparison
+            // and the filtering, and hands back how much of this fragment is
+            // lit. See GlShadowMap's texture setup.
+            uniform sampler2DShadow uShadowMap;
             uniform vec4 uFog;        // rgb = colour, a = 1 when fog is on
             uniform vec2 uFogRange;   // x = start, y = end
             uniform float uAlphaCut;  // discard below this; 0 in the blended pass
@@ -243,22 +246,31 @@ final class GlTerrainProgram implements AutoCloseable {
                 // texels of depth in one texel of map, and a flat bias large
                 // enough for it would detach every shadow from its own tree.
                 float slope = sqrt(max(0.0, 1.0 - ndl * ndl)) / max(0.12, ndl);
-                float bias = uShadowBias.x + uShadowBias.y * min(slope, 6.0);
-                float hit = 0.0;
-                for (int y = -1; y <= 1; y++) {
-                    for (int x = -1; x <= 1; x++) {
-                        // Explicit level: this runs inside a branch on the
-                        // fragment's own normal, and an implicit level is a
-                        // derivative asked for in non-uniform control flow. The
-                        // map has no mipmaps to choose between anyway.
-                        float depth = textureLod(uShadowMap,
-                                p.xy + vec2(x, y) * uShadowTexel, 0.0).r;
-                        hit += depth < p.z - bias ? 1.0 : 0.0;
-                    }
-                }
+                float ref = p.z - (uShadowBias.x + uShadowBias.y * min(slope, 6.0));
+                // <b>Four fetches, not nine, and softer for it.</b> Each of
+                // these is a hardware comparison against four texels and a
+                // bilinear blend of the four answers, so this kernel sees
+                // sixteen texels — and the offsets are a half-texel diagonal
+                // cross, which puts those four two-by-two footprints corner to
+                // corner rather than overlapping.
+                //
+                // Explicit level throughout: this runs inside a branch on the
+                // fragment's own normal, and an implicit level is a derivative
+                // asked for in non-uniform control flow. The map has no mipmaps
+                // to choose between anyway.
+                vec2 step = uShadowTexel;
+                float lit = textureLod(uShadowMap,
+                                vec3(p.xy + vec2(-step.x, -step.y), ref), 0.0)
+                        + textureLod(uShadowMap,
+                                vec3(p.xy + vec2(step.x, -step.y), ref), 0.0)
+                        + textureLod(uShadowMap,
+                                vec3(p.xy + vec2(-step.x, step.y), ref), 0.0)
+                        + textureLod(uShadowMap,
+                                vec3(p.xy + vec2(step.x, step.y), ref), 0.0);
                 // Faded at the rim, so the far edge of the map is not a line
                 // ruled across the wood.
-                return (hit / 9.0) * (1.0 - smoothstep(0.80, 1.0, max(edge.x, edge.y)));
+                return (1.0 - lit * 0.25)
+                        * (1.0 - smoothstep(0.80, 1.0, max(edge.x, edge.y)));
             }
 
             /**
@@ -382,8 +394,14 @@ final class GlTerrainProgram implements AutoCloseable {
                         // along it the light sits, which is a straight line
                         // through a medium that is very nearly uniform over the
                         // few metres a lamp reaches.
-                        float back = exp(-mass * clamp(along / max(viewLen, 0.0001),
-                                0.0, 1.0));
+                        // The exponential only when there is air to speak of.
+                        // `mass` is the same for every lamp on this fragment, so
+                        // this branch is coherent across a warp, and in clear
+                        // weather it takes sixteen exponentials a fragment down
+                        // to none.
+                        float back = mass > 0.002
+                                ? exp(-mass * clamp(along / max(viewLen, 0.0001), 0.0, 1.0))
+                                : 1.0;
                         air += uLightColour[i].rgb * (uLightColour[i].a * reach * reach
                                 * span * CHORD * uScatter * back);
                     }

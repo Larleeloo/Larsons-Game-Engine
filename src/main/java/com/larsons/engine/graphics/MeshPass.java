@@ -49,9 +49,16 @@ public interface MeshPass {
      * @param vertexCount how many vertices are actually used
      * @param originX     world position the vertices are relative to
      * @param translucent whether it must be drawn after everything opaque
+     * @param casts       whether it should be drawn into a shadow map. Anything
+     *                    translucent is excluded anyway; this is for the
+     *                    opaque geometry whose shadow is not worth a second
+     *                    submission — a field of grass blades is a quarter of a
+     *                    frame's triangles and its shadows are smaller than a
+     *                    texel of any map that would hold them
      */
     record Draw(long key, int revision, float[] vertices, int[] colours, int vertexCount,
-                double originX, double originY, double originZ, boolean translucent) {
+                double originX, double originY, double originZ, boolean translucent,
+                boolean casts) {
 
         /** Triangles in this mesh. */
         public int triangleCount() { return vertexCount / 3; }
@@ -279,4 +286,14 @@ public interface MeshPass {
 
     /** How many meshes were uploaded on the last frame; for the debug overlay. */
     default int uploadsLastFrame() { return 0; }
+
+    /**
+     * Whether the last frame rebuilt a shadow map, or reused the one it had.
+     *
+     * <p>For the debug overlay, and the one number worth watching while tuning
+     * this: a map is a function of where its box is and what is standing in it,
+     * both of which are still while the player is, so a frame that redraws it
+     * anyway is a frame paying twice for the same four million depth values.
+     */
+    default boolean redrewShadowsLastFrame() { return false; }
 }

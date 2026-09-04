@@ -329,7 +329,13 @@ public final class FloraMesher {
      */
     public static Mesh grass(WatchChunk chunk, GrassField field, double seconds) {
         double ox = chunk.originX(), oy = chunk.originY();
-        Mesh.Builder mesh = Mesh.builder(ox, oy, 0, false, chunk.meshRevision());
+        // Opaque, and deliberately not a shadow caster: a chunk of grass is
+        // thousands of separate blades — a quarter of a frame's triangles and a
+        // third of its draw calls — and each blade's shadow is narrower than a
+        // texel of any shadow map big enough to hold the wood. It still catches
+        // the shadow of the tree above it. See Mesh.casts.
+        Mesh.Builder mesh = Mesh.builder(ox, oy, 0, false, chunk.meshRevision())
+                .casts(false);
         float[] uv = new float[4];
         double[] wind = new double[2];
         double[] position = new double[2];
