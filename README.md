@@ -3308,6 +3308,50 @@ what makes a carried lantern affordable at all. The Java2D path draws the same
 model per triangle, off the face's own normal, against lights culled per mesh.
 See [WATCH_PLAN §7j](WATCH_PLAN.md).
 
+### What a graphics card does with all that
+
+A flat multiplier is a complete answer to *what time is it* and no answer at all
+to *what does it look like out*. So the hour is also handed to the backend as a
+**description of the sky** rather than a number
+([`SkyLight`](src/main/java/com/larsons/engine/watch/light/SkyLight.java),
+[`MeshPass.Sky`](src/main/java/com/larsons/engine/graphics/MeshPass.java)) —
+where the sun is and what colour, what the sky above and the ground below give
+back, how thick the air is and where the mist is lying — and the GL backend
+spends real work on it:
+
+- **A sun in the sky the clock actually put it in.** Orange on the horizon,
+  pale overhead, cold and blue when it is the moon; against a two-colour
+  ambient, the sky's own colour on what faces up and a dim bounce on what faces
+  down. One `mix` per fragment, and it is most of the difference between
+  low-poly ground that reads as carved and low-poly ground that reads as a
+  sheet of green.
+- **Trees cast shadows** — a 2048² depth map from the sun
+  ([`GlShadowMap`](gl/src/main/java/com/larsons/engine/gl/GlShadowMap.java)),
+  alpha-tested against the same atlas so a canopy throws *dapple* rather than
+  the shadow of a box, snapped to whole texels so it does not crawl as you
+  walk, and faded at its rim so there is no line ruled across the wood. Not
+  drawn at all at night, under a storm or under water, where nothing would see
+  it.
+- **Fires and lanterns light the air**, not only the ground. The point-light
+  loop already knows where each lamp is; one more dot product gives how close
+  it passes to the *view ray* and how much of that ray lies inside its reach,
+  which is the broad cone of glow round a fire in a damp wood.
+- **Fog with a height to it.** Mist pools in the hollows and a ridge stands out
+  of it, the bank drifts rather than sitting still, and it is bright toward the
+  sun and not away from it. A campfire in a fog bank lights the fog.
+- **One knob of grade** at the end: saturation, and a knee that rolls the
+  highlights off so the middle of a lantern's pool keeps the lantern's colour
+  instead of clipping to white. It backs off exactly as far as the weather
+  comes on, because a storm is meant to look like a storm.
+
+`-Dlarsons.render.gl.shadowmap=N` sets the map's edge in texels, or `0` to skip
+the pass entirely. **The Java2D path is untouched by every line of this**: both
+backends still agree on the hour, the fog's colour and range and every lamp,
+and they differ only in how richly the same described world is drawn. A
+directional term on the painter would cost a normal for every triangle in the
+frame rather than only the ones near a flame, on the thread that is also
+running the game.
+
 ### The book
 
 <kbd>G</kbd> opens the field guide

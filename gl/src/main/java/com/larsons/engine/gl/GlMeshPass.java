@@ -44,6 +44,26 @@ import static org.lwjgl.opengl.GL33C.*;
  * writes off, because blending is not commutative and water seen through water
  * is still water.
  *
+ * <h2>…and a third, when there is a sun</h2>
+ *
+ * <p>Before either of those, the opaque half goes up once more through
+ * {@link GlShadowMap}: the same buffers, the same frame, seen from the sun and
+ * writing nothing but depth. That is the one thing a fragment cannot work out
+ * about itself — whether something else is in the way — and there is no trick
+ * that avoids drawing the world twice for it.
+ *
+ * <p><b>It is skipped whenever it would not be seen</b>, which is most of the
+ * time: at night, under a storm, under water, and for every mesh outside the
+ * two hundred metres of world the map covers. When it is skipped the frame is
+ * the frame this class drew before the pass existed, to the instruction — one
+ * uniform switches the lookup off in the shader, and nothing else changes.
+ *
+ * <p><b>The buffers are therefore resolved before either pass runs.</b> That is
+ * the only structural change the shadow pass forced: uploads are bounded per
+ * frame, and doing them inside the first pass would let the shadow map hold a
+ * mesh the main pass had to skip — a tree casting a shadow it is not standing
+ * in. See {@link #prepare}.
+ *
  * <h2>It borrows somebody else's context</h2>
  *
  * <p>Exactly like {@link GlTerrainPass}, this runs in the middle of a frame the
@@ -109,6 +129,36 @@ final class GlMeshPass implements MeshPass {
 
     private float dayR = 1, dayG = 1, dayB = 1;
 
+    /**
+     * The sun and the air, held between {@link #setSky} and {@link #draw} for
+     * the same reason the lights are.
+     */
+    private Sky sky = Sky.PLAIN;
+
+    /**
+     * The world again, from the sun — see {@link GlShadowMap}.
+     *
+     * <p>Owned here rather than by the target because it is a consequence of
+     * <em>this</em> pass's geometry: what casts a shadow is exactly what this
+     * class was handed, and nothing else in a frame knows the list.
+     */
+    private final GlShadowMap shadows = new GlShadowMap();
+
+    /**
+     * Draws that have a buffer on the card and can be issued — <b>resolved
+     * once and then drawn twice.</b>
+     *
+     * <p>Before shadows there was one pass and the upload could happen inside
+     * it. There are two now, and both of them need the same buffer for the same
+     * mesh: uploading during the first would spend the frame's upload budget on
+     * the shadow map and leave the main pass drawing a mesh the shadow pass
+     * had and it did not. So the budget is spent once, up front, and both
+     * passes walk the answer.
+     */
+    private final List<Ready> ready = new ArrayList<>();
+    private int readyCount;
+    private int opaqueReady;
+
     private int texture = -1;
     private int textureRevision = -1;
     private boolean unavailable;
@@ -152,6 +202,34 @@ final class GlMeshPass implements MeshPass {
             return originX == draw.originX() && originY == draw.originY()
                     && originZ == draw.originZ();
         }
+    }
+
+    /**
+     * One mesh, its buffer, and the matrix the sun sees it through.
+     *
+     * <p>Mutable and pooled rather than a record, because there is one of these
+     * per mesh per frame and a frame holds several hundred meshes. See
+     * {@link #ready}.
+     */
+    private static final class Ready {
+        Draw draw;
+        Buffer buffer;
+        /**
+         * How the sun sees this mesh, or {@code null} when nothing is casting
+         * at all this frame.
+         *
+         * <p><b>Computed for every mesh, not only the ones that cast</b>, and
+         * that is not an oversight. The main pass uses this matrix to look
+         * <em>up</em> the shadow map, and a mesh outside the map has to be told
+         * so by landing outside it — which only the real matrix does. Handing
+         * that mesh an identity instead would put its own local coordinates
+         * into the lookup, and a mesh whose vertices happen to be small numbers
+         * (an animal, the hands) would sample the map at whatever that pointed
+         * at and wear somebody else's shadow.
+         */
+        float[] lightMvp;
+        /** Whether it is near enough the box to put anything <em>into</em> it. */
+        boolean casts;
     }
 
     @Override
@@ -200,6 +278,11 @@ final class GlMeshPass implements MeshPass {
         dayR = r;
         dayG = g;
         dayB = b;
+    }
+
+    @Override
+    public void setSky(Sky frameSky) {
+        sky = frameSky == null ? Sky.PLAIN : frameSky;
     }
 
     @Override
@@ -263,6 +346,39 @@ final class GlMeshPass implements MeshPass {
         translucent.sort(Comparator.comparingDouble(
                 (Draw d) -> -distanceSquared(d, eye)));
 
+        // Everything the card can actually draw this frame, resolved before
+        // either pass touches it. Opaque first so that when the upload budget
+        // runs out it is the water that waits.
+        boolean casting = shadows.begin(sky, eye);
+        try {
+            readyCount = 0;
+            for (Draw draw : opaque) prepare(draw, casting);
+            opaqueReady = readyCount;
+            for (Draw draw : translucent) prepare(draw, casting);
+
+            if (casting) {
+                glActiveTexture(GL_TEXTURE0 + GlTerrainProgram.UNIT_ATLAS);
+                glBindTexture(GL_TEXTURE_2D, texture);
+                // Only the opaque half. A sheet of water casting a shadow of
+                // itself onto the lake bed is not a shadow, it is a lake that
+                // has gone dark, and grass sheets would fill the map with noise
+                // a texel wide.
+                for (int i = 0; i < opaqueReady; i++) {
+                    Ready row = ready.get(i);
+                    if (row.casts) {
+                        shadows.cast(row.buffer.vao, row.buffer.vertexCount, row.lightMvp);
+                    }
+                }
+            }
+        } finally {
+            // Whatever happened, the caller's framebuffer goes back. Everything
+            // after this — including the outer method's own state restoration —
+            // is written on the assumption that it is drawing into the frame,
+            // and an exception that left the sun's depth texture bound would
+            // send the whole rest of the frame into it.
+            if (casting) shadows.end();
+        }
+
         Mat4 projection = Mat4.perspective(eye.fov(),
                 eye.viewportWidth() / (double) eye.viewportHeight(),
                 EyeCamera.NEAR, Math.max(EyeCamera.NEAR * 2, fogEnd * 1.5));
@@ -287,29 +403,40 @@ final class GlMeshPass implements MeshPass {
         // world. `use` has just reset these to neutral, so a caller that never
         // calls setLighting draws exactly what it drew before this existed.
         program.setLighting(lights, eye, dayR, dayG, dayB);
-        glActiveTexture(GL_TEXTURE0);
+        // …and the sun, the weather and the grade, likewise once. The shadow
+        // term switches itself off when there is no map to read: see
+        // GlTerrainProgram.setSky.
+        program.setSky(sky, eye, casting ? shadows.texel() : 0f,
+                shadows.flatBias(), shadows.slopeBias());
+        glActiveTexture(GL_TEXTURE0 + GlTerrainProgram.UNIT_SHADOW);
+        // Something valid on the shadow unit whatever happens. The shader never
+        // samples it unless there is a map — but a sampler bound to nothing at
+        // all is the sort of thing one driver in ten decides to have an opinion
+        // about, and the atlas is already here.
+        glBindTexture(GL_TEXTURE_2D, casting ? shadows.texture() : texture);
+        glActiveTexture(GL_TEXTURE0 + GlTerrainProgram.UNIT_ATLAS);
         glBindTexture(GL_TEXTURE_2D, texture);
 
-        for (Draw draw : opaque) issue(draw, projection, eye);
+        for (int i = 0; i < opaqueReady; i++) issue(ready.get(i), projection, eye);
 
         glEnable(GL_BLEND);
         glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
         glDepthMask(false);
         program.setAlphaCut(0f);
-        for (Draw draw : translucent) issue(draw, projection, eye);
+        for (int i = opaqueReady; i < readyCount; i++) issue(ready.get(i), projection, eye);
 
         evict();
     }
 
-    private static double distanceSquared(Draw draw, EyeCamera eye) {
-        double dx = draw.originX() - eye.x();
-        double dy = draw.originY() - eye.y();
-        double dz = draw.originZ() - eye.z();
-        return dx * dx + dy * dy + dz * dz;
-    }
-
-    /** Upload if needed, set the matrices, and draw one mesh. */
-    private void issue(Draw draw, Mat4 projection, EyeCamera eye) {
+    /**
+     * Get a mesh's buffer onto the card if it is not there, and note it for
+     * both passes.
+     *
+     * <p>What used to be the front half of {@code issue}. The upload budget is
+     * spent here and only here, which is what stops the shadow pass and the
+     * main pass disagreeing about which meshes exist this frame.
+     */
+    private void prepare(Draw draw, boolean casting) {
         Buffer buffer = buffers.computeIfAbsent(draw.key(), k -> new Buffer());
         buffer.lastSeen = frameStamp;
         boolean stale = buffer.revision != draw.revision();
@@ -334,12 +461,35 @@ final class GlMeshPass implements MeshPass {
                 return;
             }
         }
-        drawBuffer(buffer, draw, projection, eye);
+        if (buffer.vao < 0 || buffer.vertexCount == 0) return;
+        if (readyCount == ready.size()) ready.add(new Ready());
+        Ready row = ready.get(readyCount++);
+        row.draw = draw;
+        row.buffer = buffer;
+        // One matrix per mesh, computed once and used by both passes — the
+        // shadow map is written through it and then read back through it, and
+        // deriving it twice is how the two come to differ by a rounding.
+        row.lightMvp = casting
+                ? shadows.matrixFor(draw.originX(), draw.originY(), draw.originZ())
+                : null;
+        // Casting is the expensive half and is worth culling: at a
+        // five-hundred-metre render distance most of a frame is nowhere near
+        // the sun's two hundred metres of map, and submitting it would be
+        // drawing the horizon twice to have it clipped away.
+        row.casts = casting
+                && shadows.casts(draw.originX(), draw.originY(), draw.originZ());
     }
 
-    /** Set the matrices for one buffer at a draw's origin and issue it. */
-    private void drawBuffer(Buffer buffer, Draw draw, Mat4 projection, EyeCamera eye) {
-        if (buffer.vao < 0 || buffer.vertexCount == 0) return;
+    private static double distanceSquared(Draw draw, EyeCamera eye) {
+        double dx = draw.originX() - eye.x();
+        double dy = draw.originY() - eye.y();
+        double dz = draw.originZ() - eye.z();
+        return dx * dx + dy * dy + dz * dz;
+    }
+
+    /** Set the matrices for one prepared mesh and issue it. */
+    private void issue(Ready row, Mat4 projection, EyeCamera eye) {
+        Draw draw = row.draw;
 
         // Vertices reach the card measured from the mesh's own origin, and the
         // origin reaches it measured from the eye, in double: a world with no
@@ -355,9 +505,24 @@ final class GlMeshPass implements MeshPass {
                 draw.originX(), draw.originY(), draw.originZ());
         program.setMatrices(projection.times(modelView).columnMajor(),
                 modelView.columnMajor());
+        program.setLightMatrix(row.lightMvp);
+        // Where in the world this mesh is, for the two things a fragment cannot
+        // work out from an eye-relative position: how high above the mist it
+        // stands, and where it sits in the drift. Wrapped here, in double,
+        // because a world coordinate out at the edge of this world does not fit
+        // in a float at the precision a fog bank needs. See DRIFT_PERIOD.
+        program.setMeshOrigin(wrapped(draw.originX()), wrapped(draw.originY()),
+                draw.originZ());
 
-        glBindVertexArray(buffer.vao);
-        glDrawArrays(GL_TRIANGLES, 0, buffer.vertexCount);
+        glBindVertexArray(row.buffer.vao);
+        glDrawArrays(GL_TRIANGLES, 0, row.buffer.vertexCount);
+    }
+
+    /** A world coordinate folded into the drift's own period, never negative. */
+    private static double wrapped(double v) {
+        double period = GlTerrainProgram.DRIFT_PERIOD;
+        double folded = v % period;
+        return folded < 0 ? folded + period : folded;
     }
 
     private void upload(Buffer buffer, Draw draw) {
@@ -443,6 +608,10 @@ final class GlMeshPass implements MeshPass {
     void dispose() {
         for (Buffer buffer : buffers.values()) release(buffer);
         buffers.clear();
+        ready.clear();
+        readyCount = 0;
+        opaqueReady = 0;
+        shadows.close();
         if (texture >= 0) {
             glDeleteTextures(texture);
             texture = -1;

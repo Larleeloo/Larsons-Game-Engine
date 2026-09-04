@@ -181,6 +181,143 @@ public final class Mat4 {
                 originX - eye.x(), originY - eye.y(), originZ - eye.z()));
     }
 
+    /**
+     * A parallel projection, in the same conventions as {@link #perspective}:
+     * <b>+Z forward</b>, and a box rather than a frustum.
+     *
+     * <p>What a shadow map is drawn through. The sun is far enough away that
+     * its rays are parallel, so the depth buffer taken from it has no
+     * perspective in it at all — and a projection with no divide is also the
+     * one whose depth is linear, which is what makes a bias in metres mean the
+     * same thing at both ends of the box.
+     *
+     * @param halfWidth  half the box, across
+     * @param halfHeight half the box, up
+     * @param near       the near face, in front of the light
+     * @param far        the far face; everything between the two casts
+     */
+    public static Mat4 orthographic(double halfWidth, double halfHeight,
+                                    double near, double far) {
+        double range = far - near;
+        float[] out = new float[16];
+        out[0] = (float) (1 / Math.max(1e-9, halfWidth));
+        out[5] = (float) (1 / Math.max(1e-9, halfHeight));
+        out[10] = (float) (2 / range);
+        out[14] = (float) (-(far + near) / range);
+        out[15] = 1;
+        return new Mat4(out);
+    }
+
+    /**
+     * The rotation half of a view matrix aimed along a direction — the eye
+     * still at the origin, +Z pointing where {@code (dx, dy, dz)} points.
+     *
+     * <p>Right-handed and wound the same way {@link #view(EyeCamera)} is:
+     * {@code right × up = forward}. A caller composing this with a translation
+     * therefore gets a camera the rest of the engine's conventions apply to,
+     * back-face winding included.
+     *
+     * <p>The reference "up" is the world's, except where the direction is
+     * within a few degrees of vertical — a sun directly overhead — where it
+     * swings to +Y rather than producing a degenerate basis. Which one it picks
+     * does not matter: rolling a parallel projection about its own axis draws
+     * the same shadows.
+     */
+    public static Mat4 lookAlong(double dx, double dy, double dz) {
+        double length = Math.sqrt(dx * dx + dy * dy + dz * dz);
+        if (length < 1e-12) return identity();
+        double fx = dx / length, fy = dy / length, fz = dz / length;
+        double ux = 0, uy = 0, uz = 1;
+        if (Math.abs(fz) > 0.995) {
+            uy = 1;
+            uz = 0;
+        }
+        // right = up × forward, then a true up from the pair, so the three are
+        // orthonormal even where the reference was not perpendicular.
+        double rx = uy * fz - uz * fy;
+        double ry = uz * fx - ux * fz;
+        double rz = ux * fy - uy * fx;
+        double rl = Math.sqrt(rx * rx + ry * ry + rz * rz);
+        rx /= rl; ry /= rl; rz /= rl;
+        ux = fy * rz - fz * ry;
+        uy = fz * rx - fx * rz;
+        uz = fx * ry - fy * rx;
+        float[] out = new float[16];
+        out[0] = (float) rx; out[4] = (float) ry; out[8] = (float) rz;
+        out[1] = (float) ux; out[5] = (float) uy; out[9] = (float) uz;
+        out[2] = (float) fx; out[6] = (float) fy; out[10] = (float) fz;
+        out[15] = 1;
+        return new Mat4(out);
+    }
+
+    /**
+     * The whole matrix a sun casts its shadows through: a box of world, seen
+     * from the sun, mapped into clip space.
+     *
+     * <p><b>Here rather than in the GL backend for {@link #eyeRelativeModelView}'s
+     * reason</b> — a headless test can multiply matrices and check that the
+     * ground in front of the camera lands inside the box while the ground
+     * behind the player does not, and it cannot open a GL context. Every way
+     * this can be wrong (the sun's sign, a basis that is left-handed, a depth
+     * range that clips the canopy off the top of the map) produces a picture
+     * that is merely <em>unshadowed</em> rather than obviously broken, which is
+     * the class of thing nobody finds by looking.
+     *
+     * <p><b>The snapping is not a refinement, it is the whole difference
+     * between shadows and a shimmer.</b> A shadow map is a grid, and a grid
+     * whose origin slides continuously as the player walks re-decides which
+     * texel every leaf edge falls in on every frame — so the edge of every
+     * shadow in the wood crawls and sparkles, and it is far more distracting
+     * than having no shadows at all. Quantising the box's centre to whole
+     * texels means the grid moves in whole texels too: the pattern is the same
+     * pattern, one texel over.
+     *
+     * @param sunX   the direction the sun is <em>in</em>, the way a clock's
+     *               {@code sunDirection} gives it; the light travels the other
+     *               way, and the sign is handled here rather than by callers
+     * <p><b>The snapping is in absolute world light-space, and the frame the
+     * result consumes is not.</b> Those two facts have to be separated or the
+     * snapping does nothing. A renderer of an unbounded world hands the card
+     * positions measured from the camera, and the camera moves by fractions of
+     * a texel every frame; quantising a centre that is <em>already</em> measured
+     * from it quantises the wrong quantity and the grid slides anyway. So the
+     * centre is snapped where it is stationary — against the world — and the
+     * camera is subtracted afterwards, in {@code double}, exactly.
+     *
+     * @param centreX where the box is centred, in <b>world</b> coordinates
+     * @param fromX  the origin the geometry this matrix will be applied to is
+     *               measured from, also in world coordinates: the camera, for
+     *               an eye-relative renderer, and the origin for one whose
+     *               vertices are absolute
+     * @param radius half the box, across and up: how far shadows reach
+     * @param depth  how deep the box is along the sun's own axis; everything
+     *               within it can cast, and anything above the top of it casts
+     *               nothing
+     * @param texels the shadow map's resolution, for the snapping; {@code 0}
+     *               or less leaves the box exactly where it was asked for
+     */
+    public static Mat4 sunlight(double sunX, double sunY, double sunZ,
+                                double centreX, double centreY, double centreZ,
+                                double fromX, double fromY, double fromZ,
+                                double radius, double depth, int texels) {
+        Mat4 rotation = lookAlong(-sunX, -sunY, -sunZ);
+        double[] centre = new double[4];
+        rotation.transform(centreX, centreY, centreZ, centre);
+        if (texels > 0) {
+            double texel = 2 * radius / texels;
+            centre[0] = Math.floor(centre[0] / texel) * texel;
+            centre[1] = Math.floor(centre[1] / texel) * texel;
+        }
+        double[] from = new double[4];
+        rotation.transform(fromX, fromY, fromZ, from);
+        // Slid back along the sun's axis by half the depth, so the box straddles
+        // the centre rather than starting at it: a tree is as likely to be
+        // between the sun and the ground as behind it.
+        Mat4 recentre = translation(from[0] - centre[0], from[1] - centre[1],
+                from[2] - centre[2] + depth / 2);
+        return orthographic(radius, radius, 0, depth).times(recentre).times(rotation);
+    }
+
     private static Mat4 view(EyeCamera eye, boolean translate) {
         double yaw = eye.yaw(), pitch = eye.pitch();
         double cy = Math.cos(yaw), sy = Math.sin(yaw);

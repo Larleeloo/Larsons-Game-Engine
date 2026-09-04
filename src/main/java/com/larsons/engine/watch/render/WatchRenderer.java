@@ -6,6 +6,7 @@ import com.larsons.engine.graphics.TerrainPass;
 import com.larsons.engine.graphics.draw.DrawTarget;
 import com.larsons.engine.watch.WatchClock;
 import com.larsons.engine.watch.light.LightField;
+import com.larsons.engine.watch.light.SkyLight;
 import com.larsons.engine.watch.world.WatchMaterials;
 
 import java.util.ArrayList;
@@ -61,6 +62,24 @@ import java.util.List;
  * per frame as {@link MeshPass.Light}s and are applied per fragment on a card
  * and per triangle here. See
  * {@link LightField} for what is burning and what each one does to a surface.
+ *
+ * <h2>…and a third, which only one backend answers</h2>
+ *
+ * <p>{@link #setAtmosphere} adds the rest of the environment — where the sun
+ * is and what colour, what the sky and the ground bounce back, how thick the
+ * air is and where the mist lies. It is a <em>description</em> rather than an
+ * instruction, because the two backends have wildly different budgets: the card
+ * spends a shadow map and a per-fragment hemisphere on it, and this painter
+ * spends nothing at all and keeps the flat multiplier.
+ *
+ * <p><b>That divergence is deliberate and is the only one.</b> Both paths agree
+ * on the hour, on the fog's colour and range, and on every lamp; where they
+ * differ is in how richly the same described world is expressed. A player
+ * switching backends sees the same time of day and the same camp, drawn once
+ * with a sun in it and once without. The alternative — putting a directional
+ * term in the painter as well — costs a normal for every triangle in the frame
+ * rather than only the ones near a flame, on the thread that is also running
+ * the game.
  *
  * <h2>What is culled, and where</h2>
  *
@@ -129,6 +148,21 @@ public final class WatchRenderer {
     private int drawn, culled, submitted;
 
     /**
+     * The sun, the air and the grade — <b>the half of the light only a card is
+     * asked for.</b>
+     *
+     * <p>{@link MeshPass.Sky#PLAIN} until somebody says otherwise, and that is
+     * the whole of what keeps the painter path and every other caller of this
+     * renderer (the portraits, the guide's little turntables) exactly as they
+     * were. See {@link #setAtmosphere}.
+     */
+    private MeshPass.Sky sky = MeshPass.Sky.PLAIN;
+
+    /** Kept from {@link #begin}, because {@link #setAtmosphere} rebuilds from them. */
+    private WatchClock clock;
+    private int skyRgb;
+
+    /**
      * Start a frame: paint the sky, and empty the queue.
      *
      * @param clock what time it is, which decides the light and the sky
@@ -155,9 +189,46 @@ public final class WatchRenderer {
         this.culled = 0;
         this.submitted = 0;
         this.lights.clear();
+        this.clock = clock;
+        this.skyRgb = clock.skyColour(skyRgb);
+        // Plain until told: a caller that draws a world without describing the
+        // weather over it gets the picture this renderer drew before any of the
+        // sky existed, on both paths.
+        this.sky = MeshPass.Sky.PLAIN;
         clock.lightTint(tint);
-        sky(target, clock, clock.skyColour(skyRgb));
+        sky(target, clock, this.skyRgb);
     }
+
+    /**
+     * The sun and the air the world is standing in — <b>the card's half of the
+     * light.</b>
+     *
+     * <p>Called after {@link #begin}, from which it takes the hour and this
+     * frame's two colours; what it adds is everything the clock cannot know,
+     * which is the weather and where the ground is. The result is one
+     * {@link MeshPass.Sky} handed to the backend in {@link #flush}, and a
+     * backend that does nothing with it — every backend but the GL one — draws
+     * exactly what it drew before.
+     *
+     * <p>Deliberately <em>not</em> applied to the painter's own arithmetic. The
+     * painter shades a triangle at a time on the thread that is also running
+     * the game, and a directional term costs it a normal for every triangle in
+     * the frame rather than only the ones near a flame; the flat multiplier it
+     * already has is the right answer at that budget. The two paths therefore
+     * agree on the hour and diverge on how richly they express it, which is the
+     * honest trade and is stated here so nobody has to discover it.
+     *
+     * @see SkyLight
+     */
+    public void setAtmosphere(double weather, double overcast, boolean submerged,
+                              double floorZ, double seconds) {
+        if (clock == null) return;
+        this.sky = SkyLight.of(clock, skyRgb, fogRgb, weather, overcast, submerged,
+                floorZ, seconds);
+    }
+
+    /** The sky the last {@link #setAtmosphere} worked out; for tests and the HUD. */
+    public MeshPass.Sky atmosphere() { return sky; }
 
     /**
      * The lights this frame is lit by — <b>everything that is burning.</b>
@@ -504,6 +575,10 @@ public final class WatchRenderer {
             // term — see MeshPass.setLighting.
             meshPass.setLighting(lights, (float) tint[0], (float) tint[1],
                     (float) tint[2]);
+            // …and the sun, the air and the grade, which the painter has no
+            // budget for and a card has nothing better to spend on. See
+            // setAtmosphere for why only one of the two paths gets this.
+            meshPass.setSky(sky);
             meshPass.draw(gpuDraws, eye, fogRgb, fogStart, fogEnd);
             drawn = submitted;
             gpuDraws.clear();
