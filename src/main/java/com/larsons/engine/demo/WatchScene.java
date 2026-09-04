@@ -983,6 +983,7 @@ public class WatchScene extends AbstractScene {
             if (debugging() && input.isKeyJustPressed(java.awt.event.KeyEvent.VK_K)) {
                 summonMutant();
             }
+            windClock(dt, input);
             // Here rather than in `act`, which is below the panel branch, so
             // that a poll can be answered from the satchel screen. A poll is
             // open for half a minute and an abstention is a no — somebody who
@@ -1499,6 +1500,90 @@ public class WatchScene extends AbstractScene {
      * Which of the three the next press of K produces. See {@link #summonMutant}.
      */
     private int summonNext;
+
+    /** How fast the clock scrubs while a key is held, in days per second. */
+    private static final double SCRUB_RATE = 3 / 24.0;
+
+    /**
+     * How often a held scrub tells the host, in seconds.
+     *
+     * <p>Sixty messages a second to move a sky is absurd, and unnecessary: the
+     * message carries an <em>absolute</em> hour rather than a step, so the
+     * hour is right after the next one whatever happened to the ones before.
+     * A dozen a second is smooth enough that the sun does not visibly step.
+     */
+    private static final double SCRUB_INTERVAL = 0.08;
+
+    private double scrubbing = -1;
+    private double scrubSent;
+
+    /**
+     * <kbd>,</kbd> and <kbd>.</kbd>, in debug mode: scrub the time of day.
+     * <kbd>/</kbd> puts it back on the real clock.
+     *
+     * <p><b>Held rather than tapped</b>, and that is the whole of why this is
+     * worth having over a key that jumps an hour. What a tester is checking is
+     * not "what does six o'clock look like" but "does the light do anything
+     * ugly on the way there" — the sun crossing the horizon, the fog lifting,
+     * the fires becoming worth lighting, a tree's shadow swinging round and
+     * stretching out. All of that is a <em>motion</em>, and three hours a
+     * second is fast enough to see it and slow enough to stop on the frame you
+     * wanted.
+     *
+     * <p>Raw keys rather than {@link com.larsons.engine.input.GameAction}s, for
+     * {@link #summonMutant}'s reason: winding the clock is never going to be a
+     * player verb, and a controls screen listing one that is always refused is
+     * exactly what {@link Debug}'s class note says a menu item would do wrong.
+     * The three sit together under one hand on any keyboard, which is as much
+     * discoverability as a debug key needs given the readout names them.
+     *
+     * <p>Local as well as sent. Solo there is no host to answer and the game
+     * object is right here; hosting, the same call is the authoritative one. A
+     * guest sends and waits for the snapshot, which is the only arrangement in
+     * which the party's sky and this player's agree.
+     */
+    private void windClock(double dt, InputManager input) {
+        if (!debugging() || session == null) return;
+        if (input.isKeyJustPressed(java.awt.event.KeyEvent.VK_SLASH)) {
+            scrubbing = -1;
+            if (session.local() != null) {
+                if (session.local().followWallClock(session.selfId())) {
+                    picked("Clock back to " + WatchClock.localTimeOf(
+                            view().timeOfDay()).withNano(0));
+                }
+            } else if (session.client() != null) {
+                session.client().sendClock(0, true);
+            }
+            return;
+        }
+        int way = 0;
+        if (input.isKeyDown(java.awt.event.KeyEvent.VK_PERIOD)) way++;
+        if (input.isKeyDown(java.awt.event.KeyEvent.VK_COMMA)) way--;
+        if (way == 0) {
+            scrubbing = -1;
+            return;
+        }
+        // Started from wherever the world actually is, so that letting go and
+        // pressing again picks up from what is on screen rather than from
+        // whatever this side last asked for.
+        if (scrubbing < 0) {
+            scrubbing = view().timeOfDay();
+            scrubSent = -1;
+        }
+        scrubbing += way * SCRUB_RATE * dt;
+        scrubbing -= Math.floor(scrubbing);
+        // Against the simulation clock rather than the drawing one: this runs
+        // in `update`, where the drawing clock is a frame stale and — on a
+        // machine that never draws, which is what a test is — never moves at
+        // all.
+        if (scrubSent >= 0 && animClock - scrubSent < SCRUB_INTERVAL) return;
+        scrubSent = animClock;
+        if (session.local() != null) {
+            session.local().setTimeOfDay(session.selfId(), scrubbing);
+        } else if (session.client() != null) {
+            session.client().sendClock(scrubbing, false);
+        }
+    }
 
     /** Whether this player is in debug mode, as the last snapshot has it. */
     private boolean debugging() {
@@ -4356,7 +4441,7 @@ public class WatchScene extends AbstractScene {
             // Only once the mode is on, because it is the only verb on this
             // line that would otherwise refuse — and a hint for a key that does
             // nothing is worse than no hint. See Debug.Power.MAPS.
-            if (debugging()) keys += " · M map · K summon";
+            if (debugging()) keys += " · M map · K summon · ,. clock · / real";
             label(target, keys, pad, viewportHeight - pad - 22, HUD_SMALL,
                     new Color(150, 168, 152));
         }
@@ -4415,9 +4500,13 @@ public class WatchScene extends AbstractScene {
                 + (lamp == null ? "hands empty" : "carrying " + lamp.displayName()));
         // …and the sky the card is drawing under, which is otherwise invisible
         // to everything but a screenshot. The shadow figure is the one to watch
-        // while tuning: it is what turns the second pass on, so a zero here
-        // with a sun in the frame is a wood that has quietly stopped costing
-        // anything and quietly stopped having shadows in it.
+        // while tuning: it is what turns the sun's second pass on, so a zero
+        // here with a sun in the frame is a wood that has quietly stopped
+        // costing anything and quietly stopped having shadows in it.
+        //
+        // A zero after dark is expected and says nothing about whether there
+        // are shadows: that is when the brightest fire takes over the pass
+        // instead, and "map" below reports either of them. See GlLampShadow.
         MeshPass.Sky sky = renderer.atmosphere();
         lines.add("sky    sun " + Math.round(Math.toDegrees(Math.asin(
                 Math.max(-1, Math.min(1, sky.sunZ()))))) + "° · shadow "

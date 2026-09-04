@@ -355,6 +355,79 @@ public final class Mat4 {
         return orthographic(radius, radius, 0, depth).times(recentre).times(rotation);
     }
 
+    /**
+     * The six directions a cube map's faces look, as
+     * {@code {right, up, forward}} triples in the order OpenGL numbers them:
+     * <b>+X, −X, +Y, −Y, +Z, −Z</b>.
+     *
+     * <p>Not a basis anybody would derive from first principles, and not one
+     * that agrees with the rest of this class: {@code right × up} comes out as
+     * <em>minus</em> forward on every one of the six. That is not a mistake to
+     * be tidied up. A cube map's faces were specified to match the layout of a
+     * photographed skybox, which is a cube seen from the <em>outside</em>, and
+     * the sampling rules in the GL spec bake that handedness in. A basis wound
+     * the engine's way would draw each face mirrored, and mirrored depth is
+     * invisible on the four faces of a lamp that happen to be symmetrical and
+     * plainly wrong on the two that are not — which is exactly the bug that is
+     * impossible to find by looking at a fire in a wood.
+     *
+     * <p>What it costs is that a face's triangles come out wound backwards, so
+     * the pass that draws them cannot cull. {@link GlLampShadow} does not cull
+     * anyway — half of what casts a shadow here is a single-sided leaf spray —
+     * so the price is already paid.
+     */
+    private static final double[][] CUBE_FACES = {
+            {0, 0, -1,   0, -1, 0,    1, 0, 0},    // +X
+            {0, 0, 1,    0, -1, 0,   -1, 0, 0},    // −X
+            {1, 0, 0,    0, 0, 1,     0, 1, 0},    // +Y
+            {1, 0, 0,    0, 0, -1,    0, -1, 0},   // −Y
+            {1, 0, 0,    0, -1, 0,    0, 0, 1},    // +Z
+            {-1, 0, 0,   0, -1, 0,    0, 0, -1},   // −Z
+    };
+
+    /**
+     * One face of the six a point light casts through: a ninety-degree
+     * perspective, aimed down a cube-map face's own axis.
+     *
+     * <p>Consumes points already measured <b>from the light</b>, because that is
+     * the frame the lookup is in as well — a cube map is addressed by a
+     * direction, and the direction from the lamp to a fragment is the whole of
+     * the query. A caller with world geometry composes this with a
+     * {@link #translation} of {@code (origin − lamp)}, in {@code double}, for
+     * {@link #eyeRelativeModelView}'s reason.
+     *
+     * <p>Here rather than in the GL backend so it can be <em>checked</em>: the
+     * one thing that makes a cube shadow map wrong is a face basis that is
+     * rotated or mirrored, and a headless test can push a known direction
+     * through this and assert which face and which corner it lands on. Read off
+     * a driver instead and the symptom is a campfire whose shadows point the
+     * wrong way in two of six directions.
+     *
+     * @param face  {@code 0}–{@code 5}, the order {@code GL_TEXTURE_CUBE_MAP_POSITIVE_X}
+     *              and its five successors are numbered in
+     * @param near  the near plane; a lamp is inside its own geometry, so this
+     *              wants to be small, and the reciprocal in the depth means
+     *              <em>too</em> small throws the precision away
+     * @param far   the light's reach; nothing beyond it is lit, so nothing
+     *              beyond it need cast
+     */
+    public static Mat4 cubeFace(int face, double near, double far) {
+        double[] basis = CUBE_FACES[face];
+        float[] rotation = new float[16];
+        // The three vectors go in as rows, which is a transpose: a basis's
+        // matrix rotates *into* that basis, and a column-major array's rows are
+        // its every-fourth entries.
+        for (int row = 0; row < 3; row++) {
+            rotation[row] = (float) basis[row * 3];
+            rotation[4 + row] = (float) basis[row * 3 + 1];
+            rotation[8 + row] = (float) basis[row * 3 + 2];
+        }
+        rotation[15] = 1;
+        // A square face, and half a right angle each side of its axis: six of
+        // these tile the whole sphere with no gap and no overlap.
+        return perspective(Math.PI / 2, 1, near, far).times(new Mat4(rotation));
+    }
+
     private static Mat4 view(EyeCamera eye, boolean translate) {
         double yaw = eye.yaw(), pitch = eye.pitch();
         double cy = Math.cos(yaw), sy = Math.sin(yaw);

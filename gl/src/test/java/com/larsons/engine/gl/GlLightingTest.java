@@ -1,6 +1,7 @@
 package com.larsons.engine.gl;
 
 import com.larsons.engine.graphics.EyeCamera;
+import com.larsons.engine.graphics.Mat4;
 import com.larsons.engine.graphics.MeshPass;
 import com.larsons.engine.watch.render.Mesh;
 import com.larsons.engine.watch.world.WatchMaterial;
@@ -336,6 +337,292 @@ class GlLightingTest {
         assertTrue(east - far > 18,
                 "the eastern half is no brighter under the lamp than it is "
                         + "seventeen metres away, so nothing was lit");
+    }
+
+    // --- and the fire, after the sun has gone down ------------------------------------
+
+    /** Every lamp-cube uniform survived the link, on the same principle again. */
+    @Test
+    void theWorldShaderCompilesWithItsLampShadows() {
+        assertTrue(program.lampShadowUniformsResolved(),
+                "the driver did not keep the lamp cube's uniforms — a "
+                        + "samplerCubeShadow left at zero samples the colour atlas, "
+                        + "which is a mismatched sampler and never a shadow");
+    }
+
+    /**
+     * <b>A post beside a fire throws a shadow, and the shadow spreads.</b>
+     *
+     * <p>The thing a lamp gives that the sun cannot. Sunlight is parallel, so a
+     * trunk's shadow is the width of the trunk however far it runs; a fire is a
+     * <em>point</em>, so the same trunk's shadow widens as it goes and reaches
+     * the far side of the clearing. That divergence is what makes firelight
+     * read as firelight, and it is what this asserts — not merely that
+     * something got darker, but that the dark patch is wider three metres out
+     * than it is at the post.
+     *
+     * <p>So: a lamp, a metre-wide post two metres in front of it, and four
+     * patches of ground read off the frame with the cube map on and off. Two of
+     * them are in line with the post and must go dark; the third is the same
+     * lateral offset from the shadow's axis at two different distances, and it
+     * has to be <em>lit</em> near the post and <em>dark</em> far from it. Only a
+     * spreading shadow does that. The fourth is well clear and must not change
+     * at all, which is what catches acne.
+     */
+    @Test
+    void aPostBesideAFireThrowsAShadowThatSpreads() {
+        EyeCamera eye = clearing();
+        List<MeshPass.Draw> scene = List.of(ground().toDraw(1), post().toDraw(2));
+        int[] unshadowed = renderNight(eye, camp(), scene, false);
+        int[] shadowed = renderNight(eye, camp(), scene, true);
+        assumeTrue(unshadowed != null && shadowed != null,
+                "no offscreen surface to draw into");
+
+        int behind = luma(shadowed, eye, 0, 0) - luma(unshadowed, eye, 0, 0);
+        assertTrue(behind < -20, "the post cast no shadow at all: the ground directly "
+                + "behind it came back " + behind + "/255 different");
+
+        int along = luma(shadowed, eye, 0, -3) - luma(unshadowed, eye, 0, -3);
+        assertTrue(along < -12, "the shadow stopped three metres from the post: "
+                + along + "/255 there against " + behind + " at its foot");
+
+        // The divergence, which is the whole point. Both of these are 1.1 m off
+        // the axis; the post is only half a metre wide, so a parallel shadow
+        // would leave them both lit and an equal-width one would leave them
+        // both dark.
+        int nearAxis = luma(shadowed, eye, 1.1, 1.0) - luma(unshadowed, eye, 1.1, 1.0);
+        int farAxis = luma(shadowed, eye, 1.1, -3) - luma(unshadowed, eye, 1.1, -3);
+        assertTrue(Math.abs(nearAxis) <= 6,
+                "ground a metre off the axis and level with the post went "
+                        + nearAxis + "/255 darker; the shadow is far too wide there "
+                        + "to have come from a half-metre post");
+        assertTrue(farAxis < -10,
+                "the same metre off the axis, three metres further on, changed by "
+                        + farAxis + "/255 — the shadow is not spreading, which is a "
+                        + "point light being treated as a parallel one");
+
+        // …and open ground the post cannot reach is untouched, which is the
+        // assertion that catches a surface shadowing itself.
+        int clear = luma(shadowed, eye, 6, 0) - luma(unshadowed, eye, 6, 0);
+        assertTrue(Math.abs(clear) <= 6, "open ground six metres to the side changed by "
+                + clear + "/255 when the lamp's cube was switched on — that is the "
+                + "ground shadowing itself, which is acne");
+    }
+
+    /**
+     * <b>A fire you have sat down at is drawn once.</b>
+     *
+     * <p>Six faces is more depth than the sun's whole map, and it is only
+     * affordable because a fire does not move and neither does a wood. The
+     * cache is against the lamp's own position and what is standing round it,
+     * both of which hold still while the player watches the flames — so the
+     * second frame must reuse it, and must draw exactly the same picture doing
+     * so.
+     */
+    @Test
+    void aFireThatHasNotMovedDrawsItsCubeOnceAndThenKeepsIt() {
+        EyeCamera eye = clearing();
+        GlSurface surface = new GlSurface(0);
+        GlMeshPass pass = new GlMeshPass(() -> null);
+        try {
+            surface.resize(WIDTH, HEIGHT);
+            surface.bind();
+            glViewport(0, 0, WIDTH, HEIGHT);
+            pass.setTexture(WatchMaterials.atlas(), WatchMaterials.revision());
+            pass.setLighting(camp(), NIGHT, NIGHT, NIGHT_BLUE);
+            pass.setSky(scattering(0));
+
+            List<MeshPass.Draw> scene = List.of(ground().toDraw(1), post().toDraw(2));
+            int[] first = frame(surface, pass, scene, eye);
+            assumeTrue(pass.redrewLampShadowsLastFrame(),
+                    "this driver gave us no lamp cube to test the caching of");
+
+            int[] second = frame(surface, pass, scene, eye);
+            assertFalse(pass.redrewLampShadowsLastFrame(),
+                    "a second frame of a fire that has not moved, in a wood that has "
+                            + "not moved, drew all six faces of the cube again");
+            assertArrayEquals(first, second,
+                    "the reused cube did not draw the same picture, so what the main "
+                            + "pass looks up is no longer what was written");
+        } finally {
+            pass.dispose();
+            surface.close();
+            GlSurface.unbind();
+        }
+    }
+
+    /**
+     * <b>…and a flame flickering does not count as the fire moving.</b>
+     *
+     * <p>The cache above is worth nothing without this, and it is the kind of
+     * thing that is invisible until somebody profiles a camp.
+     * {@code LightField} wobbles a flame's radius by six percent on every
+     * single frame — that is what makes firelight look alive — so a map cached
+     * against the radius <em>exactly</em> is a map that is never once reused,
+     * six faces of depth every frame, and the frame rate at a camp back where
+     * it was before any of this was optimised. So the reach is compared to a
+     * fifth and the far plane is set that much beyond it.
+     */
+    @Test
+    void aFlameFlickeringDoesNotCountAsTheFireMoving() {
+        EyeCamera eye = clearing();
+        GlSurface surface = new GlSurface(0);
+        GlMeshPass pass = new GlMeshPass(() -> null);
+        try {
+            surface.resize(WIDTH, HEIGHT);
+            surface.bind();
+            glViewport(0, 0, WIDTH, HEIGHT);
+            pass.setTexture(WatchMaterials.atlas(), WatchMaterials.revision());
+            pass.setSky(scattering(0));
+            List<MeshPass.Draw> scene = List.of(ground().toDraw(1), post().toDraw(2));
+
+            int redraws = 0;
+            for (int frame = 0; frame < 12; frame++) {
+                // The same wobble LightField applies, and the same shape: the
+                // radius between ninety-four percent and all of it, the
+                // intensity swinging further still.
+                double wobble = 0.5 + 0.5 * Math.sin(frame * 1.7);
+                pass.setLighting(List.of(MeshPass.Light.of(0, 5, 0.7, 0xFFC46A,
+                                LAMP_REACH * (0.94 + 0.06 * wobble), 4 * (0.8 + 0.2 * wobble))),
+                        NIGHT, NIGHT, NIGHT_BLUE);
+                frame(surface, pass, scene, eye);
+                if (pass.redrewLampShadowsLastFrame()) redraws++;
+            }
+            assumeTrue(redraws > 0, "this driver gave us no lamp cube at all");
+            assertEquals(1, redraws,
+                    "a fire that only flickered redrew its cube " + redraws + " times "
+                            + "in twelve frames; the cache is comparing the radius "
+                            + "exactly and a flame's radius is never twice the same");
+        } finally {
+            pass.dispose();
+            surface.close();
+            GlSurface.unbind();
+        }
+    }
+
+    /**
+     * <b>The face cull and the face projection agree about what is in a face.</b>
+     *
+     * <p>{@link GlLampShadow} decides which of the six faces a mesh is drawn
+     * into with four dot products, and {@link Mat4#cubeFace} decides where it
+     * lands once it is. Those are two spellings of one cube, in two classes, and
+     * the way they come apart is not a crash — it is a mesh culled out of the
+     * face it was actually in, which is a shadow with a quadrant missing that
+     * only appears when something stands in exactly the wrong place.
+     *
+     * <p>So every direction is pushed through both. The cull is allowed to be
+     * <em>generous</em> — it works on a ball and may keep a mesh a projection
+     * then clips away — but never mean: anything the projection puts inside a
+     * face, the cull must have kept.
+     */
+    @Test
+    void theFaceCullKeepsEverythingTheFaceProjectionDraws() {
+        GlLampShadow cube = new GlLampShadow();
+        try {
+            EyeCamera eye = clearing();
+            List<MeshPass.Light> lamp = List.of(
+                    MeshPass.Light.of(0, 0, 0, 0xFFC46A, LAMP_REACH, 2));
+            assumeTrue(cube.aim(lamp, eye, 1, false) == 0,
+                    "this driver would not give us a lamp cube");
+            cube.adoptLamp();
+
+            int kept = 0;
+            for (int face = 0; face < 6; face++) {
+                Mat4 projection = Mat4.cubeFace(face, 0.12, LAMP_REACH);
+                for (double x = -4; x <= 4; x += 1) {
+                    for (double y = -4; y <= 4; y += 1) {
+                        for (double z = -4; z <= 4; z += 1) {
+                            if (x == 0 && y == 0 && z == 0) continue;
+                            double[] at = new double[4];
+                            projection.transform(x, y, z, at);
+                            boolean drawn = at[3] > 0
+                                    && Math.abs(at[0]) <= at[3]
+                                    && Math.abs(at[1]) <= at[3];
+                            boolean culled = cube.faceCasts(face, x, y, z, 0);
+                            if (culled) kept++;
+                            assertTrue(!drawn || culled,
+                                    "(" + x + ", " + y + ", " + z + ") lands inside "
+                                            + "face " + face + " and the cull threw it "
+                                            + "away, so that face is missing geometry "
+                                            + "that belongs in it");
+                        }
+                    }
+                }
+            }
+            // The cull must actually be doing something, or the assertion above
+            // passes on a method that returns true.
+            assertTrue(kept < 6 * 728 / 2,
+                    "the face cull kept " + kept + " of " + (6 * 728) + " points, "
+                            + "which is not a cull");
+        } finally {
+            cube.close();
+        }
+    }
+
+    /** How far the test's fire reaches, in metres. */
+    private static final double LAMP_REACH = 14;
+
+    /** …and the hour it burns in: dark enough that its shadow is worth drawing. */
+    private static final float NIGHT = 0.25f, NIGHT_BLUE = 0.28f;
+
+    /** One fire, standing low, off to the north of the clearing. */
+    private static List<MeshPass.Light> camp() {
+        return List.of(MeshPass.Light.of(0, 5, 0.7, 0xFFC46A, LAMP_REACH, 4));
+    }
+
+    /**
+     * A half-metre post two metres south of it, taller than the flame.
+     *
+     * <p>Taller on purpose: a post the light can see over would put a bright
+     * band beyond its own shadow and the far sample would measure the band
+     * rather than the spread. Short enough that the camera, which is eight
+     * metres up and looking down, sees over it to every patch of ground being
+     * read.
+     */
+    private static Mesh post() {
+        Mesh.Builder mesh = Mesh.builder(0, 2, 0, false, 1);
+        float[] uv = new float[4];
+        WatchMaterials.uv(WatchMaterial.DIRT, uv);
+        mesh.quad(0.5f, 0, 0, -0.5f, 0, 0, -0.5f, 0, 1.0f, 0.5f, 0, 1.0f,
+                uv, 0xFF6B5A44);
+        return mesh.build();
+    }
+
+    /**
+     * One frame of the same clearing at night, with the lamp's cube map on or
+     * off.
+     *
+     * <p>Switched by the property rather than by changing the scene, so that
+     * the two frames differ by the shadow lookup and by nothing else at all —
+     * same geometry, same lamp, same hour. {@link GlLampShadow} reads it when
+     * it is constructed, and a pass is constructed per frame here.
+     */
+    private int[] renderNight(EyeCamera eye, List<MeshPass.Light> lights,
+                              List<MeshPass.Draw> scene, boolean lampShadows) {
+        String before = System.getProperty(GlLampShadow.SIZE_PROPERTY);
+        if (!lampShadows) System.setProperty(GlLampShadow.SIZE_PROPERTY, "0");
+        GlSurface surface = new GlSurface(0);
+        GlMeshPass pass = new GlMeshPass(() -> null);
+        try {
+            surface.resize(WIDTH, HEIGHT);
+            surface.bind();
+            glViewport(0, 0, WIDTH, HEIGHT);
+            glClearColor(0, 0, 0, 1);
+            glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
+            pass.setTexture(WatchMaterials.atlas(), WatchMaterials.revision());
+            pass.setLighting(lights, NIGHT, NIGHT, NIGHT_BLUE);
+            pass.setSky(scattering(0));
+            pass.draw(scene, eye, 0x000000, 400, 800);
+            return surface.readPixels();
+        } catch (RuntimeException e) {
+            return null;
+        } finally {
+            pass.dispose();
+            surface.close();
+            GlSurface.unbind();
+            if (before == null) System.clearProperty(GlLampShadow.SIZE_PROPERTY);
+            else System.setProperty(GlLampShadow.SIZE_PROPERTY, before);
+        }
     }
 
     /**

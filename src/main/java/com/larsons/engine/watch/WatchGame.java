@@ -727,6 +727,43 @@ public final class WatchGame implements Animal.Surroundings {
     }
 
     /**
+     * Wind the world's clock — <b>debug mode only.</b>
+     *
+     * <p>Not a private hour. {@link WatchClock} is one clock per world and the
+     * host's is the one every client adopts, so this moves everybody's sky at
+     * once; in a hosted walk only the host is ever granted debug mode, so
+     * "everybody" is a party who can see who did it. See
+     * {@link Debug.Power#CLOCK}.
+     *
+     * <p>Adopting a time is also what stops the clock following the wall clock
+     * — that is {@link WatchClock#adopt}'s existing contract, written for a
+     * guest taking its host's hour, and it is exactly what is wanted here:
+     * a time somebody wound to should stay wound rather than springing back on
+     * the next tick. {@link #followWallClock} puts it back.
+     *
+     * @return {@code true} if the clock moved
+     */
+    public synchronized boolean setTimeOfDay(int playerId, double timeOfDay) {
+        WatchPlayer player = players.get(playerId);
+        if (player == null || !player.debugging()) return false;
+        clock.adopt(timeOfDay);
+        return true;
+    }
+
+    /**
+     * …and put it back on the real one. Debug mode only, for the same reason.
+     *
+     * @return {@code true} if the clock is now following the wall clock
+     */
+    public synchronized boolean followWallClock(int playerId) {
+        WatchPlayer player = players.get(playerId);
+        if (player == null || !player.debugging()) return false;
+        clock.followWallClock();
+        say(player.name() + " put the clock back to " + clock);
+        return true;
+    }
+
+    /**
      * Whether a player is the one whose walk this is.
      *
      * <p>Alone, there is only one of you. In a party it is whoever arrived

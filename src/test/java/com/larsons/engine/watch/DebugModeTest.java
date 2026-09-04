@@ -402,6 +402,93 @@ class DebugModeTest {
         session.close();
     }
 
+    /**
+     * The comma and the full stop wind the world's clock, and only in debug
+     * mode.
+     *
+     * <p>Through the real scene for {@code kSummonsTheThreeMutants}' reason —
+     * these are raw keys, deliberately absent from the bindings, so a test that
+     * called {@code WatchGame.setTimeOfDay} directly would exercise everything
+     * except the part that could be wrong. What that part is: the keys are read
+     * inside the {@code !typingText()} guard, because a comma is a character
+     * and a player naming a map must be able to type one.
+     */
+    @Test
+    void theClockWindsOnCommaAndFullStopAndOnlyInDebugMode(@TempDir Path dir) {
+        GameContext ctx = new GameContext(null, new GameTypeStore(dir.toString()));
+        WatchStore store = new WatchStore(dir.resolve("walks").toString());
+        WatchScene walk = new WatchScene(ctx);
+        SceneManager scenes = new SceneManager();
+        scenes.setViewport(800, 480);
+        scenes.register(WatchLobbyScene.NAME, new WatchLobbyScene(ctx, store));
+        scenes.register(WatchScene.NAME, walk);
+
+        WatchGame game = new WatchGame(new WatchGame.Config(88L, "Wound", 1));
+        WatchPlayer me = game.join(1, "Kara");
+        WatchSession session = WatchSession.solo(game);
+        session.setSelfId(1);
+        walk.adopt(session, store);
+        scenes.setScene(WatchScene.NAME);
+
+        InputManager input = new InputManager();
+        for (int i = 0; i < 3; i++) {
+            input.newFrame();
+            scenes.update(1 / 60.0, input);
+        }
+
+        // Before the code, a full stop is a full stop.
+        double before = game.clock().timeOfDay();
+        hold(scenes, input, KeyEvent.VK_PERIOD, 30);
+        assertEquals(before, game.clock().timeOfDay(), 1e-6,
+                "the clock moved without the code being typed");
+
+        typeCode(scenes, input);
+        assertTrue(me.debugging());
+
+        // Half a second of holding the full stop is an hour and a half of sky.
+        before = game.clock().timeOfDay();
+        hold(scenes, input, KeyEvent.VK_PERIOD, 30);
+        double forward = game.clock().timeOfDay();
+        assertTrue(wrappedGap(before, forward) > 0.02,
+                "half a second of winding moved the clock by "
+                        + wrappedGap(before, forward) + " of a day");
+        assertFalse(game.clock().followsWallClock(),
+                "a wound clock is still following the wall clock, so it will "
+                        + "spring back on the next tick");
+
+        // …and the comma takes it back the other way.
+        hold(scenes, input, KeyEvent.VK_COMMA, 60);
+        assertTrue(wrappedGap(game.clock().timeOfDay(), forward) > 0.02,
+                "the comma did not wind the clock back");
+
+        // The slash puts it on the real clock again.
+        pressKey(scenes, input, KeyEvent.VK_SLASH);
+        assertTrue(game.clock().followsWallClock(),
+                "the slash did not put the clock back on the wall");
+        session.close();
+    }
+
+    /** How far apart two times of day are, the short way round. */
+    private static double wrappedGap(double a, double b) {
+        double gap = Math.abs(a - b) % 1;
+        return Math.min(gap, 1 - gap);
+    }
+
+    /** Hold one key down across {@code frames} ticks, then let it go. */
+    private static void hold(SceneManager scenes, InputManager input, int key,
+                             int frames) {
+        input.keyPressed(new KeyEvent(new JPanel(), KeyEvent.KEY_PRESSED, 0, 0, key,
+                KeyEvent.CHAR_UNDEFINED));
+        for (int i = 0; i < frames; i++) {
+            input.newFrame();
+            scenes.update(1 / 60.0, input);
+        }
+        input.keyReleased(new KeyEvent(new JPanel(), KeyEvent.KEY_RELEASED, 0, 0, key,
+                KeyEvent.CHAR_UNDEFINED));
+        input.newFrame();
+        scenes.update(1 / 60.0, input);
+    }
+
     private static int hostileCount(WatchGame game) {
         int n = 0;
         for (Animal animal : game.animals()) {

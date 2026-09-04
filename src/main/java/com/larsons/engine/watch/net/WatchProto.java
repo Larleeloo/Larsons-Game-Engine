@@ -347,6 +347,27 @@ public final class WatchProto {
     }
 
     /**
+     * Wind the world's clock — <b>debug mode only.</b>
+     *
+     * <p>An <em>absolute</em> time of day rather than a step, and that is the
+     * point: scrubbing sends a stream of these while a key is held, and a
+     * stream of "add ten minutes" messages ends up wherever the packet loss
+     * left it. A stream of "it is now twenty past four" ends up at twenty past
+     * four whichever of them arrived.
+     *
+     * <p>{@code w} asks for the real clock back instead, in which case
+     * {@code d} is not read. One message rather than two because they are one
+     * intention with a state attached — the same argument the N key makes for
+     * lighting and dousing one lamp.
+     */
+    public static Map<String, Object> clock(double timeOfDay, boolean wallClock) {
+        Map<String, Object> m = msg("clock");
+        m.put("d", timeOfDay);
+        if (wallClock) m.put("w", 1);
+        return m;
+    }
+
+    /**
      * A spyglass going up or coming down.
      *
      * <p>Its own message rather than a field on {@code move}, because it

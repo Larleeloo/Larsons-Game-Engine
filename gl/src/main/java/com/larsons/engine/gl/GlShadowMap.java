@@ -42,7 +42,7 @@ import static org.lwjgl.opengl.GL33C.*;
  *       what this game <em>is</em> — never rebuilds anything.</li>
  *   <li><b>The depth pass has no fragment shader worth the name.</b> An empty
  *       one, so a card can reject fragments against depth before shading them
- *       at two to four times the rate. See {@link #PLAIN_FRAGMENT} for why the
+ *       at two to four times the rate. See {@link GlDepthProgram} for why the
  *       alpha test that used to be there was costing that for nothing.</li>
  *   <li><b>A quarter of the pixels.</b> A 1024² map over eighty metres is a
  *       sixteen-centimetre texel, under the width of the four-tap hardware
@@ -157,9 +157,6 @@ final class GlShadowMap implements AutoCloseable {
      */
     private static final int SNAP_TEXELS = 16;
 
-    /** Discard below this in the depth pass, matching the opaque pass's cut. */
-    private static final float ALPHA_CUT = 0.5f;
-
     /** Depth-buffer slope offset, in the driver's own units. */
     private static final float POLYGON_OFFSET_SLOPE = 2.4f;
 
@@ -176,77 +173,16 @@ final class GlShadowMap implements AutoCloseable {
 
     private static final double SLOPE_BIAS_METRES = 0.42;
 
-    private static final String VERTEX = """
-            #version 330 core
-            layout(location = 0) in vec3 aPos;
-            layout(location = 1) in vec2 aUV;
-            uniform mat4 uLightMvp;
-            out vec2 vUV;
-            void main() {
-                gl_Position = uLightMvp * vec4(aPos, 1.0);
-                vUV = aUV;
-            }
-            """;
-
-    /**
-     * The depth pass's fragment shader when nothing in the atlas has a hole in
-     * it — <b>and it is empty, which is the entire point.</b>
-     *
-     * <p>A fragment shader that can {@code discard} makes a fragment's depth
-     * unknowable until it has run, so a card cannot reject fragments against
-     * the depth buffer <em>before</em> shading them. Every modern GPU rejects
-     * them at two to four times the rate it shades them, and every one of them
-     * switches that off for a shader containing the word {@code discard} —
-     * whether or not any fragment ever takes it.
-     *
-     * <p>So the discard is worth having only where it is doing something. In
-     * this game it never was: {@code WatchMaterials} paints every opaque
-     * material at full alpha and only water below it, and water is translucent
-     * and does not cast. The alpha test was costing a texture fetch and the
-     * whole early-depth path on every shadow fragment in order to discard
-     * nothing at all.
-     */
-    private static final String PLAIN_FRAGMENT = """
-            #version 330 core
-            void main() { }
-            """;
-
-    /**
-     * …and the one for an atlas that <em>does</em> have holes in it.
-     *
-     * <p>Still needed, and chosen automatically: a leaf sheet is mostly gaps,
-     * and a canopy that cast the shadow of its own bounding quad would put a
-     * black square under every tree in the wood. {@code GlMeshPass} looks at
-     * the atlas as it uploads it and says which of these two to use, so a
-     * texture pack that introduces a cutout gets the right answer without
-     * anybody remembering to ask for it.
-     */
-    private static final String CUTOUT_FRAGMENT = """
-            #version 330 core
-            in vec2 vUV;
-            uniform sampler2D uAtlas;
-            uniform float uAlphaCut;
-            void main() {
-                if (texture(uAtlas, vUV).a < uAlphaCut) discard;
-            }
-            """;
-
     private final int size;
 
     private int fbo = -1;
     private int depthTexture = -1;
 
-    /** The two depth programs; see {@link #PLAIN_FRAGMENT}. */
-    private final int[] program = {-1, -1};
-    private final int[] uLightMvp = {-1, -1};
-    private final int[] uAtlas = {-1, -1};
-    private final int[] uAlphaCut = {-1, -1};
+    /** The shader; shared with {@link GlLampShadow}, which wants the same one. */
+    private final GlDepthProgram depth = new GlDepthProgram();
 
-    /** Which of the two the pass now open is using. */
-    private int variant;
-
-    private static final int PLAIN = 0;
-    private static final int CUTOUT = 1;
+    /** Whether this frame's casters need the alpha test. */
+    private boolean cutouts;
 
     /** Set once anything refuses; from then on this is a no-op. */
     private boolean unavailable;
@@ -364,7 +300,7 @@ final class GlShadowMap implements AutoCloseable {
     boolean aim(MeshPass.Sky sky, EyeCamera eye, boolean atlasHasCutouts) {
         if (unavailable || sky == null || eye == null || !sky.castsShadows()) return false;
         if (!build()) return false;
-        variant = atlasHasCutouts ? CUTOUT : PLAIN;
+        cutouts = atlasHasCutouts;
 
         // <b>Centred on the player, not on what they are looking at.</b> An
         // earlier version pushed the box half its reach down the view axis, so
@@ -472,11 +408,7 @@ final class GlShadowMap implements AutoCloseable {
         glEnable(GL_POLYGON_OFFSET_FILL);
         glPolygonOffset(POLYGON_OFFSET_SLOPE, POLYGON_OFFSET_UNITS);
 
-        glUseProgram(program[variant]);
-        if (variant == CUTOUT) {
-            glUniform1i(uAtlas[variant], GlTerrainProgram.UNIT_ATLAS);
-            glUniform1f(uAlphaCut[variant], ALPHA_CUT);
-        }
+        depth.use(cutouts);
     }
 
     /**
@@ -542,10 +474,7 @@ final class GlShadowMap implements AutoCloseable {
 
     /** One mesh into the map. */
     void cast(int vao, int vertexCount, float[] lightMvp) {
-        if (vao < 0 || vertexCount <= 0 || lightMvp == null) return;
-        glUniformMatrix4fv(uLightMvp[variant], false, lightMvp);
-        glBindVertexArray(vao);
-        glDrawArrays(GL_TRIANGLES, 0, vertexCount);
+        depth.cast(vao, vertexCount, lightMvp);
     }
 
     /** Close the pass and put the caller's framebuffer and viewport back. */
@@ -626,8 +555,7 @@ final class GlShadowMap implements AutoCloseable {
                         + Integer.toHexString(status));
             }
 
-            buildProgram(PLAIN, PLAIN_FRAGMENT);
-            buildProgram(CUTOUT, CUTOUT_FRAGMENT);
+            depth.build();
             built = true;
             return true;
         } catch (RuntimeException e) {
@@ -639,51 +567,8 @@ final class GlShadowMap implements AutoCloseable {
         }
     }
 
-    private void buildProgram(int which, String fragment) {
-        program[which] = link(compile(GL_VERTEX_SHADER, VERTEX),
-                compile(GL_FRAGMENT_SHADER, fragment));
-        uLightMvp[which] = glGetUniformLocation(program[which], "uLightMvp");
-        uAtlas[which] = glGetUniformLocation(program[which], "uAtlas");
-        uAlphaCut[which] = glGetUniformLocation(program[which], "uAlphaCut");
-    }
-
-    private static int compile(int type, String source) {
-        int shader = glCreateShader(type);
-        glShaderSource(shader, source);
-        glCompileShader(shader);
-        if (glGetShaderi(shader, GL_COMPILE_STATUS) == GL_FALSE) {
-            String log = glGetShaderInfoLog(shader);
-            glDeleteShader(shader);
-            throw new IllegalStateException("depth shader did not compile: " + log);
-        }
-        return shader;
-    }
-
-    private static int link(int vertex, int fragment) {
-        int linked = glCreateProgram();
-        glAttachShader(linked, vertex);
-        glAttachShader(linked, fragment);
-        glBindAttribLocation(linked, GlTerrainProgram.ATTRIB_POSITION, "aPos");
-        glBindAttribLocation(linked, GlTerrainProgram.ATTRIB_UV, "aUV");
-        glLinkProgram(linked);
-        int status = glGetProgrami(linked, GL_LINK_STATUS);
-        glDetachShader(linked, vertex);
-        glDetachShader(linked, fragment);
-        glDeleteShader(vertex);
-        glDeleteShader(fragment);
-        if (status == GL_FALSE) {
-            String log = glGetProgramInfoLog(linked);
-            glDeleteProgram(linked);
-            throw new IllegalStateException("depth shader did not link: " + log);
-        }
-        return linked;
-    }
-
     private void release() {
-        for (int i = 0; i < program.length; i++) {
-            if (program[i] >= 0) glDeleteProgram(program[i]);
-            program[i] = -1;
-        }
+        depth.close();
         if (fbo >= 0) {
             glDeleteFramebuffers(fbo);
             fbo = -1;

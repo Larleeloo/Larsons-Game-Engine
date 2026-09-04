@@ -2743,6 +2743,110 @@ is attenuated by the same air that is carrying it. Leaving out the second was
 the one error that could not be tolerated, because thick fog is exactly when the
 term is largest.
 
+### …and cast shadows after dark (`GlLampShadow`)
+
+> Asked for: shadows cast by light sources even at night — a tree should have a
+> long shadow next to a campfire.
+
+Everything above about shadows is about the sun, and the sun is switched off
+after dark for a good reason: the moon's directional term is a twentieth of
+daylight and its shadows would be a hundredth of the frame, for a whole second
+pass over every mesh in view. A fire two metres from a trunk is not a twentieth
+of anything. It is the brightest thing for a hundred metres, and without a
+shadow of its own a camp at night reads as a wood that has been evenly tinted
+orange — the flat look the vertex bake exists to avoid, arriving by another
+door.
+
+**And the long shadow is the point.** Sunlight is parallel, so a tree's shadow
+is the width of the tree however far it runs. A fire on the ground is a *point*,
+so the same tree's shadow spreads as it goes and reaches the far side of the
+clearing. That divergence is free — it is what a perspective projection does —
+and it is most of why firelight looks like firelight rather than like a dim sun.
+
+So: **one cube depth map, for one lamp.** A cube because a point light shines
+everywhere and a cube is the one shape a card can look up by direction in a
+single fetch; `Mat4.cubeFace` builds the six projections and
+`GlDepthProgram` — extracted from `GlShadowMap`, which wants exactly the same
+shader — draws through them.
+
+Six faces of 512² is more depth than the sun's whole map. It is affordable
+because almost nothing about it happens per frame:
+
+* **One lamp gets it**, the one that matters most from where the camera is
+  standing (`LightCull.airScore`, the ranking the air budget already uses), and
+  only if the camera is within three of its own radii. A camp of six lanterns
+  costs one map, not six.
+* **Only what is inside the lamp casts into it.** Twelve metres is one terrain
+  chunk and its trees — a handful of meshes out of the several hundred in a
+  frame, against the sun's two hundred metres.
+* **Each of those goes only into the faces it is in.** A ninety-degree frustum
+  whose apex is the lamp has four planes through that apex, so the test is four
+  dot products and it usually picks one face out of six.
+* **Then the map is kept.** A fire does not move and neither does a wood.
+  Nothing rebuilt per frame casts anything — the animals, the walkers and the
+  player's own hands are already `casts(false)` — so the map is drawn on the
+  frame you sit down and reused until a chunk finishes meshing.
+* **It does not exist in daylight at all.** A fire at noon casts no shadow you
+  could see. The strength ramps through dusk against the hour's own multiplier
+  rather than switching, so there is no frame where a camp's shadows appear all
+  at once.
+
+**A flame flickering is not the fire moving**, and getting that wrong would have
+cost the whole cache: `LightField` wobbles a flame's radius by six percent on
+*every frame*, so a map compared against the radius exactly is a map that is
+never once reused. The reach is compared to a fifth and the far plane set that
+much beyond it, and the choice of lamp is sticky by sixty percent so a flicker
+cannot hand the map back and forth between a fire and the lantern in your hand.
+
+Measured at 1280×720 on the software rasteriser, a real camp at midnight:
+
+| | cost |
+|---|---|
+| a fire you are sitting at, map cached | **+2.9 ms** |
+| the same at noon | **0.0 ms** — no pass, no lookup |
+| a lamp that moves every frame, nothing cached | **+6.8 ms** |
+
+The last row is the worst case there is — a lantern carried at walking pace,
+redrawing all six faces every frame — and it is what the whole of the caching
+above exists so that you nearly never pay. For comparison, the sun's pass cost
++57 ms before it was cached.
+
+Two things are deliberately left out. The **air** is not shadowed: a volumetric
+shadow means marching this map rather than fetching it once, and the artefact is
+subtle — a tree blocks the ground behind it but not quite all of the haze above
+it. And **only the lamp with the map** is shadowed; the other lamps in a camp
+light as they did before.
+
+`-Dlarsons.render.gl.lampshadow=N` sets a face's edge in texels and `0` skips
+it; `-Dlarsons.render.gl.shadowmap=0` turns both maps off, because somebody who
+has said "no shadow passes on this machine" has said it about this one too.
+
+**The one thing that cannot be got right by looking** is the cube's face basis.
+It is left-handed relative to the rest of the engine — the GL specification
+inherited that from photographed skyboxes — and a face rotated a quarter turn or
+mirrored produces shadows that are wrong in two directions out of six, which in
+a wood at night is unfindable. So it is not checked by looking:
+`GpuTerrainTest` writes out the sampling rule from the specification and asserts
+that where `Mat4.cubeFace` *draws* a direction is where the hardware will *look
+it up*, for every axis and every face diagonal, and `GlLightingTest` asserts
+that the face cull and the face projection agree about what is in a face.
+
+### Winding the clock in debug mode
+
+A new `Debug.Power`: **`,` and `.` scrub the time of day, `/` puts it back on
+the real clock.** Everything §7l added is a function of the hour — the sun's
+angle and colour, the two ambients, whether the shadow pass runs at all, the
+dawn mist, and now whether a fire casts — and all of it was previously testable
+only by waiting, or by editing a constant and rebuilding. It is also how the
+lamp shadows above were tuned.
+
+It goes through the same three pieces every other debug verb does: a row in
+`Debug.Power` so it is listed where the codes are, a `WatchGame.setTimeOfDay`
+that refuses in silence unless the player is in debug mode, and a
+`WatchProto.clock` message so a client scrubbing the clock scrubs it for the
+whole party — the host owns the clock, and a debug verb that only moved the
+sun on one screen would be a party that no longer agrees what time it is.
+
 ### Fog with a height to it
 
 Linear-in-distance haze was doing the whole job, and it is a shorter draw
@@ -2924,6 +3028,27 @@ and the same camp, drawn once with a sun in it and once without.
   lamp standing over one and reaching into the other, sampled either side of
   the join, because the way per-mesh culling goes wrong is not a crash but a
   straight edge of darkness across ground the player is walking over.
+  For the fire's own cube map, four more — and three of the four are there
+  because a cube map is the one thing here that cannot be checked by looking at
+  it. `GpuTerrainTest` writes out the cube-sampling rule **from the OpenGL
+  specification** and asserts that where `Mat4.cubeFace` draws a direction is
+  where the hardware will look it up, for all six axes and every face diagonal,
+  and that the depth the projection stores is the one the shader's closed form
+  recomputes — two expressions for one number, in two languages, neither
+  changeable without the other. `GlLightingTest` then asserts that the face
+  cull never throws away anything the face projection would have drawn (it may
+  be generous; it may not be mean), that **a post beside a fire throws a shadow
+  and the shadow spreads** — the same metre off the axis is lit level with the
+  post and dark three metres further on, which only a diverging shadow does, and
+  open ground to the side is untouched, which is the acne assertion — and that
+  **a flame flickering is not the fire moving**, which is the whole of the
+  caching: `LightField` wobbles a flame's radius on every frame, so a map cached
+  against it exactly is a map redrawn six faces at a time for ever.
+* `DebugModeTest` also covers the clock: `,` and `.` move the time of day and
+  `/` puts it back, none of it does anything until the code is typed, and the
+  scrub is rate-limited against the animation clock rather than the drawing one
+  — the drawing clock is set in `render` and never advances headless, which is
+  the sort of thing that makes a debug key work in a test and not in the game.
 * `WatchSceneTest` — the mini game is on the launch strip, the scenes register,
   the lobby's menu offers what it should.
 * `TagTest` — the four rules of §7k, in order. **The party decides**: a walk for

@@ -317,6 +317,110 @@ class GpuTerrainTest {
         return at;
     }
 
+    // --- and a fourth time, from a lamp, six ways at once ---------------------------
+
+    /** A lamp's near and far planes, as {@code GlLampShadow} sets them. */
+    private static final double LAMP_NEAR = 0.12, LAMP_FAR = 14;
+
+    /**
+     * <b>Every face of a lamp's cube draws exactly what the hardware will look
+     * up in it.</b>
+     *
+     * <p>The one way a cube shadow map goes wrong is a face basis that is
+     * rotated a quarter turn or mirrored, and it is close to unfindable by
+     * looking: four of the six faces of a campfire in a wood are near enough
+     * symmetrical that a mirrored one reads as "the shadows are a bit odd
+     * tonight". So the rule is checked against the specification instead. GL
+     * says which face a direction samples and where on it; {@link Mat4#cubeFace}
+     * says where that direction rasterises. This asserts they are the same
+     * place, to within a rounding error, for a spread of directions that
+     * includes all six axes and both diagonals of every face.
+     *
+     * <p>Getting this wrong and then chasing it through a driver is a day.
+     * Getting it wrong and having this fail is a minute.
+     */
+    @Test
+    void aLampsSixFacesRasteriseWhereTheHardwareWillSample() {
+        double[][] directions = {
+                {1, 0, 0}, {-1, 0, 0}, {0, 1, 0}, {0, -1, 0}, {0, 0, 1}, {0, 0, -1},
+                {3, 1, 0.5}, {-3, 1, 0.5}, {1, 3, -0.5}, {0.5, -3, 1},
+                {0.5, 1, 3}, {-1, 0.5, -3}, {2.9, 1, 1}, {-1, -2.9, -1},
+        };
+        for (double[] direction : directions) {
+            double[] sampled = cubeSample(direction[0], direction[1], direction[2]);
+            int face = (int) sampled[0];
+            double[] drawn = clip(Mat4.cubeFace(face, LAMP_NEAR, LAMP_FAR),
+                    direction[0] * 5, direction[1] * 5, direction[2] * 5);
+            String where = "direction (" + direction[0] + ", " + direction[1] + ", "
+                    + direction[2] + ") on face " + face;
+            assertTrue(Math.abs(drawn[0]) <= 1.0001 && Math.abs(drawn[1]) <= 1.0001,
+                    where + " rasterises outside the face GL samples it from, so the "
+                            + "cube has a seam in it: " + drawn[0] + ", " + drawn[1]);
+            assertEquals(sampled[1], drawn[0], 1e-6,
+                    where + " is drawn a quarter turn or a mirror away from where it "
+                            + "is looked up, across the face");
+            assertEquals(sampled[2], drawn[1], 1e-6,
+                    where + " is drawn a quarter turn or a mirror away from where it "
+                            + "is looked up, up the face");
+        }
+    }
+
+    /**
+     * Which face of a cube map a direction samples, and where on it — the rule
+     * from the OpenGL specification, written out rather than reasoned about.
+     *
+     * @return {@code {face, sc/|ma|, tc/|ma|}}, the second two in the same
+     *         {@code [−1, 1]} the face's own device coordinates are in
+     */
+    private static double[] cubeSample(double x, double y, double z) {
+        double ax = Math.abs(x), ay = Math.abs(y), az = Math.abs(z);
+        if (ax >= ay && ax >= az) {
+            return x > 0 ? new double[] {0, -z / ax, -y / ax}
+                    : new double[] {1, z / ax, -y / ax};
+        }
+        if (ay >= az) {
+            return y > 0 ? new double[] {2, x / ay, z / ay}
+                    : new double[] {3, x / ay, -z / ay};
+        }
+        return z > 0 ? new double[] {4, x / az, -y / az}
+                : new double[] {5, -x / az, -y / az};
+    }
+
+    /**
+     * <b>And the depth in it is the one the shader reconstructs.</b>
+     *
+     * <p>A cube face is a perspective, so its depth is not the distance — it is
+     * a reciprocal of it, squeezed towards the near plane. The fragment shader
+     * cannot afford to rasterise anything to find out what it should have been,
+     * so it recomputes the same curve in closed form from the largest component
+     * of the direction. Two expressions for one number, in two languages,
+     * neither of which can be changed without the other: hence this.
+     */
+    @Test
+    void theDepthInALampsFaceIsTheOneTheShaderRecomputes() {
+        double previous = -2;
+        for (double distance : new double[] {LAMP_NEAR, 0.5, 1, 3, 7, LAMP_FAR}) {
+            // Off-axis on purpose: the reconstruction uses the *major* component
+            // and not the length, and a test down the axis alone cannot tell the
+            // two apart.
+            double[] drawn = clip(Mat4.cubeFace(4, LAMP_NEAR, LAMP_FAR),
+                    distance * 0.4, distance * -0.7, distance);
+            double a = (LAMP_FAR + LAMP_NEAR) / (LAMP_FAR - LAMP_NEAR);
+            double b = -2 * LAMP_FAR * LAMP_NEAR / (LAMP_FAR - LAMP_NEAR);
+            assertEquals(a + b / distance, drawn[2], 1e-5,
+                    "the shader's closed form disagrees with the projection at "
+                            + distance + " metres, so every lamp shadow is biased by a "
+                            + "distance-dependent amount");
+            assertTrue(drawn[2] > previous,
+                    "depth stopped growing with distance at " + distance + " metres");
+            previous = drawn[2];
+        }
+        assertEquals(-1, clip(Mat4.cubeFace(0, LAMP_NEAR, LAMP_FAR),
+                LAMP_NEAR, 0, 0)[2], 1e-5, "the near plane is the front of the buffer");
+        assertEquals(1, clip(Mat4.cubeFace(0, LAMP_NEAR, LAMP_FAR),
+                LAMP_FAR, 0, 0)[2], 1e-5, "and the far plane is the back of it");
+    }
+
     /** A point, through a matrix, into normalised device coordinates. */
     private static double[] clip(Mat4 m, double x, double y, double z) {
         double[] out = new double[4];

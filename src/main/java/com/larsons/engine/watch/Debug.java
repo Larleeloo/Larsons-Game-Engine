@@ -171,6 +171,36 @@ public final class Debug {
                         + "front of you — any biome, any hour, however many."),
 
         /**
+         * Wind the clock: <b>the fourth row, and the class note above named
+         * this one too.</b>
+         *
+         * <p>"A clock that can be wound forward" is the third of the three
+         * examples the note gives of a thing the {@link Satchel} lens cannot
+         * reach, and it is the same shape as {@link #SUMMON}: not a verb
+         * waiting for a price, but a tool for reaching a state of the world you
+         * cannot otherwise arrange to be in. This clock is the <em>wall</em>
+         * clock (see {@link WatchClock}), which is the whole point of it — a
+         * game about when animals are out is a game where dusk happens at dusk.
+         * It is also why nobody testing dusk at eleven in the morning can get
+         * there by waiting.
+         *
+         * <p>What it reaches is most of the game: which animals are out, the
+         * light, the sky, the fog, whether the fires are worth lighting, and
+         * every shadow on the ground. Reaching all of that by waiting is seven
+         * hours.
+         *
+         * <p><b>It moves the world's clock, not a private one</b>, and that is
+         * the one thing to know about it. The mode is per player, but the hour
+         * is the party's — see {@code WatchGame.setTimeOfDay}, which refuses
+         * anybody not in debug mode and which, in a hosted walk, only the host
+         * can be. Winding it forward in company sends everyone to dusk.
+         */
+        CLOCK("Wind the clock",
+                "Scrub the time of day with , and . — the light, the sky, the "
+                        + "fog and which animals are out, without waiting. / "
+                        + "puts it back on the real clock."),
+
+        /**
          * The readout: what the world is doing, in numbers, over the top left.
          *
          * <p>The other half of what "debug mode" means. It is also where a new
