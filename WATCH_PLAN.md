@@ -2847,6 +2847,40 @@ that refuses in silence unless the player is in debug mode, and a
 whole party — the host owns the clock, and a debug verb that only moved the
 sun on one screen would be a party that no longer agrees what time it is.
 
+#### The two clocks, and the one that was not being asked
+
+It shipped not working, **solo only**, and the reason is worth keeping because
+it is a shape rather than a typo.
+
+There are two clocks and there have to be. `WatchGame` keeps the world's — the
+hour animals are out by and the guide stamps sightings with — and it may be on a
+machine in another country. `WatchScene` keeps a second one, because the hour is
+needed sixty times a second by everything that is *drawn*: the sun's angle, the
+sky, the fog, the shadows, the line on the HUD. `syncClock` is the one place
+they are reconciled, and it asked the world for the hour **only when online**.
+Solo, both had been started from the same wall clock and agreed for ever, so the
+gate cost nothing and read as a small saving.
+
+It stopped being free the moment anything could *move* the world's clock. The
+scrub moved the hour the animals kept and the guide recorded, and the screen
+went on drawing the real afternoon — so the keys appeared to do nothing at all,
+which is exactly how it was reported. Two clocks that agree by coincidence are
+one clock with a bug in it waiting for a reason.
+
+**And the test had the same shape as the bug**, which is why it passed: it
+asserted on `game.clock()`, the wire, and never on what was drawn. It now
+asserts that the screen's hour equals the world's after every wind, and a second
+test winds through four hours of one day and checks the sky the backend is
+actually handed — the sun swings east to west, the light gets brighter, and the
+shadow pass switches back on. Reverting the one-line fix fails both, with the
+message "the world wound to X and the screen is still drawing Y".
+
+Two smaller things went with it. The scrub now applies **every frame** solo
+rather than a dozen times a second: rationing exists for the wire, and a tool
+whose whole purpose is watching light *move* must not make the sun step. And the
+scene's drawn hour is exposed as `WatchScene.drawnTimeOfDay()`, so the
+difference between the two clocks is something a test can say out loud.
+
 ### Fog with a height to it
 
 Linear-in-distance haze was doing the whole job, and it is a shorter draw
@@ -3049,6 +3083,14 @@ and the same camp, drawn once with a sun in it and once without.
   scrub is rate-limited against the animation clock rather than the drawing one
   — the drawing clock is set in `render` and never advances headless, which is
   the sort of thing that makes a debug key work in a test and not in the game.
+  **And that the screen is drawing the hour the world is keeping**, after every
+  wind and after the slash, which is the assertion the first version of this
+  test did not have and the reason the feature shipped doing nothing solo. Plus
+  a second test that winds through four hours of one day and checks the sky the
+  backend is handed at each: the sun crosses east to west (its *height* is the
+  wrong thing to measure, because after dark the directional term is the moon
+  and midnight and noon both put a light overhead), the directional light gets
+  several times brighter, and the shadow pass switches back on.
 * `WatchSceneTest` — the mini game is on the launch strip, the scenes register,
   the lobby's menu offers what it should.
 * `TagTest` — the four rules of §7k, in order. **The party decides**: a walk for

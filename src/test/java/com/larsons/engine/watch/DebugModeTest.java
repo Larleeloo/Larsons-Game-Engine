@@ -4,6 +4,7 @@ import com.larsons.engine.config.GameContext;
 import com.larsons.engine.config.GameTypeStore;
 import com.larsons.engine.demo.WatchLobbyScene;
 import com.larsons.engine.demo.WatchScene;
+import com.larsons.engine.graphics.MeshPass;
 import com.larsons.engine.graphics.draw.RecordingTarget;
 import com.larsons.engine.input.InputManager;
 import com.larsons.engine.scene.SceneManager;
@@ -456,16 +457,151 @@ class DebugModeTest {
                 "a wound clock is still following the wall clock, so it will "
                         + "spring back on the next tick");
 
+        // <b>And the screen is drawing that hour, which is the assertion that
+        // matters and the one this test did not have.</b> Winding the clock
+        // moved the world's hour — the one animals and the guide go by — and
+        // for a while left the sun, the sky, the fog and the shadows on the
+        // real afternoon, because the screen only asked the world for the time
+        // when it was online. Everything a player would call "the time of day"
+        // is drawn through this second clock, so a test that checks only the
+        // first is a test that passes on a key that appears to do nothing.
+        assertEquals(game.clock().timeOfDay(), walk.drawnTimeOfDay(), 1e-6,
+                "the world wound to " + game.clock().timeOfDay() + " and the screen "
+                        + "is still drawing " + walk.drawnTimeOfDay());
+
         // …and the comma takes it back the other way.
         hold(scenes, input, KeyEvent.VK_COMMA, 60);
         assertTrue(wrappedGap(game.clock().timeOfDay(), forward) > 0.02,
                 "the comma did not wind the clock back");
+        assertEquals(game.clock().timeOfDay(), walk.drawnTimeOfDay(), 1e-6,
+                "the screen did not follow the clock back the other way");
 
         // The slash puts it on the real clock again.
         pressKey(scenes, input, KeyEvent.VK_SLASH);
         assertTrue(game.clock().followsWallClock(),
                 "the slash did not put the clock back on the wall");
+        assertEquals(game.clock().timeOfDay(), walk.drawnTimeOfDay(), 1e-6,
+                "the screen did not come back to the real hour with the world");
         session.close();
+    }
+
+    /**
+     * <b>The sky the card is handed moves with the clock, all the way through.</b>
+     *
+     * <p>The other half of the assertion above, and the one that is about the
+     * picture rather than about a number: wind from the middle of the night to
+     * the middle of the day and the sun has to rise, the world has to get
+     * brighter, and the shadow pass has to switch itself back on. Those three
+     * are the whole of what {@code SkyLight} is for, they are what a player
+     * means by "the time of day changed", and every one of them is derived
+     * several classes away from the key that was pressed — through the scene's
+     * clock, the atmosphere it builds and the seam it hands to the backend.
+     *
+     * <p>Which is why it is asserted here, end to end through the real scene,
+     * rather than on {@code SkyLight.of} directly: the arithmetic already has
+     * its own tests and was never what was broken.
+     */
+    @Test
+    void windingTheClockMovesTheSkyTheBackendIsHanded(@TempDir Path dir) {
+        GameContext ctx = new GameContext(null, new GameTypeStore(dir.toString()));
+        WatchStore store = new WatchStore(dir.resolve("walks").toString());
+        WatchScene walk = new WatchScene(ctx);
+        SceneManager scenes = new SceneManager();
+        scenes.setViewport(800, 480);
+        scenes.register(WatchLobbyScene.NAME, new WatchLobbyScene(ctx, store));
+        scenes.register(WatchScene.NAME, walk);
+
+        WatchGame game = new WatchGame(new WatchGame.Config(88L, "Wound", 1));
+        game.join(1, "Kara");
+        WatchSession session = WatchSession.solo(game);
+        session.setSelfId(1);
+        walk.adopt(session, store);
+        scenes.setScene(WatchScene.NAME);
+
+        InputManager input = new InputManager();
+        for (int i = 0; i < 3; i++) {
+            input.newFrame();
+            scenes.update(1 / 60.0, input);
+        }
+        typeCode(scenes, input);
+
+        // Four hours of one day, in order, each reached by holding the key
+        // rather than by setting a field — the whole point is that the key is
+        // what does it.
+        MeshPass.Sky night = skyAt(scenes, input, walk, 0.0);
+        MeshPass.Sky morning = skyAt(scenes, input, walk, 0.30);
+        MeshPass.Sky noon = skyAt(scenes, input, walk, 0.50);
+        MeshPass.Sky afternoon = skyAt(scenes, input, walk, 0.70);
+
+        // <b>The sun crosses the sky.</b> Its height is the wrong thing to
+        // measure and it is worth saying why: after dark the directional term
+        // is the *moon*, which SkyLight puts opposite the sun — so midnight and
+        // noon both come back with a light high overhead and an assertion about
+        // height passes on a clock that never moved. Where it is east to west
+        // has no such twin.
+        assertTrue(morning.sunX() > 0.5,
+                "mid-morning has the sun at x = " + morning.sunX() + ", not in the east");
+        assertTrue(afternoon.sunX() < -0.5,
+                "mid-afternoon has the sun at x = " + afternoon.sunX()
+                        + ", not in the west");
+        assertTrue(noon.sunZ() > 0.5, "noon has the sun at z = " + noon.sunZ());
+
+        // …the light on it gets brighter…
+        assertTrue(sunLuma(noon) > sunLuma(night) * 4,
+                "the sun at noon is only " + (sunLuma(noon) / sunLuma(night))
+                        + " times the moon at midnight");
+
+        // …and the shadow pass switches itself back on, which is the one term
+        // that is off entirely for half of every day.
+        assertTrue(noon.castsShadows(),
+                "noon casts no shadows, so the sun's pass never runs however "
+                        + "far the clock is wound");
+        assertFalse(night.castsShadows(), "midnight is casting sun shadows");
+        session.close();
+    }
+
+    /**
+     * Wind the clock to about {@code target} and hand back the sky the scene
+     * would give the backend.
+     *
+     * <p>Held keys rather than a setter, and stopped when it has gone far
+     * enough rather than after a fixed count, because how many frames three
+     * hours a second takes is a detail of the rate and not of this assertion.
+     */
+    private static MeshPass.Sky skyAt(SceneManager scenes, InputManager input,
+                                      WatchScene walk, double target) {
+        input.keyPressed(new KeyEvent(new JPanel(), KeyEvent.KEY_PRESSED, 0, 0,
+                KeyEvent.VK_PERIOD, KeyEvent.CHAR_UNDEFINED));
+        for (int i = 0; i < 1200 && wrappedGap(walk.drawnTimeOfDay(), target) > 0.01; i++) {
+            input.newFrame();
+            scenes.update(1 / 60.0, input);
+        }
+        input.keyReleased(new KeyEvent(new JPanel(), KeyEvent.KEY_RELEASED, 0, 0,
+                KeyEvent.VK_PERIOD, KeyEvent.CHAR_UNDEFINED));
+        input.newFrame();
+        scenes.update(1 / 60.0, input);
+        assertTrue(wrappedGap(walk.drawnTimeOfDay(), target) <= 0.01,
+                "twenty seconds of winding never reached " + target
+                        + "; the screen is at " + walk.drawnTimeOfDay());
+        // Drawn, not merely updated: the sky is built where the frame is built,
+        // and a test that never draws one is asking the renderer what it was
+        // handed last time — which, having never drawn, is nothing.
+        scenes.render(new RecordingTarget(800, 480), 0f);
+        return walk.renderer().atmosphere();
+    }
+
+    /**
+     * How bright the <em>directional</em> half of a sky is.
+     *
+     * <p>The ambient half deliberately does not carry the hour — the two tints
+     * in {@code MeshPass.Sky} are multipliers around one and the hour reaches
+     * the card separately, through {@code setLighting}, which is the invariant
+     * {@code SkyLightTest} exists to hold. So adding them in here would be
+     * adding the same constant to both hours and quietly halving whatever ratio
+     * this is measuring, which is exactly what it did on the first attempt.
+     */
+    private static double sunLuma(MeshPass.Sky sky) {
+        return 0.2126 * sky.sunR() + 0.7152 * sky.sunG() + 0.0722 * sky.sunB();
     }
 
     /** How far apart two times of day are, the short way round. */
