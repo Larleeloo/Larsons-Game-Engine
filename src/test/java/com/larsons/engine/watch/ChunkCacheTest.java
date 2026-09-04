@@ -10,6 +10,7 @@ import org.junit.jupiter.api.Timeout;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertNotEquals;
 import static org.junit.jupiter.api.Assertions.assertNotNull;
+import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 /**
@@ -33,8 +34,13 @@ class ChunkCacheTest {
 
     /** Wait for the streamer's workers to drain, or give up. */
     private static void settle(ChunkStreamer streamer) {
+        settle(streamer, 0, 0);
+    }
+
+    /** …with the player standing somewhere in particular while they do. */
+    private static void settle(ChunkStreamer streamer, double x, double y) {
         for (int i = 0; i < 400 && streamer.pending() > 0; i++) {
-            streamer.update(0, 0, 0.05);
+            streamer.update(x, y, 0.05);
             try {
                 Thread.sleep(10);
             } catch (InterruptedException e) {
@@ -59,16 +65,36 @@ class ChunkCacheTest {
             // Walk a long way off, so everything here is evicted.
             double away = WatchChunk.SIZE * 40;
             streamer.update(away, away, 0.05);
-            assertEquals(0, streamer.loadedCount(),
-                    "the old ring was not cleared out of the live map");
+            // <b>Let the far ring finish before measuring anything.</b> The one
+            // call that evicts the old ring also *queues* the new one, on
+            // worker threads — so without this the counts below are being read
+            // while a dozen chunks are still landing, and on a machine under
+            // load they land in the middle of the measurement rather than
+            // after it. That is a race, it fails about one run in five under
+            // contention and never once on an idle machine, and neither of the
+            // two things this test is about has anything to do with it.
+            settle(streamer, away, away);
+
+            // The old ring specifically, rather than the map being empty: the
+            // map is not empty, it is full of the ring over there.
+            for (int cy = -2; cy <= 2; cy++) {
+                for (int cx = -2; cx <= 2; cx++) {
+                    assertNull(streamer.chunk(cx, cy),
+                            "chunk (" + cx + ", " + cy + ") was not cleared out of "
+                                    + "the live map when the player walked away");
+                }
+            }
             assertTrue(streamer.cachedCount() >= builtHere,
                     "the old ring was thrown away rather than kept: "
                             + streamer.cachedCount() + " cached");
 
-            // …and walk back.
+            // …and walk back. Counted from wherever the walk away left the
+            // total, because that walk built a ring of its own and the
+            // question here is only whether *this* ground is built twice.
+            long builtAway = streamer.generatedCount();
             long recalledBefore = streamer.recalledCount();
             streamer.loadNow(0, 0, 2);
-            assertEquals(builtHere, streamer.generatedCount(),
+            assertEquals(builtAway, streamer.generatedCount(),
                     "walking back regenerated ground that was already built");
             assertTrue(streamer.recalledCount() > recalledBefore,
                     "nothing was recalled from the cache");

@@ -153,6 +153,11 @@ public final class WatchClient implements AutoCloseable {
     /** Ask the host to put a species on the ground in front of us. Debug only. */
     public void sendSummon(String species) { send(WatchProto.summon(species)); }
 
+    /** Wind the host's clock, or ask for the real one back. Debug mode only. */
+    public void sendClock(double timeOfDay, boolean wallClock) {
+        send(WatchProto.clock(timeOfDay, wallClock));
+    }
+
     /** Ask for a map of everything this machine can see. */
     public void sendChart(double reach) { send(WatchProto.chart(reach)); }
 

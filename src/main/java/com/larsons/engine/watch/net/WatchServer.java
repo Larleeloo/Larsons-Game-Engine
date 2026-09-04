@@ -559,6 +559,18 @@ public final class WatchServer implements WatchGame.Sink {
                 game.summon(id, WatchJson.str(message, "sp", ""));
             }
 
+            case "clock" -> {
+                // Silence either way, like every other debug-gated verb: the
+                // hour is a snapshot field, so a clock that moved is on every
+                // client's screen on the next tick, and a client that should
+                // not have asked learns nothing. See WatchGame.setTimeOfDay.
+                if (WatchJson.num(message, "w", 0) > 0) {
+                    game.followWallClock(id);
+                } else {
+                    game.setTimeOfDay(id, WatchJson.num(message, "d", 0));
+                }
+            }
+
             case "cast" -> game.castRod(id);
 
             case "strike" -> {

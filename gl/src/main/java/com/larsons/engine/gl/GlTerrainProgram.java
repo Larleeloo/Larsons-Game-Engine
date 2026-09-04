@@ -1,6 +1,7 @@
 package com.larsons.engine.gl;
 
 import com.larsons.engine.graphics.EyeCamera;
+import com.larsons.engine.graphics.Mat4;
 import com.larsons.engine.graphics.MeshPass;
 
 import java.util.List;
@@ -105,6 +106,9 @@ final class GlTerrainProgram implements AutoCloseable {
 
     /** …and the one the sun's depth map is, when there is one. */
     static final int UNIT_SHADOW = 1;
+
+    /** …and the brightest lamp's, which is a cube. See {@link GlLampShadow}. */
+    static final int UNIT_LAMP_SHADOW = 2;
 
     /** How many point lights the fragment shader will walk. */
     private static final int MAX_LIGHTS = MeshPass.MAX_LIGHTS;
@@ -221,6 +225,14 @@ final class GlTerrainProgram implements AutoCloseable {
             uniform vec2 uShadowTexel; // one texel of the map, in UV
             uniform vec2 uShadowBias;  // x = flat, y = slope-scaled
 
+            // …and the same three for the one lamp that has a shadow of its
+            // own, which is always the lamp in slot 0 when there is one.
+            uniform samplerCubeShadow uLampShadowMap;
+            uniform float uLampShadow; // 0 = this mesh has no lamp shadow
+            uniform vec4 uLampDepth;   // x = A, y = B, z = flat bias, w = near
+            uniform float uLampSlope;  // …and the slope-scaled bias, in metres
+            uniform mat3 uEyeToWorld;  // an eye-space direction, in world axes
+
             uniform float uHaze;      // weather extinction, per metre
             uniform vec2 uHazeBand;   // x = the height mist pools at, y = its depth
             uniform float uEyeZ;      // the camera's own height, for the integral
@@ -272,6 +284,44 @@ final class GlTerrainProgram implements AutoCloseable {
                 // ruled across the wood.
                 return (1.0 - lit * 0.25)
                         * (1.0 - smoothstep(0.80, 1.0, max(edge.x, edge.y)));
+            }
+
+            /**
+             * How much of the shadowing lamp reaches this fragment: 1 in the
+             * open, 0 behind a trunk.
+             *
+             * <p><b>A cube map is addressed by a direction, so there is no
+             * matrix and no projected coordinate</b> — the vector from the lamp
+             * to here <em>is</em> the lookup, and the only work is arriving at
+             * a depth to compare against. A perspective projection stored
+             * {@code A + B / major}, where {@code major} is the largest
+             * component of that vector (which is what picks the face, and what
+             * that face's own w came out as), so undoing it is one divide.
+             *
+             * <p>The bias is applied to the distance, in metres, before the
+             * curve rather than after it. That is the one way a perspective
+             * shadow map is easier than an orthographic one: the shader is
+             * holding a real distance at exactly the moment it needs to nudge
+             * it, so a centimetre means a centimetre under the flame and
+             * across the clearing alike.
+             *
+             * <p>Plain {@code texture} rather than {@code textureLod}, unlike
+             * the sun's: this is called from a branch on {@code uLampShadow},
+             * which is a uniform, so the control flow is uniform across the
+             * whole draw and an implicit derivative is well defined.
+             */
+            float lampLit(vec3 fromLamp, float ndotl) {
+                vec3 dir = uEyeToWorld * fromLamp;
+                float major = max(abs(dir.x), max(abs(dir.y), abs(dir.z)));
+                // Slope-scaled for the sun's reason: a surface the light rakes
+                // across covers many texels of depth in one texel of map, and a
+                // flat bias big enough for it would lift every shadow off the
+                // foot of its own tree.
+                float slope = sqrt(max(0.0, 1.0 - ndotl * ndotl)) / max(0.15, ndotl);
+                float bias = uLampDepth.z + uLampSlope * min(slope, 6.0);
+                float ref = uLampDepth.x
+                        + uLampDepth.y / max(major - bias, uLampDepth.w);
+                return texture(uLampShadowMap, vec4(dir, ref * 0.5 + 0.5));
             }
 
             /**
@@ -438,6 +488,32 @@ final class GlTerrainProgram implements AutoCloseable {
                 for (int i = uLightCount; i < uAirCount; i++) {
                     air += scattered(i, ray, viewLen, invView, mass);
                 }
+
+                // <b>The one lamp with a shadow, taken back out afterwards.</b>
+                // Slot 0 is that lamp whenever uLampShadow is non-zero — see
+                // GlMeshPass.chooseLights, which puts it there — so the loop
+                // above has already added the whole of its contribution and
+                // this removes whatever a trunk was standing in the way of.
+                //
+                // Written as a subtraction rather than as a factor inside the
+                // loop because the loop is the hot path of the whole shader and
+                // a branch in it is not free: an early `continue` in this same
+                // loop was measured at thirty-five percent slower, because it
+                // stops the compiler unrolling a body of a dozen instructions.
+                // Out here it is a uniform branch, coherent across the entire
+                // draw, and it costs the fragments that are not near the fire
+                // precisely nothing.
+                if (uLampShadow > 0.0) {
+                    vec3 to = uLightPos[0].xyz - vEye;
+                    float d2 = max(dot(to, to), 1e-8);
+                    float invD = inversesqrt(d2);
+                    float fall = max(0.0, 1.0 - d2 * invD * uLightPos[0].w);
+                    fall *= fall;
+                    float ndotl = max(0.0, dot(n, to * invD));
+                    vec3 full = uLightColour[0].rgb * (uLightColour[0].a * fall
+                            * (WRAP + (1.0 - WRAP) * ndotl));
+                    light -= full * (uLampShadow * (1.0 - lampLit(-to, ndotl)));
+                }
                 colour.rgb *= light;
 
                 // Fog after the light and before the air: haze interpolates, so
@@ -511,6 +587,11 @@ final class GlTerrainProgram implements AutoCloseable {
     private final int uShadow;
     private final int uShadowTexel;
     private final int uShadowBias;
+    private final int uLampShadowMap;
+    private final int uLampShadow;
+    private final int uLampDepth;
+    private final int uLampSlope;
+    private final int uEyeToWorld;
     private final int uHaze;
     private final int uHazeBand;
     private final int uEyeZ;
@@ -544,6 +625,15 @@ final class GlTerrainProgram implements AutoCloseable {
     private final double[] inEyeSpace = new double[3];
     private final float[] identity = identityMatrix();
 
+    /** …and the same trick for the lamp shadow, which is one float per mesh. */
+    private float uploadedLampShadow = -1;
+
+    /** Scratch for {@link #setLampShadow}, so a frame allocates nothing. */
+    private final float[] eyeToWorld = new float[9];
+    private final float[] lampDepth = new float[4];
+
+    private static final float[] IDENTITY_3 = {1, 0, 0, 0, 1, 0, 0, 0, 1};
+
     GlTerrainProgram() {
         program = link(compile(GL_VERTEX_SHADER, VERTEX), compile(GL_FRAGMENT_SHADER, FRAGMENT));
         uMvp = glGetUniformLocation(program, "uMvp");
@@ -571,6 +661,11 @@ final class GlTerrainProgram implements AutoCloseable {
         uShadow = glGetUniformLocation(program, "uShadow");
         uShadowTexel = glGetUniformLocation(program, "uShadowTexel");
         uShadowBias = glGetUniformLocation(program, "uShadowBias");
+        uLampShadowMap = glGetUniformLocation(program, "uLampShadowMap");
+        uLampShadow = glGetUniformLocation(program, "uLampShadow");
+        uLampDepth = glGetUniformLocation(program, "uLampDepth");
+        uLampSlope = glGetUniformLocation(program, "uLampSlope");
+        uEyeToWorld = glGetUniformLocation(program, "uEyeToWorld");
         uHaze = glGetUniformLocation(program, "uHaze");
         uHazeBand = glGetUniformLocation(program, "uHazeBand");
         uEyeZ = glGetUniformLocation(program, "uEyeZ");
@@ -609,10 +704,25 @@ final class GlTerrainProgram implements AutoCloseable {
                 && uScatter >= 0 && uVibrance >= 0;
     }
 
+    /**
+     * …and the lamp cube map's, which fail the same silent way again.
+     *
+     * <p>Worth its own method for the same reason the other two are: a
+     * {@code samplerCubeShadow} left at its default zero samples texture unit
+     * 0, which is the colour atlas — a mismatched sampler whose result is
+     * undefined and, on the drivers where it is anything at all, is not a
+     * shadow. The failure mode is a night that looks lit and never shadows.
+     */
+    boolean lampShadowUniformsResolved() {
+        return uLampShadowMap >= 0 && uLampShadow >= 0 && uLampDepth >= 0
+                && uLampSlope >= 0 && uEyeToWorld >= 0;
+    }
+
     void use() {
         glUseProgram(program);
         glUniform1i(uAtlas, UNIT_ATLAS);
         glUniform1i(uShadowMap, UNIT_SHADOW);
+        glUniform1i(uLampShadowMap, UNIT_LAMP_SHADOW);
         // Neutral until somebody says otherwise. A GLSL uniform starts at zero,
         // so a caller that does not light its world — GlTerrainPass, whose
         // shading is baked in by SectionMesher — would otherwise draw it black.
@@ -633,6 +743,15 @@ final class GlTerrainProgram implements AutoCloseable {
         glUniform1f(uShadow, 0f);
         glUniform2f(uShadowTexel, 0f, 0f);
         glUniform2f(uShadowBias, 0f, 0f);
+        glUniform1f(uLampShadow, 0f);
+        uploadedLampShadow = 0f;
+        // Not zeros: this curve is divided by, and the near plane it clamps to
+        // is what keeps that divide away from one. A caller that never mentions
+        // a lamp never reaches it, but a uniform that would produce an infinity
+        // if it were reached is not a resting state.
+        glUniform4f(uLampDepth, 1f, -1f, 0f, 1f);
+        glUniform1f(uLampSlope, 0f);
+        glUniformMatrix3fv(uEyeToWorld, false, IDENTITY_3);
         glUniform1f(uHaze, 0f);
         glUniform2f(uHazeBand, 0f, 1f);
         glUniform1f(uEyeZ, 0f);
@@ -756,6 +875,55 @@ final class GlTerrainProgram implements AutoCloseable {
         glUniform1f(uScatter, sky.scatter());
         glUniform1f(uVibrance, sky.vibrance());
         glUniform1f(uTime, sky.seconds());
+    }
+
+    /**
+     * The lamp cube map's own arithmetic, once for the frame.
+     *
+     * <p>Two things the shader cannot work out for itself. The <b>depth
+     * curve</b> comes from {@link GlLampShadow}, which owns the projection that
+     * wrote it — deriving it twice is how a shadow acquires a bias that grows
+     * with distance and nothing says so. And a <b>rotation from eye space back
+     * into world axes</b>, because a cube map is addressed by a world
+     * direction while every other thing this shader holds is in the camera's
+     * frame.
+     *
+     * <p>That rotation is the transpose of the view's, which is the same thing
+     * as its inverse for an orthonormal basis — and a transpose of a rotation
+     * is exactly "put its rows in as columns", which is what the loop does.
+     * Doing it here rather than sending three more uniforms means there is one
+     * place where the handedness can be wrong, and it is checked in
+     * {@code GlLightingTest}.
+     */
+    void setLampShadow(EyeCamera eye, float[] curve, float slopeBias) {
+        if (eye == null || curve == null) return;
+        Mat4 rotation = Mat4.viewRotation(eye);
+        for (int row = 0; row < 3; row++) {
+            for (int col = 0; col < 3; col++) {
+                // Row `row` of the view rotation becomes column `row` of this
+                // one, and a mat3 uniform is uploaded column by column.
+                eyeToWorld[row * 3 + col] = (float) rotation.at(row, col);
+            }
+        }
+        glUniformMatrix3fv(uEyeToWorld, false, eyeToWorld);
+        glUniform4f(uLampDepth, curve[0], curve[1], curve[2], curve[3]);
+        glUniform1f(uLampSlope, slopeBias);
+    }
+
+    /**
+     * Whether the mesh about to be drawn is shadowed by the lamp in slot 0, and
+     * how strongly.
+     *
+     * <p>Per mesh, because most meshes in a frame are nowhere near the fire and
+     * the only ones that can be shadowed by it are the ones it lights — which
+     * is the surface list {@link #setMeshLights} has just been given. Skipped
+     * when it has not changed, for that method's reason: a run of meshes with
+     * the same answer, which is nearly all of them, costs one upload.
+     */
+    void setMeshLampShadow(float strength) {
+        if (strength == uploadedLampShadow) return;
+        uploadedLampShadow = strength;
+        glUniform1f(uLampShadow, strength);
     }
 
     void setMatrices(float[] mvp, float[] modelView) {

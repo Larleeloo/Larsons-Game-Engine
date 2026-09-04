@@ -3325,13 +3325,24 @@ spends real work on it:
   down. One `mix` per fragment, and it is most of the difference between
   low-poly ground that reads as carved and low-poly ground that reads as a
   sheet of green.
-- **Trees cast shadows** — a 2048² depth map from the sun
+- **Trees cast shadows** — a depth map from the sun
   ([`GlShadowMap`](gl/src/main/java/com/larsons/engine/gl/GlShadowMap.java)),
   alpha-tested against the same atlas so a canopy throws *dapple* rather than
   the shadow of a box, snapped to whole texels so it does not crawl as you
   walk, and faded at its rim so there is no line ruled across the wood. Not
   drawn at all at night, under a storm or under water, where nothing would see
   it.
+- **…and so does a campfire, after dark** — a cube depth map from the brightest
+  lamp near you
+  ([`GlLampShadow`](gl/src/main/java/com/larsons/engine/gl/GlLampShadow.java)),
+  which is the half the sun cannot do. Sunlight is parallel, so a tree's shadow
+  is the width of the tree; a fire is a *point*, so the same tree throws a
+  shadow that **spreads as it goes** and reaches the far side of the clearing.
+  One lamp gets the map, only what stands inside its twelve metres casts into
+  it, each caster is drawn into only the faces it is actually in, and the whole
+  thing is then kept for as long as you sit there — a fire does not move and
+  neither does a wood. It costs nothing in daylight, where it would not be seen,
+  and it ramps in through dusk rather than switching on.
 - **Fires and lanterns light the air**, not only the ground. The point-light
   loop already knows where each lamp is; one more dot product gives how close
   it passes to the *view ray* and how much of that ray lies inside its reach,
@@ -3351,8 +3362,13 @@ that is the one term standing inside a light makes global. The shadow pass is
 drawn **once and then kept**: a shadow map is a function of where
 its box is and what stands in it, and a player who is not walking has moved
 neither — so standing still costs it nothing at all, and walking costs about a
-fifth of what it did. `-Dlarsons.render.gl.shadowmap=N` sets the map's edge in
-texels, or `0` to skip it entirely. See
+fifth of what it did. The fire's cube is cached the same way and against the
+same two questions, with one wrinkle worth the sentence: a flame's radius
+*flickers every frame*, so the reach is compared loosely and the map's far plane
+set beyond it — compared exactly, a campfire would never once reuse its own map.
+`-Dlarsons.render.gl.shadowmap=N` sets the sun map's edge in texels and
+`-Dlarsons.render.gl.lampshadow=N` a cube face's; `0` skips either, and `0` on
+the first skips both. See
 [WATCH_PLAN §7l](WATCH_PLAN.md) for the measurements. **The Java2D path is untouched by every line of this**: both
 backends still agree on the hour, the fog's colour and range and every lamp,
 and they differ only in how richly the same described world is drawn. A
@@ -3729,6 +3745,17 @@ It grants:
   it with a pen, and pin maps together on a board. The odd one out: it grants
   *access* rather than abundance, because the feature is finished and its price
   is not. It is the row that will be deleted rather than becoming free.
+- **Summon mutants.** <kbd>K</kbd> puts one of the three in front of you,
+  hunting, ignoring the cap and the cooldown — because otherwise testing the
+  one thing in the wood that can kill you means waiting for it to find you.
+- **Wind the clock.** <kbd>,</kbd> and <kbd>.</kbd> scrub the time of day and
+  <kbd>/</kbd> puts it back on the real one. The sun's angle and colour, the
+  ambient, whether there is a shadow pass at all, the dawn mist, which animals
+  are out and whether a campfire casts — all of it is a function of the hour,
+  and all of it was previously testable only by waiting. The host owns the
+  clock, so a client scrubbing it scrubs it for the whole party: a debug verb
+  that moved the sun on one screen would be a party that no longer agrees what
+  time it is.
 - **A readout** down the left: position, chunk and level of detail, the biome
   and the material underfoot, what the streamer is holding and queueing, what
   the frame drew and culled, what is alive nearby, the spyglass, the guide.

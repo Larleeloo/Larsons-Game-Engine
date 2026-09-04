@@ -146,6 +146,35 @@ final class GlMeshPass implements MeshPass {
     private final GlShadowMap shadows = new GlShadowMap();
 
     /**
+     * …and the world again from the brightest lamp, after dark — see
+     * {@link GlLampShadow}.
+     *
+     * <p>The two are all but exclusive in practice: the sun's map is drawn
+     * while there is a sun to cast and this one only once there is not, so a
+     * frame pays for one shadow pass and not two. They are separate objects
+     * rather than one because nothing else about them is the same shape — one
+     * box against six, snapped world texels against a fixed reach, redrawn by
+     * walking against redrawn by lighting a fire.
+     */
+    private final GlLampShadow lampShadows = new GlLampShadow();
+
+    /** How much of the lamp's own light a shadow of it takes away. */
+    private static final float LAMP_SHADOW = 0.88f;
+
+    /**
+     * How dark it has to be before a lamp's shadow is worth drawing.
+     *
+     * <p>Measured against the hour's own multiplier, which is what the shader
+     * scales the whole ambient hemisphere by: {@code WatchClock.daylight} runs
+     * from about a quarter at midnight to one at noon, so this ramp is dusk. A
+     * fire at noon casts a shadow that is a percent of the frame and costs six
+     * faces of depth to draw; the same fire at midnight is the only light there
+     * is. Ramped rather than switched so there is no frame where the shadows of
+     * a camp appear all at once.
+     */
+    private static final double LAMP_SHADOW_DARK = 0.34, LAMP_SHADOW_LIGHT = 0.62;
+
+    /**
      * Draws that have a buffer on the card and can be issued — <b>resolved
      * once and then drawn twice.</b>
      *
@@ -163,8 +192,9 @@ final class GlMeshPass implements MeshPass {
     private int texture = -1;
     private int textureRevision = -1;
 
-    /** Whether the last frame actually redrew the map; for the debug readout. */
+    /** Whether the last frame actually redrew either map; for the debug readout. */
     private boolean shadowsDrawn;
+    private boolean lampShadowsDrawn;
 
     /**
      * How many of a frame's lamps are allowed to light the <em>air</em>.
@@ -194,6 +224,22 @@ final class GlMeshPass implements MeshPass {
     private final int[] lightOrder = new int[MAX_LIGHTS];
     private int surfaceLights, airLights;
     private long lightSubset;
+
+    /**
+     * Which frame lamp has the cube map, and how hard its shadow is shaded.
+     *
+     * <p>{@code −1} and {@code 0} in daylight and whenever no lamp is near
+     * enough to be worth a pass, which switches the whole term off.
+     */
+    private int shadowingLamp = -1;
+    private float lampShadow;
+
+    /** Whether this mesh in particular is lit by that lamp; see {@link #issue}. */
+    private boolean lampShadowed;
+
+    /** Scratch for the lamp pass, so a frame of it allocates nothing. */
+    private final float[] lampMvp = new float[16];
+    private final float[] lampCurve = new float[4];
 
     /** Which lamps are in the frame's air budget; see {@link #MAX_AIR_LIGHTS}. */
     private final boolean[] litsAir = new boolean[MAX_LIGHTS];
@@ -285,6 +331,10 @@ final class GlMeshPass implements MeshPass {
         boolean lit;
         /** Whether it is near enough the box to put anything <em>into</em> it. */
         boolean casts;
+        /** …and the same question about the lamp's cube. */
+        boolean lampCasts;
+        /** Its bounding ball in the world, which both of those are asked of. */
+        double ballX, ballY, ballZ, ballRadius;
     }
 
     @Override
@@ -433,10 +483,19 @@ final class GlMeshPass implements MeshPass {
         boolean redraw = casting && shadows.boxMoved();
         if (redraw) shadows.adoptBox();
 
+        // …and the same three steps for the fire, which takes over from the sun
+        // after dark. Its strength is what decides whether the pass happens at
+        // all: nothing is drawn in daylight, because nothing would be seen.
+        float lampStrength = lampShadowStrength();
+        boolean lampCasting = lampShadows.aim(lights, eye, lampStrength,
+                atlasHasCutouts) >= 0;
+        boolean lampRedraw = lampCasting && lampShadows.lampMoved();
+        if (lampRedraw) lampShadows.adoptLamp();
+
         readyCount = 0;
-        for (Draw draw : opaque) prepare(draw, casting);
+        for (Draw draw : opaque) prepare(draw, casting, lampCasting);
         opaqueReady = readyCount;
-        for (Draw draw : translucent) prepare(draw, casting);
+        for (Draw draw : translucent) prepare(draw, casting, lampCasting);
 
         // …and then whether what is standing in that box has changed. Standing
         // still in a wood, neither has, and the map already on the card is the
@@ -465,6 +524,43 @@ final class GlMeshPass implements MeshPass {
                 // drawing into the frame, and an exception that left the sun's
                 // depth texture bound would send the rest of the frame into it.
                 shadows.end();
+            }
+        }
+
+        // The fire's six faces, on the same terms: only when what is standing
+        // round it has changed, and only the meshes it reaches. A camp you have
+        // sat down at pays for this once.
+        long lampCasters = lampCasting ? lampCasterSignature() : 0;
+        if (lampCasting && !lampRedraw && lampShadows.castersChanged(lampCasters)) {
+            lampRedraw = true;
+        }
+        lampShadowsDrawn = lampRedraw;
+        if (lampRedraw) {
+            lampShadows.openPass(lampCasters);
+            try {
+                glActiveTexture(GL_TEXTURE0 + GlTerrainProgram.UNIT_ATLAS);
+                glBindTexture(GL_TEXTURE_2D, texture);
+                for (int side = 0; side < 6; side++) {
+                    lampShadows.openFace(side);
+                    for (int i = 0; i < opaqueReady; i++) {
+                        Ready row = ready.get(i);
+                        if (!row.lampCasts) continue;
+                        // Six faces of a cube tile the whole sphere, so a mesh
+                        // that is in the lamp's reach at all is in one of them
+                        // — and usually only one. Without this test each of
+                        // those meshes would be submitted six times to be
+                        // clipped away five.
+                        if (!lampShadows.faceCasts(side, row.ballX, row.ballY,
+                                row.ballZ, row.ballRadius)) {
+                            continue;
+                        }
+                        lampShadows.matrixInto(side, row.draw.originX(),
+                                row.draw.originY(), row.draw.originZ(), lampMvp);
+                        lampShadows.cast(row.buffer.vao, row.buffer.vertexCount, lampMvp);
+                    }
+                }
+            } finally {
+                lampShadows.end();
             }
         }
 
@@ -505,8 +601,18 @@ final class GlMeshPass implements MeshPass {
         // exactly the sort of thing a driver is entitled to complain about
         // whether or not it is read.
         glBindTexture(GL_TEXTURE_2D, casting ? shadows.texture() : 0);
+        glActiveTexture(GL_TEXTURE0 + GlTerrainProgram.UNIT_LAMP_SHADOW);
+        glBindTexture(GL_TEXTURE_CUBE_MAP, lampCasting ? lampShadows.texture() : 0);
         glActiveTexture(GL_TEXTURE0 + GlTerrainProgram.UNIT_ATLAS);
         glBindTexture(GL_TEXTURE_2D, texture);
+        // The fire's own arithmetic, once for the frame; which meshes are
+        // shadowed by it is settled per mesh, in issue().
+        shadowingLamp = lampCasting ? lampShadows.lamp() : -1;
+        lampShadow = lampCasting ? lampStrength : 0f;
+        if (lampCasting) {
+            lampShadows.depthCurveInto(lampCurve);
+            program.setLampShadow(eye, lampCurve, lampShadows.slopeBias());
+        }
 
         for (int i = 0; i < opaqueReady; i++) issue(ready.get(i), projection, eye);
 
@@ -549,6 +655,48 @@ final class GlMeshPass implements MeshPass {
     }
 
     /**
+     * …and the same summary of what is standing round the lamp.
+     *
+     * <p>A separate number from {@link #casterSignature} because it is a
+     * separate set: the sun's box is two hundred metres across and the lamp's
+     * is twelve, so a tree finishing its mesh on the far side of the map
+     * changes one and not the other, and sharing a signature would redraw six
+     * faces of cube every time it did.
+     */
+    private long lampCasterSignature() {
+        long mixed = 0;
+        for (int i = 0; i < opaqueReady; i++) {
+            Ready row = ready.get(i);
+            if (!row.lampCasts) continue;
+            long one = row.draw.key() * 0x9E3779B97F4A7C15L;
+            one ^= (long) row.draw.revision() * 0xC2B2AE3D27D4EB4FL;
+            one ^= Double.doubleToLongBits(row.draw.originX()) * 0x165667B19E3779F9L;
+            one ^= Double.doubleToLongBits(row.draw.originY()) * 0x27D4EB2F165667C5L;
+            one ^= Double.doubleToLongBits(row.draw.originZ()) * 0x85EBCA77C2B2AE63L;
+            mixed += one ^ (one >>> 29);
+        }
+        return mixed;
+    }
+
+    /**
+     * How visible a lamp's own shadow would be, this hour.
+     *
+     * <p>Measured against {@code uDaylight} — the hour as a per-channel
+     * multiplier — because that is precisely what the shader scales the whole
+     * ambient hemisphere by, and a lamp's shadow is only as visible as the lamp
+     * is against everything else in the frame. Green-weighted, which is the eye
+     * talking rather than the arithmetic: the night's tint is a cold blue and
+     * averaging the three channels would call it brighter than it looks.
+     */
+    private float lampShadowStrength() {
+        double luma = 0.2126 * dayR + 0.7152 * dayG + 0.0722 * dayB;
+        double t = (LAMP_SHADOW_LIGHT - luma)
+                / (LAMP_SHADOW_LIGHT - LAMP_SHADOW_DARK);
+        t = t < 0 ? 0 : Math.min(t, 1);
+        return (float) (LAMP_SHADOW * t * t * (3 - 2 * t));
+    }
+
+    /**
      * Get a mesh's buffer onto the card if it is not there, and note it for
      * both passes.
      *
@@ -556,7 +704,7 @@ final class GlMeshPass implements MeshPass {
      * spent here and only here, which is what stops the shadow pass and the
      * main pass disagreeing about which meshes exist this frame.
      */
-    private void prepare(Draw draw, boolean casting) {
+    private void prepare(Draw draw, boolean casting, boolean lampCasting) {
         Buffer buffer = buffers.computeIfAbsent(draw.key(), k -> new Buffer());
         buffer.lastSeen = frameStamp;
         boolean stale = buffer.revision != draw.revision();
@@ -603,6 +751,16 @@ final class GlMeshPass implements MeshPass {
         // drawing the horizon twice to have it clipped away.
         row.casts = casting && draw.casts()
                 && shadows.casts(draw.originX(), draw.originY(), draw.originZ());
+        // The lamp's reach is twelve metres rather than two hundred, so its
+        // cull is the mesh's real ball against a sphere rather than the sun's
+        // generous margin — a campfire's casters are one chunk and its trees.
+        Bounds bounds = draw.bounds();
+        row.ballX = draw.originX() + bounds.centreX();
+        row.ballY = draw.originY() + bounds.centreY();
+        row.ballZ = draw.originZ() + bounds.centreZ();
+        row.ballRadius = bounds.radius();
+        row.lampCasts = lampCasting && draw.casts()
+                && lampShadows.casts(row.ballX, row.ballY, row.ballZ, row.ballRadius);
     }
 
     private static double distanceSquared(Draw draw, EyeCamera eye) {
@@ -646,20 +804,30 @@ final class GlMeshPass implements MeshPass {
      * wanting the same lamps, which is most of a frame and usually means none
      * at all, cost one uniform upload between them.
      */
-    private void chooseLights(Draw draw, EyeCamera eye) {
+    private void chooseLights(Ready row, EyeCamera eye) {
         surfaceLights = 0;
         airLights = 0;
         lightSubset = 0;
+        lampShadowed = false;
         if (lights.isEmpty()) return;
-        Bounds bounds = draw.bounds();
-        double centreX = draw.originX() + bounds.centreX();
-        double centreY = draw.originY() + bounds.centreY();
-        double centreZ = draw.originZ() + bounds.centreZ();
-        double radius = bounds.radius();
+        double centreX = row.ballX, centreY = row.ballY, centreZ = row.ballZ;
+        double radius = row.ballRadius;
 
         long surfaceMask = 0, airMask = 0;
+        // <b>The lamp with the cube map goes in first, and that is what makes
+        // slot 0 mean something.</b> The shader takes its shadow back out of
+        // slot 0 after the loop rather than testing an index inside it — see
+        // the note there — which is only sound if this is the one place that
+        // decides where it lands.
+        if (shadowingLamp >= 0 && LightCull.touchesBox(lights.get(shadowingLamp),
+                centreX, centreY, centreZ, radius)) {
+            lightOrder[surfaceLights++] = shadowingLamp;
+            surfaceMask |= 1L << shadowingLamp;
+            lampShadowed = true;
+        }
         // Two passes so that the surface-lit ones land first without a sort.
         for (int i = 0; i < lights.size(); i++) {
+            if ((surfaceMask & (1L << i)) != 0) continue;
             if (LightCull.touchesBox(lights.get(i), centreX, centreY, centreZ, radius)) {
                 lightOrder[surfaceLights++] = i;
                 surfaceMask |= 1L << i;
@@ -680,8 +848,9 @@ final class GlMeshPass implements MeshPass {
     /** Set the matrices for one prepared mesh and issue it. */
     private void issue(Ready row, Mat4 projection, EyeCamera eye) {
         Draw draw = row.draw;
-        chooseLights(draw, eye);
+        chooseLights(row, eye);
         program.setMeshLights(lightOrder, surfaceLights, airLights, lightSubset);
+        program.setMeshLampShadow(lampShadowed ? lampShadow : 0f);
 
         // Vertices reach the card measured from the mesh's own origin, and the
         // origin reaches it measured from the eye, in double: a world with no
@@ -797,7 +966,17 @@ final class GlMeshPass implements MeshPass {
     public int uploadsLastFrame() { return uploadsThisFrame; }
 
     @Override
-    public boolean redrewShadowsLastFrame() { return shadowsDrawn; }
+    public boolean redrewShadowsLastFrame() { return shadowsDrawn || lampShadowsDrawn; }
+
+    /**
+     * …and whether it was the fire's six faces in particular.
+     *
+     * <p>Not on the seam: the readout above wants "a shadow pass happened",
+     * which is the frame's cost, while the tests want to know <em>which</em>,
+     * because the two are cached against different things and a test that
+     * could not tell them apart would pass on a lamp map redrawn every frame.
+     */
+    boolean redrewLampShadowsLastFrame() { return lampShadowsDrawn; }
 
     /** Release everything on the card. */
     void dispose() {
@@ -807,6 +986,7 @@ final class GlMeshPass implements MeshPass {
         readyCount = 0;
         opaqueReady = 0;
         shadows.close();
+        lampShadows.close();
         if (texture >= 0) {
             glDeleteTextures(texture);
             texture = -1;
