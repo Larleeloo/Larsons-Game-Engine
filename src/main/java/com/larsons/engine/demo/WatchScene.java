@@ -1210,10 +1210,39 @@ public class WatchScene extends AbstractScene {
         return best;
     }
 
-    /** Adopt the host's time of day, so a party shares one sunset. */
+    /**
+     * Take the time of day from the world, so a party shares one sunset —
+     * <b>and so a walk on your own shares one with itself.</b>
+     *
+     * <p>This screen keeps a {@link WatchClock} of its own because that is what
+     * everything drawn is drawn through: the sun's angle, the sky, the fog, the
+     * shadows, the line on the HUD. The world keeps another one, in
+     * {@code WatchGame}, and that is the one that decides which animals are out
+     * and what hour a sighting is stamped with. There have to be two — the
+     * world's may be on a machine in another country — but there must only ever
+     * be <em>one answer</em>, and the world's is it.
+     *
+     * <p><b>This used to ask the world only when online.</b> Solo, both clocks
+     * were started from the same wall clock and agreed for ever, so the
+     * distinction cost nothing and read as a small saving. It stopped being
+     * free the moment anything could <em>move</em> the world's clock: winding it
+     * with {@link #windClock} moved the hour the animals kept and the guide
+     * recorded, and left the screen drawing the real afternoon it had always
+     * drawn. Two clocks that agree by coincidence are one clock with a bug in
+     * it waiting for a reason.
+     *
+     * <p>The fallback is not "follow the wall clock" but {@code tick(0)}, which
+     * re-reads it only if this clock is still following it — a guest whose
+     * connection has gone quiet keeps the last hour it was told rather than
+     * snapping back to its own afternoon.
+     */
     private void syncClock() {
         WatchView view = view();
-        if (session.online() && view != null && view.timeOfDay() > 0) {
+        // Solo there is always a world to ask; online the view is empty until
+        // the first snapshot lands, and its hour is zero until then.
+        boolean worldKnows = session.local() != null
+                || (view != null && view.timeOfDay() > 0);
+        if (worldKnows && view != null) {
             clock.adopt(view.timeOfDay());
         } else {
             clock.tick(0);
@@ -1572,17 +1601,28 @@ public class WatchScene extends AbstractScene {
         }
         scrubbing += way * SCRUB_RATE * dt;
         scrubbing -= Math.floor(scrubbing);
+        if (session.local() != null) {
+            // Solo, every frame: the game object is right here, there is no
+            // wire to spare, and the whole reason this key is held rather than
+            // tapped is to watch the light *move*. Rate-limited to a dozen a
+            // second the sun visibly steps, which is the one thing a tool for
+            // looking at smoothness must not do.
+            session.local().setTimeOfDay(session.selfId(), scrubbing);
+            return;
+        }
+        if (session.client() == null) return;
+        // Online it is a message, so it is worth rationing — and the ration is
+        // free of consequence because the message carries an *absolute* hour
+        // rather than a step: the hour is right after the next one whatever
+        // happened to the ones in between.
+        //
         // Against the simulation clock rather than the drawing one: this runs
         // in `update`, where the drawing clock is a frame stale and — on a
         // machine that never draws, which is what a test is — never moves at
         // all.
         if (scrubSent >= 0 && animClock - scrubSent < SCRUB_INTERVAL) return;
         scrubSent = animClock;
-        if (session.local() != null) {
-            session.local().setTimeOfDay(session.selfId(), scrubbing);
-        } else if (session.client() != null) {
-            session.client().sendClock(scrubbing, false);
-        }
+        session.client().sendClock(scrubbing, false);
     }
 
     /** Whether this player is in debug mode, as the last snapshot has it. */
@@ -5958,4 +5998,16 @@ public class WatchScene extends AbstractScene {
 
     /** Where the local player is standing. */
     public double[] position() { return new double[]{px, py, pz}; }
+
+    /**
+     * The hour this screen is <b>drawing</b>, which is not the same question as
+     * what hour the world keeps — for tests.
+     *
+     * <p>Worth exposing because the difference between those two is exactly
+     * where the clock went wrong once: the world's hour is what animals and the
+     * guide go by, this one is what the sun, the sky, the fog and the shadows
+     * go by, and a test that only checks the first will pass on a screen still
+     * drawing the real afternoon. See {@link #syncClock}.
+     */
+    public double drawnTimeOfDay() { return clock.timeOfDay(); }
 }
