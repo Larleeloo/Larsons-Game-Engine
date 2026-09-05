@@ -3376,6 +3376,69 @@ directional term on the painter would cost a normal for every triangle in the
 frame rather than only the ones near a flame, on the thread that is also
 running the game.
 
+### What everything is made of
+
+All of the above is about the *light*. None of it says what a surface **does**
+with the light, which is the difference between a world of coloured card and a
+world of things: water and wet stone and a beetle's shell are all "shiny" in a
+way no diffuse term can express at all — the highlight moves with your eye
+rather than with the surface, and it is the strongest single cue that a thing is
+made of something.
+
+So every material
+([`WatchMaterial`](src/main/java/com/larsons/engine/watch/world/WatchMaterial.java))
+now carries the standard metal/roughness pair and how deep its own bumps are,
+and [`WatchMaterials`](src/main/java/com/larsons/engine/watch/world/WatchMaterials.java)
+bakes a **second atlas** beside the colour one — a tangent-space normal in red
+and green, roughness in blue, metalness in alpha, tile for tile and addressed by
+the same texture coordinates. The GL backend evaluates a real microfacet
+material against it (GGX, height-correlated Smith, Schlick) for the sun, for
+every lamp that touches the mesh, and for the sky itself:
+
+- **The lake holds the sky.** The ambient hemisphere sampled a second time along
+  the *reflected* ray, weighted by a Fresnel that opens at grazing angles and
+  closes as a surface roughens, and tinted by the horizon's own colour. Water is
+  dark where you look into it and bright where you look across it, and pink at
+  dawn — and what the reflection takes, the water underneath does not get, so a
+  see-through surface goes *opaque* exactly where it goes mirrored.
+- **Relief without a single extra byte per vertex.** The same screen-space
+  gradients that already give a face its normal give the tangent frame to
+  perturb it in, so gravel is rubble and bark is grooves and neither costs
+  anything to upload. Where a mesh gives all three vertices one texture
+  coordinate — every animal, plank and leaf in this game — there is no frame to
+  build and the face's own normal is used, which is right for a flat-shaded
+  facet.
+- **It fades out before it can sparkle.** A fragment measures how many texels of
+  the normal map it covers; past one, what the screen can no longer resolve is
+  handed to the roughness instead of sampled as noise. A hillside two hundred
+  metres off is a soft sheen rather than a field of fireflies.
+- **Tiles that do not read as tiles.** A tile is stretched across one two-metre
+  quad, so the ground would otherwise be the same stamp to the horizon. A slow
+  world-space drift over tens of metres breaks it up for four transcendentals
+  and no texture fetch, at frequencies that are exact multiples of the world's
+  own coordinate fold so there is no seam.
+- **A grade that lifts colour rather than adding it.** The vibrance knob is a
+  *vibrance* now: the lift is largest on the colours that have least, so moss,
+  lichen and a shaded hillside come up while a fox and a rowan berry are left
+  where they were.
+
+And one bug, which is most of why the GL build never looked as good as it should
+have. Every mesher bakes a material's **colour** into the vertex, because the
+Java2D painter fills a flat polygon with that colour and never samples a texture
+at all; the card shades a fragment as `texture × vertexColour`. While the atlas
+held colours too, the card was multiplying the colour by itself — grass the
+painter fills at `547E37` came off the shader at `1D400C`, a third as bright and
+most of the way to black, *for every surface in the game*. The colour atlas now
+holds each tile **divided by its own average**, so a texel means "this much
+brighter or darker than this material" and `detail × colour × light` is the
+painter's own answer with the texture on top. Both backends draw the same world
+again, and the GL one is no longer drawing it through a filter.
+
+None of this reaches the Java2D build, on the same terms as everything else in
+this section: a specular lobe per light per *triangle* on the thread that is
+also running the game is not a trade worth making, and the painter keeps the
+flat fill it can afford.
+
 ### The book
 
 <kbd>G</kbd> opens the field guide
@@ -3804,6 +3867,13 @@ model. Both are placeholders and both are replaceable:
   reskins one or all of them; `watch/terrain/<material>` retextures the ground.
   A model's boxes take their colour from their own region of that sheet, so a
   pack reaches the world and not only the book.
+- **A pack can supply the other half of a material too**, and gets some of it
+  for free either way. `watch_terrain/grass_normal.png` is a tangent-space
+  normal map (flat is `128,128,255`) and `watch_terrain/grass_surface.png` holds
+  roughness in red and metalness in green — both optional, both listed in the
+  generated `TEXTURE_KEYS.txt`. Supply neither and the engine derives the relief
+  from the light in the picture you *did* supply, so dropping in a photograph of
+  gravel gets bumps that agree with the gravel in it.
 
 The engine ships no image files. Everything above is drawn at runtime.
 

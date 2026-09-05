@@ -328,7 +328,12 @@ public final class AnimalModel {
         float[] uv = new float[4];
         // Every animal shares one tile of the world atlas; the colour, which is
         // what the flat-shaded look actually reads, comes from the skin.
-        WatchMaterials.uv(WatchMaterial.BARK, uv);
+        //
+        // <b>PELT rather than BARK.</b> That tile is not only a pattern now —
+        // it also says what the light does to whatever is drawn with it, and
+        // bark says "deeply grooved, and dry", which is a fair description of
+        // an oak and a poor one of a wren. See WatchMaterial.PELT.
+        WatchMaterials.uv(WatchMaterial.PELT, uv);
 
         for (Part part : parts) {
             Pose pose = poses.poseOf(state, part.joint(), phase);

@@ -440,10 +440,25 @@ public final class TextureKeys {
         // The Field Guide's terrain materials — one tile each, sampled by the
         // GPU path per fragment and averaged by the Java2D one per triangle,
         // so a pack recolours both builds from one set of files.
+        //
+        // …and, optionally, the other half of the material: what the light does
+        // to it. A creator who supplies neither still gets relief, because
+        // WatchMaterials derives a normal map from the picture's own light; one
+        // who wants a say supplies these and is believed. Listed so that a pack
+        // author can find out they exist, which is the whole point of the file
+        // this feeds.
         for (var material : com.larsons.engine.watch.world.WatchMaterial.values()) {
+            String what = material.key().replace('_', ' ');
             out.add(new Entry("Field Guide terrain", WATCH_TERRAIN,
-                    material.textureKey(), material.key(),
-                    material.key().replace('_', ' '), List.of()));
+                    material.textureKey(), material.key(), what, List.of()));
+            out.add(new Entry("Field Guide terrain", WATCH_TERRAIN,
+                    material.normalKey(), material.key() + "_normal",
+                    what + " — normal map (optional; tangent space, flat is "
+                            + "128,128,255)", List.of()));
+            out.add(new Entry("Field Guide terrain", WATCH_TERRAIN,
+                    material.surfaceKey(), material.key() + "_surface",
+                    what + " — surface map (optional; red = roughness, "
+                            + "green = metalness)", List.of()));
         }
         // …and its animals, listed by family rather than by species. Thirteen
         // hundred rows would drown the file that exists to tell a creator what

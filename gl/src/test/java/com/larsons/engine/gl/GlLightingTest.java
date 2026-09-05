@@ -4,6 +4,7 @@ import com.larsons.engine.graphics.EyeCamera;
 import com.larsons.engine.graphics.Mat4;
 import com.larsons.engine.graphics.MeshPass;
 import com.larsons.engine.watch.render.Mesh;
+import com.larsons.engine.watch.render.TerrainMesher;
 import com.larsons.engine.watch.world.WatchMaterial;
 import com.larsons.engine.watch.world.WatchMaterials;
 import org.junit.jupiter.api.AfterAll;
@@ -309,6 +310,18 @@ class GlLightingTest {
      * <p>So: two pieces of ground meeting at a line, a lamp standing over one
      * of them and reaching well into the other, and the pool of light sampled
      * either side of the join. It has to cross.
+     *
+     * <p><b>The two samples are the same distance from the flame</b>, which
+     * they were not, and it matters more than it sounds. A lamp's brightness
+     * falls off with distance whether or not there is a seam, so two points at
+     * eighty centimetres either side of the join are <em>genuinely</em> a fifth
+     * apart in brightness — and a tolerance tight enough to catch a seam is
+     * then measuring the falloff instead. That tolerance held on one particular
+     * atlas by a single unit out of 255 and failed the moment the tiles were
+     * rebuilt, which is a test that reports on the texture. Both points are now
+     * 4.3 m from the lamp, on opposite sides of the join, at the same height —
+     * so everything the lamp does to one it does to the other, and a difference
+     * is the seam or nothing.
      */
     @Test
     void aLampLightsAcrossTheJoinBetweenTwoMeshes() {
@@ -325,11 +338,14 @@ class GlLightingTest {
         int[] pixels = render(eye, scattering(0), lamp, halves());
         assumeTrue(pixels != null, "no offscreen surface to draw into");
 
-        int west = luma(pixels, eye, -0.8, 0);
+        // (−0.8, 3.1) and (0.8, 0) are both √18.44 m from a lamp at (−3, 0, 2):
+        // 2.2² + 3.1² + 2² and 3.8² + 0 + 2².
+        int west = luma(pixels, eye, -0.8, 3.1);
         int east = luma(pixels, eye, 0.8, 0);
         assertTrue(Math.abs(west - east) <= 8,
                 "the light stops at the join: " + west + "/255 on one side of it "
-                        + "and " + east + " on the other");
+                        + "and " + east + " on the other, at equal distances from "
+                        + "the flame");
 
         // …and it really is lit rather than uniformly dark, or the assertion
         // above would pass on a frame with no lamp in it at all.
@@ -396,10 +412,21 @@ class GlLightingTest {
                 "ground a metre off the axis and level with the post went "
                         + nearAxis + "/255 darker; the shadow is far too wide there "
                         + "to have come from a half-metre post");
-        assertTrue(farAxis < -10,
+        // Eight rather than ten, and the difference is where the sample sits.
+        // A half-metre post two metres from the flame throws an umbra about
+        // 1.3 m wide three metres past it, so 1.1 m off the axis is inside it
+        // but close to its edge — a partial shadow, which is what "spreading"
+        // means and is why the number is a tenth of the frame rather than half
+        // of it. It comes back at −10 or −11 depending on what the ground's
+        // own texture is doing under the sample window, and a threshold a unit
+        // away from that is a threshold that fails when the atlas is rebuilt
+        // rather than when the shadow stops spreading. The pair is what
+        // carries the meaning: nothing at the post, and this three metres on.
+        assertTrue(farAxis < -8 && nearAxis - farAxis > 8,
                 "the same metre off the axis, three metres further on, changed by "
-                        + farAxis + "/255 — the shadow is not spreading, which is a "
-                        + "point light being treated as a parallel one");
+                        + farAxis + "/255 against " + nearAxis + " at the post — the "
+                        + "shadow is not spreading, which is a point light being "
+                        + "treated as a parallel one");
 
         // …and open ground the post cannot reach is untouched, which is the
         // assertion that catches a surface shadowing itself.
@@ -559,13 +586,190 @@ class GlLightingTest {
         }
     }
 
+    // --- and what the world is made of ------------------------------------------------
+
+    /** Every material uniform survived the link, on the same principle again. */
+    @Test
+    void theWorldShaderCompilesWithItsMaterials() {
+        assertTrue(program.surfaceUniformsResolved(),
+                "the driver did not keep the surface atlas's uniforms — the world "
+                        + "would draw with no highlight, no relief, and (because the "
+                        + "colour atlas is a detail map) at half the brightness the "
+                        + "painter draws it at");
+    }
+
+    /**
+     * <b>The card draws the colour the painter fills.</b>
+     *
+     * <p>The most valuable assertion in this class, and the one whose absence
+     * cost the most. Every mesher in {@code watch.render} bakes a material's
+     * colour into the vertex, because the Java2D painter fills a flat polygon
+     * with it; the card multiplies that vertex by the atlas. While the atlas
+     * held colours, the card was therefore multiplying the colour by itself —
+     * grass the painter fills at {@code 547E37} came off this shader at
+     * {@code 1D400C}, a third as bright and most of the way to black, and the
+     * whole GL build read as muddy with no single thing to point at.
+     *
+     * <p>{@code WatchMaterials} now bakes each tile divided by its own average
+     * ({@link MeshPass#DETAIL_GAIN}) and this is what says the two halves of
+     * that arrangement still agree. Read as an average over the middle of the
+     * frame rather than off one pixel, because a detail map is <em>meant</em>
+     * to vary per texel; what has to come back is the material.
+     *
+     * <p>Deliberately arranged so nothing else can move the number: neutral
+     * daylight, a plain sky (no sun, no shadow, no haze, no grade), the camera
+     * straight overhead so the sky reflection is only the four percent every
+     * dielectric has, and a mid-grey horizon for that four percent to be four
+     * percent of.
+     */
+    @Test
+    void theCardDrawsTheColourThePainterFills() {
+        EyeCamera eye = new EyeCamera(WIDTH, HEIGHT);
+        eye.place(0, 0, 40);
+        eye.look(0, -1.5);
+
+        int fill = TerrainMesher.shade(WatchMaterials.shade(WatchMaterial.GRASS), 1.0);
+        int[] pixels = renderMaterial(eye, MeshPass.Sky.PLAIN,
+                List.of(sheet(WatchMaterial.GRASS, fill, -32, 32).toDraw(1)), 0x808080);
+        assumeTrue(pixels != null, "no offscreen surface to draw into");
+
+        int[] drawn = middle(pixels);
+        for (int channel = 0; channel < 3; channel++) {
+            int want = (fill >> (16 - channel * 8)) & 0xFF;
+            int got = drawn[channel];
+            assertTrue(Math.abs(got - want) <= Math.max(8, want * 0.12),
+                    "the card drew " + Integer.toHexString(drawn[0] << 16
+                            | drawn[1] << 8 | drawn[2]) + " where the painter fills "
+                            + Integer.toHexString(fill & 0xFFFFFF) + " — channel "
+                            + channel + " came back at "
+                            + Math.round(100.0 * got / Math.max(1, want)) + "% of it");
+        }
+    }
+
+    /**
+     * <b>Water catches the sky and moss does not.</b>
+     *
+     * <p>What a specular lobe is <em>for</em>, and the assertion that the
+     * surface atlas is really being read per material rather than uploaded and
+     * ignored. Two sheets of ground at a grazing angle, side by side, with the
+     * <em>same vertex colour</em> — so nothing about their albedo differs at
+     * all — and the only thing that separates them is that one samples water's
+     * tile of the surface atlas and the other samples moss's. At five degrees
+     * off the surface, water is a mirror and moss is not.
+     *
+     * <p>The control is the same frame with no surface atlas handed over,
+     * where the two have to come back the same: that is what makes the first
+     * assertion about materials rather than about two textures that happen to
+     * differ.
+     */
+    @Test
+    void waterCatchesTheSkyWhereMossDoesNot() {
+        EyeCamera eye = new EyeCamera(WIDTH, HEIGHT);
+        // forward = (sin yaw, −cos yaw): zero looks toward −y, down the sheets.
+        eye.place(0, 30, 2.6);
+        eye.look(0, -0.06);
+
+        int grey = 0xFF9A9A9A;
+        List<MeshPass.Draw> scene = List.of(
+                sheet(WatchMaterial.WATER, grey, -20, 0).toDraw(1),
+                sheet(WatchMaterial.MOSS, grey, 0, 20).toDraw(2));
+        // A white horizon, so there is a bright sky for the water to hold.
+        int[] mirrored = renderMaterial(eye, MeshPass.Sky.PLAIN, scene, 0xFFFFFF);
+        int[] matte = render(eye, MeshPass.Sky.PLAIN, List.of(), scene);
+        assumeTrue(mirrored != null && matte != null, "no offscreen surface to draw into");
+
+        int water = luma(mirrored, eye, -9, 0);
+        int moss = luma(mirrored, eye, 9, 0);
+        assertTrue(water - moss > 25,
+                "water came back " + water + "/255 and moss " + moss + " at the same "
+                        + "grazing angle with the same colour — the surface atlas is "
+                        + "uploaded and not being read, or every material in it has "
+                        + "the same roughness");
+
+        int flatWater = luma(matte, eye, -9, 0);
+        int flatMoss = luma(matte, eye, 9, 0);
+        assertTrue(Math.abs(flatWater - flatMoss) <= 8,
+                "with no surface atlas the two sheets already differ by "
+                        + (flatWater - flatMoss) + "/255, so the assertion above is "
+                        + "measuring their textures rather than their materials");
+    }
+
+    /** One flat sheet of a material between two x, wound to face the sky. */
+    private static Mesh sheet(WatchMaterial material, int argb, float x0, float x1) {
+        Mesh.Builder mesh = Mesh.builder(0, 0, 0, false, 1);
+        float[] uv = new float[4];
+        WatchMaterials.uv(material, uv);
+        mesh.quad(x0, -32, 0, x1, -32, 0, x1, 32, 0, x0, 32, 0, uv, argb);
+        return mesh.build();
+    }
+
+    /**
+     * A frame drawn with the material atlases — the pair, as the game hands
+     * them over.
+     */
+    private int[] renderMaterial(EyeCamera eye, MeshPass.Sky sky,
+                                 List<MeshPass.Draw> scene, int horizon) {
+        GlSurface surface = new GlSurface(0);
+        GlMeshPass pass = new GlMeshPass(() -> null);
+        try {
+            surface.resize(WIDTH, HEIGHT);
+            surface.bind();
+            glViewport(0, 0, WIDTH, HEIGHT);
+            glClearColor(0, 0, 0, 1);
+            glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
+            pass.setTexture(WatchMaterials.atlas(), WatchMaterials.revision());
+            pass.setSurface(WatchMaterials.surface(), WatchMaterials.revision());
+            pass.setLighting(List.of(), 1f, 1f, 1f);
+            pass.setSky(sky);
+            // Fog pushed past the scene, so the only thing its colour does here
+            // is stand in for the sky a surface reflects.
+            pass.draw(scene, eye, horizon, 400, 800);
+            return surface.readPixels();
+        } catch (RuntimeException e) {
+            return null;
+        } finally {
+            pass.dispose();
+            surface.close();
+            GlSurface.unbind();
+        }
+    }
+
+    /**
+     * The average colour of the middle of a frame, as {@code r, g, b}.
+     *
+     * <p>A wide window on purpose: a detail map varies per texel by design and
+     * the ground's own colour drifts over tens of metres (see the shader's
+     * {@code macro}), so a few pixels would be measuring the texture. Half the
+     * frame, forty metres up, is several tiles and most of a drift.
+     */
+    private static int[] middle(int[] pixels) {
+        long[] sums = new long[3];
+        int n = 0;
+        for (int y = HEIGHT / 4; y < 3 * HEIGHT / 4; y++) {
+            for (int x = WIDTH / 4; x < 3 * WIDTH / 4; x++) {
+                int argb = pixels[y * WIDTH + x];
+                sums[0] += (argb >> 16) & 0xFF;
+                sums[1] += (argb >> 8) & 0xFF;
+                sums[2] += argb & 0xFF;
+                n++;
+            }
+        }
+        return new int[] {(int) (sums[0] / n), (int) (sums[1] / n), (int) (sums[2] / n)};
+    }
+
     /** How far the test's fire reaches, in metres. */
     private static final double LAMP_REACH = 14;
 
     /** …and the hour it burns in: dark enough that its shadow is worth drawing. */
     private static final float NIGHT = 0.25f, NIGHT_BLUE = 0.28f;
 
-    /** One fire, standing low, off to the north of the clearing. */
+    /**
+     * One fire, standing low, off to the north of the clearing.
+     *
+     * <p>Brighter than {@code LightKind.CAMPFIRE} actually burns, on purpose:
+     * these tests measure a difference between two frames, and a fire at its
+     * real intensity puts a fifth of one into the ground it is standing on.
+     */
     private static List<MeshPass.Light> camp() {
         return List.of(MeshPass.Light.of(0, 5, 0.7, 0xFFC46A, LAMP_REACH, 4));
     }
@@ -582,7 +786,7 @@ class GlLightingTest {
     private static Mesh post() {
         Mesh.Builder mesh = Mesh.builder(0, 2, 0, false, 1);
         float[] uv = new float[4];
-        WatchMaterials.uv(WatchMaterial.DIRT, uv);
+        WatchMaterials.uv(WatchMaterial.PAPER, uv);
         mesh.quad(0.5f, 0, 0, -0.5f, 0, 0, -0.5f, 0, 1.0f, 0.5f, 0, 1.0f,
                 uv, 0xFF6B5A44);
         return mesh.build();
@@ -636,7 +840,7 @@ class GlLightingTest {
     private static MeshPass.Draw halfGround(double originX, long key) {
         Mesh.Builder mesh = Mesh.builder(originX, 0, 0, false, 1);
         float[] uv = new float[4];
-        WatchMaterials.uv(WatchMaterial.GRASS, uv);
+        WatchMaterials.uv(WatchMaterial.PAPER, uv);
         mesh.quad(-10, -10, 0, 10, -10, 0, 10, 10, 0, -10, 10, 0, uv, 0xFF9AA88A);
         return mesh.build().toDraw(key);
     }
@@ -736,11 +940,23 @@ class GlLightingTest {
         }
     }
 
-    /** Thirty-two metres of flat ground, wound to face the sky. */
+    /**
+     * Thirty-two metres of flat ground, wound to face the sky.
+     *
+     * <p><b>Cut from {@link WatchMaterial#PAPER}</b>, which is the one material
+     * in the game whose tile is flat — every other one carries a grain, and
+     * these tests measure the difference between two frames at a named patch of
+     * ground. That difference is proportional to whatever the texture is doing
+     * under the sample window, so a fixture cut from grass measures the light
+     * <em>times the grass</em>: thresholds tuned against one bake stop meaning
+     * what they meant the moment anything about the atlas changes, which is
+     * exactly what happened when the tiles were rebuilt at twice the resolution.
+     * The colour still comes from the vertex, where it always did.
+     */
     private static Mesh ground() {
         Mesh.Builder mesh = Mesh.builder(0, 0, 0, false, 1);
         float[] uv = new float[4];
-        WatchMaterials.uv(WatchMaterial.GRASS, uv);
+        WatchMaterials.uv(WatchMaterial.PAPER, uv);
         mesh.quad(-16, -16, 0, 16, -16, 0, 16, 16, 0, -16, 16, 0, uv, 0xFF9AA88A);
         return mesh.build();
     }
@@ -749,7 +965,7 @@ class GlLightingTest {
     private static Mesh canopy() {
         Mesh.Builder mesh = Mesh.builder(0, 0, 0, false, 1);
         float[] uv = new float[4];
-        WatchMaterials.uv(WatchMaterial.GRASS, uv);
+        WatchMaterials.uv(WatchMaterial.PAPER, uv);
         mesh.quad(-4, -4, 5, 4, -4, 5, 4, 4, 5, -4, 4, 5, uv, 0xFF3E6B32);
         return mesh.build();
     }

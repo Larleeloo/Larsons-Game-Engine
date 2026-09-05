@@ -192,6 +192,19 @@ final class GlMeshPass implements MeshPass {
     private int texture = -1;
     private int textureRevision = -1;
 
+    /**
+     * The other half of the material — normals, roughness, metalness — and
+     * which build of it is on the card.
+     *
+     * <p>{@code -1} until a caller hands one over, and that is what the whole
+     * specular half of the shader is switched by: the voxel world never calls
+     * {@link #setSurface}, so it never pays for a lobe it has no material to
+     * evaluate. See {@link GlTerrainProgram#setSurface}.
+     */
+    private int surface = -1;
+    private int surfaceRevision = -1;
+    private int surfaceWidth, surfaceHeight;
+
     /** Whether the last frame actually redrew either map; for the debug readout. */
     private boolean shadowsDrawn;
     private boolean lampShadowsDrawn;
@@ -373,6 +386,58 @@ final class GlMeshPass implements MeshPass {
             glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
             glBindTexture(GL_TEXTURE_2D, previous);
             textureRevision = revision;
+        } finally {
+            MemoryUtil.memFree(pixels);
+        }
+    }
+
+    /**
+     * The surface atlas, uploaded on the same terms as the colour one — and
+     * filtered on entirely different ones.
+     *
+     * <p><b>Linear, where the colour atlas is nearest, and that is the whole
+     * difference.</b> The colour atlas is a grid of tiles with no gutters, so a
+     * filter at a tile's border samples the tile next door — grass with a seam
+     * of stone through it — which is why it is sampled nearest. A normal map
+     * sampled nearest is a field of flat facets with a staircase around every
+     * bump, which is precisely the thing it was brought in to remove. Both are
+     * true, and they are reconciled by {@code WatchMaterials}, which insets a
+     * tile's UVs by a texel and a half: far enough in that a linear tap lands
+     * wholly inside the tile, and the same texel either way for a nearest one.
+     *
+     * <p>No mipmaps on either, likewise for one reason: there is nowhere to put
+     * the gutters a mipped atlas needs. What a distant fragment would have got
+     * from a lower level it gets instead from the shader, which measures how
+     * many texels it covers and rolls the relief off into roughness — see
+     * {@code GlTerrainProgram}'s {@code detail}.
+     */
+    @Override
+    public void setSurface(BufferedImage atlas, int revision) {
+        if (atlas == null || revision == surfaceRevision) return;
+        int w = atlas.getWidth(), h = atlas.getHeight();
+        int[] argb = atlas.getRGB(0, 0, w, h, null, 0, w);
+        ByteBuffer pixels = MemoryUtil.memAlloc(w * h * 4);
+        try {
+            for (int p : argb) {
+                pixels.put((byte) ((p >> 16) & 0xFF));
+                pixels.put((byte) ((p >> 8) & 0xFF));
+                pixels.put((byte) (p & 0xFF));
+                pixels.put((byte) ((p >>> 24) & 0xFF));
+            }
+            pixels.flip();
+            if (surface < 0) surface = glGenTextures();
+            int previous = glGetInteger(GL_TEXTURE_BINDING_2D);
+            glBindTexture(GL_TEXTURE_2D, surface);
+            glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA8, w, h, 0, GL_RGBA,
+                    GL_UNSIGNED_BYTE, pixels);
+            glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
+            glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
+            glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
+            glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
+            glBindTexture(GL_TEXTURE_2D, previous);
+            surfaceRevision = revision;
+            surfaceWidth = w;
+            surfaceHeight = h;
         } finally {
             MemoryUtil.memFree(pixels);
         }
@@ -603,6 +668,13 @@ final class GlMeshPass implements MeshPass {
         glBindTexture(GL_TEXTURE_2D, casting ? shadows.texture() : 0);
         glActiveTexture(GL_TEXTURE0 + GlTerrainProgram.UNIT_LAMP_SHADOW);
         glBindTexture(GL_TEXTURE_CUBE_MAP, lampCasting ? lampShadows.texture() : 0);
+        // The material, and with it the specular half of the shader. Nothing
+        // here when the caller never handed one over, and then the frame is the
+        // diffuse one this pass drew before there was such a thing.
+        glActiveTexture(GL_TEXTURE0 + GlTerrainProgram.UNIT_SURFACE);
+        glBindTexture(GL_TEXTURE_2D, Math.max(surface, 0));
+        program.setSurface(surface < 0 ? 0 : surfaceWidth,
+                surface < 0 ? 0 : surfaceHeight);
         glActiveTexture(GL_TEXTURE0 + GlTerrainProgram.UNIT_ATLAS);
         glBindTexture(GL_TEXTURE_2D, texture);
         // The fire's own arithmetic, once for the frame; which meshes are
@@ -991,6 +1063,11 @@ final class GlMeshPass implements MeshPass {
             glDeleteTextures(texture);
             texture = -1;
             textureRevision = -1;
+        }
+        if (surface >= 0) {
+            glDeleteTextures(surface);
+            surface = -1;
+            surfaceRevision = -1;
         }
         if (program != null) {
             program.close();

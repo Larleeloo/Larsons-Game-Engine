@@ -79,10 +79,56 @@ import static org.lwjgl.opengl.GL33C.*;
  *       the valleys, a ridge stands out of it, and the whole bank drifts
  *       slowly rather than sitting still. Tinted toward the sun, so looking
  *       into it at dawn is bright and looking away from it is not.</li>
- *   <li><b>One knob of grade</b> at the end — saturation, and a knee that
- *       rolls the highlights off so the middle of a lantern's pool keeps its
- *       colour instead of clipping to white.</li>
+ *   <li><b>One knob of grade</b> at the end — vibrance, which lifts the
+ *       colours that have least and leaves the ones that have plenty, and a
+ *       knee that rolls the highlights off so the middle of a lantern's pool
+ *       keeps its colour instead of clipping to white.</li>
  * </ul>
+ *
+ * <h2>…and what everything is made of</h2>
+ *
+ * <p>All of that describes the <em>light</em>, and answers "how much of it
+ * arrives here". None of it answers "and what does this surface do with it",
+ * which is the difference between a world of coloured card and a world of
+ * things. A second atlas ({@link MeshPass#setSurface}) carries a tangent-space
+ * normal, a roughness and a metalness per texel, and with it the shader
+ * evaluates a real metal/roughness material — GGX, height-correlated Smith,
+ * Schlick — for the sun, for every lamp that touches the mesh, and for the sky
+ * itself:
+ *
+ * <ul>
+ *   <li><b>A normal map with no tangents in the vertex format.</b> The same
+ *       screen-space gradients that give the face its normal give the frame to
+ *       perturb it in, so relief costs nothing per vertex and nothing per
+ *       upload. Where a mesh gives all three vertices one texture coordinate —
+ *       every animal, plank and leaf in this game — there is no frame to build
+ *       and the face's own normal is used, which is the right answer for a
+ *       flat-shaded facet.</li>
+ *   <li><b>Roughness that fades in with distance.</b> A fragment measures how
+ *       many texels of the map it covers; past one, what the screen can no
+ *       longer resolve is handed to the roughness instead of being sampled as
+ *       noise. That is what a microfacet model is, and it is why a hillside two
+ *       hundred metres off is a soft sheen rather than a field of sparks.</li>
+ *   <li><b>The sky, reflected.</b> The two-colour ambient sampled a second time
+ *       along the reflected ray, weighted by a Fresnel that opens at grazing
+ *       angles and closes as a surface roughens, tinted by the fog's own colour
+ *       because that is the only absolute colour of the sky this shader is
+ *       given. It is what makes a lake read as a lake: dark where you look
+ *       into it, bright where you look across it, and pink at dawn.</li>
+ *   <li><b>…and it takes what it gives.</b> The diffuse is scaled down by
+ *       exactly the fraction the reflection took, and a see-through surface's
+ *       alpha is raised by it, because at a grazing angle water is a mirror
+ *       rather than a window and a highlight must not be blended away.</li>
+ *   <li><b>A slow drift across the ground</b>, in world space, so that a tile
+ *       stretched across a two-metre quad is not what the eye finds first. Four
+ *       transcendentals, no texture fetch, and every frequency an exact
+ *       multiple of one cycle per {@link #DRIFT_PERIOD} metres so the world's
+ *       coordinate fold is invisible.</li>
+ * </ul>
+ *
+ * <p>The colour atlas that arrives with a surface atlas is read as a
+ * <b>detail</b> map — see {@link MeshPass#DETAIL_GAIN}, which is also the note
+ * on what it cost to read it as anything else.
  *
  * <h2>Neutral unless told otherwise</h2>
  *
@@ -92,7 +138,10 @@ import static org.lwjgl.opengl.GL33C.*;
  * no sun, no shadow, no weather, no grade. That is what lets
  * {@link GlTerrainPass} — which knows nothing about any of this and has its own
  * lighting baked in by {@code SectionMesher} — share the program and be
- * bit-for-bit unaffected by all of it.
+ * bit-for-bit unaffected by all of it. The material half switches off the same
+ * way and by the same means: with no surface atlas the reflectance is black, so
+ * every specular term in the shader multiplies out to nothing and the colour
+ * atlas is read as a plain colour again.
  */
 final class GlTerrainProgram implements AutoCloseable {
 
@@ -109,6 +158,9 @@ final class GlTerrainProgram implements AutoCloseable {
 
     /** …and the brightest lamp's, which is a cube. See {@link GlLampShadow}. */
     static final int UNIT_LAMP_SHADOW = 2;
+
+    /** …and the surface atlas: normals, roughness and metalness. */
+    static final int UNIT_SURFACE = 3;
 
     /** How many point lights the fragment shader will walk. */
     private static final int MAX_LIGHTS = MeshPass.MAX_LIGHTS;
@@ -151,6 +203,40 @@ final class GlTerrainProgram implements AutoCloseable {
      * the range of misses that matter.
      */
     private static final double CHORD_MEAN = 0.5;
+
+    /**
+     * How much of a light bounces straight off a non-metal facing you.
+     *
+     * <p>Four percent, and it is four percent for water, leaves, skin, stone
+     * and everything else that is not a metal — the one number in a
+     * metal/roughness model that is not a per-material choice, because it falls
+     * out of the refractive index of essentially every dielectric there is.
+     * What varies between a lake and a lichen is where that four percent goes,
+     * which is the roughness.
+     */
+    private static final double DIELECTRIC = 0.04;
+
+    /**
+     * The roughness the shader will not go below, whatever it is handed.
+     *
+     * <p>A defence rather than a look: {@code WatchMaterials} bakes its own
+     * floor into the atlas, but a texture pack may put a texel of pure black in
+     * a surface map, and a perfectly smooth surface concentrates a light into a
+     * highlight narrower than a pixel — which in motion is not a mirror but a
+     * fragment flickering on and off as you walk.
+     */
+    private static final double MIN_ROUGH = 0.03;
+
+    /**
+     * How far the ground's colour drifts over tens of metres.
+     *
+     * <p>Small on purpose: this is not weather and not a stain, it is the
+     * difference between a hillside and a hillside-shaped piece of wallpaper.
+     * Under a tenth reads as ground that varies; much over it reads as a stain,
+     * and it starts to fight the biome's own colours — which are the thing the
+     * guide's pages and the map are drawn from and must stay recognisable.
+     */
+    private static final double MACRO_AMOUNT = 0.085;
 
     private static final String VERTEX = """
             #version 330 core
@@ -201,6 +287,9 @@ final class GlTerrainProgram implements AutoCloseable {
             in vec4 vShadow;
 
             uniform sampler2D uAtlas;
+            // …and what the light does to it: rg a tangent-space normal, b
+            // roughness, a metalness. See MeshPass.setSurface.
+            uniform sampler2D uSurface;
             // A *shadow* sampler: the texture unit does the depth comparison
             // and the filtering, and hands back how much of this fragment is
             // lit. See GlShadowMap's texture setup.
@@ -208,6 +297,10 @@ final class GlTerrainProgram implements AutoCloseable {
             uniform vec4 uFog;        // rgb = colour, a = 1 when fog is on
             uniform vec2 uFogRange;   // x = start, y = end
             uniform float uAlphaCut;  // discard below this; 0 in the blended pass
+
+            uniform float uPbr;       // 0 = no surface atlas; diffuse only
+            uniform float uAtlasGain; // what a colour texel means; see DETAIL_GAIN
+            uniform vec2 uAtlasTexels;// the atlas's size, for the detail fade
 
             uniform vec3 uDaylight;   // the hour, as a per-channel multiplier
             uniform int uLightCount;  // lamps that light this mesh's surface …
@@ -239,6 +332,8 @@ final class GlTerrainProgram implements AutoCloseable {
             uniform float uScatter;   // how much of a lamp the air carries back
             uniform float uVibrance;  // one knob of grade; 0 is "leave it alone"
             uniform float uTime;      // the drawing clock, for the drift
+
+            const float PI = 3.14159265;
 
             out vec4 fragColor;
 
@@ -400,29 +495,101 @@ final class GlTerrainProgram implements AutoCloseable {
                         * span * CHORD * uScatter * back);
             }
 
+            /**
+             * A slow drift over the whole ground, {@code −1} to {@code 1}.
+             *
+             * <p><b>What stops a two-metre tile reading as a two-metre tile.</b>
+             * The Field Guide's atlas is stretched across one quad of the
+             * heightfield, so without this the ground is the same stamp
+             * repeated to the horizon — the one thing that makes a textured
+             * world look worse than an untextured one, because the eye reads
+             * the grid rather than the ground.
+             *
+             * <p>Two sines whose phases are modulated by two more, which is a
+             * value noise for four transcendentals and no texture fetch. Every
+             * frequency is an exact multiple of one cycle per DRIFT_PERIOD
+             * metres, for the reason the fog's drift is: {@code vWorld} is
+             * folded into that period on the CPU, and a term that did not share
+             * it would put a seam across the world every five hundred metres.
+             */
+            float macro() {
+                return sin(vWorld.x * MACRO_A + sin(vWorld.y * MACRO_B) * 1.7)
+                        * sin(vWorld.y * MACRO_C - sin(vWorld.x * MACRO_D) * 1.3);
+            }
+
+            /**
+             * One specular lobe: GGX, height-correlated Smith, and the
+             * Fresnel left to the caller.
+             *
+             * <p>Returns {@code D · Vis · n·l}, already divided by the
+             * {@code 4 n·l n·v} the microfacet model would otherwise carry, so
+             * a light's own contribution is this times its colour times its
+             * Fresnel and nothing else. The three pieces are the ones every
+             * one of these is made of; what is worth saying about this one is
+             * that it is written to be <em>cheap enough to run per lamp</em> —
+             * no {@code pow} in the distribution, one divide, and the visibility
+             * term's own denominator folded into the same divide.
+             */
+            float lobe(vec3 n, vec3 v, vec3 l, float rough) {
+                vec3 h = normalize(v + l);
+                float ndh = max(dot(n, h), 0.0);
+                float ndv = max(dot(n, v), 1e-4);
+                float ndl = max(dot(n, l), 0.0);
+                float a = rough * rough;
+                float a2 = a * a;
+                float d = ndh * ndh * (a2 - 1.0) + 1.0;
+                float dist = a2 / max(PI * d * d, 1e-8);
+                // Smith, height-correlated, in Hammon's approximate form: the
+                // exact one wants two square roots and this is within a percent
+                // of it everywhere that is not grazing.
+                float vis = 0.5 / max(ndl * (ndv * (1.0 - a) + a)
+                        + ndv * (ndl * (1.0 - a) + a), 1e-5);
+                return dist * vis * ndl;
+            }
+
+            /** Schlick's Fresnel: how much of a light bounces off rather than in. */
+            vec3 fresnel(vec3 f0, float cosine) {
+                float f = 1.0 - cosine;
+                float f2 = f * f;
+                return f0 + (1.0 - f0) * (f2 * f2 * f);
+            }
+
             void main() {
+                // <b>Every derivative this shader takes, taken here.</b> A
+                // derivative is computed across a two-by-two block of fragments,
+                // and asking for one after half that block has discarded itself
+                // is asking a question the driver is not obliged to answer — so
+                // they come before the alpha test, all of them, and the rest of
+                // the shader works from the four values.
+                vec3 dpx = dFdx(vEye);
+                vec3 dpy = dFdy(vEye);
+                vec2 dux = dFdx(vUV);
+                vec2 duy = dFdy(vUV);
+
                 // The face's own normal, out of the screen-space gradient of the
                 // eye-space position. This world is flat shaded, so the plane a
                 // fragment lies in *is* its triangle's plane and this is exact
                 // rather than an approximation — and it costs no vertex
                 // attribute, no re-mesh and no upload.
                 //
-                // Taken before the discard on purpose: a derivative is computed
-                // across a two-by-two block of fragments, and asking for one
-                // after half that block has thrown itself away is asking a
-                // question the driver is not obliged to answer.
-                //
                 // Turned toward the eye afterwards, because grass, leaves and
                 // water are single-sided sheets meant to be seen from either
                 // face: a lantern behind a blade of grass has to light the side
                 // you are looking at.
-                vec3 n = normalize(cross(dFdx(vEye), dFdy(vEye)));
+                vec3 n = normalize(cross(dpx, dpy));
                 if (dot(n, vEye) > 0.0) n = -n;
+                vec3 face = n;
 
                 // Every block has an atlas cell — a sheetless one shares a
                 // white cell — so this is unconditional and a section of mixed
                 // blocks is still one draw call. See BlockAtlas.
-                vec4 colour = texture(uAtlas, vUV) * vColor;
+                //
+                // uAtlasGain is one for the voxel world, whose atlas holds
+                // colours, and two for the Field Guide's, whose atlas holds
+                // each tile divided by its own average — see MeshPass.DETAIL_GAIN
+                // for why the second kind exists and what the first cost.
+                vec4 texel = texture(uAtlas, vUV);
+                vec4 colour = vec4(texel.rgb * uAtlasGain, texel.a) * vColor;
                 if (colour.a < uAlphaCut) discard;
 
                 // One reciprocal square root for all three of these. A divide
@@ -432,9 +599,72 @@ final class GlTerrainProgram implements AutoCloseable {
                 float invView = inversesqrt(eye2);
                 float viewLen = eye2 * invView;
                 vec3 ray = vEye * invView;
+                vec3 view = -ray;
                 // How much air the view ray came through, once, for both the
                 // fog and the lamps that are shining into it.
                 float mass = airMass(viewLen);
+
+                // <b>What this surface is made of.</b> Everything from here to
+                // the closing brace is skipped entirely when no surface atlas
+                // has been handed over, which is the voxel world's case: f0
+                // stays black, every specular term below multiplies by it, and
+                // the frame is the diffuse one this shader drew before any of
+                // this existed.
+                float rough = 1.0;
+                vec3 f0 = vec3(0.0);
+                float mirror = 0.0;
+                if (uPbr > 0.0) {
+                    vec4 surf = texture(uSurface, vUV);
+                    // How many texels of the surface map this fragment covers.
+                    // Past one the map is noise the screen cannot resolve, so
+                    // the relief fades out and what it stops resolving is
+                    // handed to the roughness instead — which is what a
+                    // microfacet model *is*, and is why a hillside two hundred
+                    // metres off is a soft sheen rather than a field of sparks.
+                    float texels = max(length(dux * uAtlasTexels),
+                            length(duy * uAtlasTexels));
+                    float detail = clamp(2.0 - texels, 0.0, 1.0);
+                    vec2 slope = surf.rg * 2.0 - 1.0;
+                    rough = clamp(surf.b + (1.0 - detail) * 0.45 * length(slope),
+                            MIN_ROUGH, 1.0);
+                    float metal = surf.a;
+
+                    // A tangent frame from the same four derivatives, which is
+                    // the whole reason this vertex format can carry a normal
+                    // map at all: a tangent per vertex would be twelve more
+                    // bytes on every vertex of every chunk, to carry something
+                    // the screen-space gradients already know.
+                    //
+                    // The guard is not defensive. Most of this world's meshes —
+                    // every animal, every plank, every leaf — give all three
+                    // vertices of a triangle *one* texture coordinate, because
+                    // they are flat-shaded facets that want a single texel of
+                    // the atlas. Their UV derivatives are exactly zero, there
+                    // is no frame to build, and the geometric normal is the
+                    // right answer.
+                    vec3 px = cross(dpy, n);
+                    vec3 py = cross(n, dpx);
+                    vec3 tangent = px * dux.x + py * duy.x;
+                    vec3 binormal = px * dux.y + py * duy.y;
+                    float frame = max(dot(tangent, tangent), dot(binormal, binormal));
+                    if (frame > 1e-14) {
+                        vec2 bump = slope * detail;
+                        float up = sqrt(max(1e-4, 1.0 - dot(bump, bump)));
+                        n = normalize((tangent * bump.x + binormal * bump.y)
+                                * inversesqrt(frame) + n * up);
+                    }
+
+                    // …and the ground's own long variation over it, so that
+                    // the tile repeating every two metres is not what the eye
+                    // finds first. See macro().
+                    colour.rgb *= 1.0 + MACRO * macro();
+
+                    // A metal reflects with its own colour and has no diffuse;
+                    // everything that grew reflects white over a coloured body,
+                    // at the four percent every dielectric shares.
+                    f0 = mix(vec3(DIELECTRIC), colour.rgb, metal);
+                    colour.rgb *= 1.0 - metal;
+                }
 
                 // The sky above and the ground below, as one mix on which way
                 // the face is turned. Identical tints collapse to exactly the
@@ -447,11 +677,25 @@ final class GlTerrainProgram implements AutoCloseable {
                 float facing = dot(n, uUpAxis) * 0.5 + 0.5;
                 vec3 light = uDaylight
                         * (uGroundTint + (uSkyTint - uGroundTint) * facing);
+                vec3 gloss = vec3(0.0);
+                float ndv = max(dot(n, view), 1e-4);
 
                 // The sun, and whatever is standing between it and here.
                 float ndl = dot(n, uSunDir);
                 if (ndl > 0.0) {
-                    light += uSunColour * (ndl * (1.0 - uShadow * shadowed(ndl)));
+                    // The bias is asked of the *face*, not of the bump. A depth
+                    // map is written from geometry, so how steeply the sun
+                    // rakes across what was drawn into it is a question about
+                    // the triangle; asking the normal map instead is how a
+                    // shadow acquires acne in every hollow of its own texture.
+                    // With no surface atlas the two are the same vector.
+                    float open = 1.0 - uShadow * shadowed(dot(face, uSunDir));
+                    light += uSunColour * (ndl * open);
+                    if (uPbr > 0.0) {
+                        vec3 h = normalize(view + uSunDir);
+                        gloss += uSunColour * fresnel(f0, max(dot(view, h), 0.0))
+                                * (open * lobe(n, view, uSunDir, rough));
+                    }
                 }
 
                 // <b>Two loops over one array, and the split is a cull.</b>
@@ -480,9 +724,21 @@ final class GlTerrainProgram implements AutoCloseable {
                     // circle drawn on the ground.
                     float fall = max(0.0, 1.0 - away * invR);
                     fall *= fall;
-                    float ndotl = max(0.0, dot(n, to * invD));
+                    vec3 toward = to * invD;
+                    float ndotl = max(0.0, dot(n, toward));
                     light += uLightColour[i].rgb * (uLightColour[i].a * fall
                             * (WRAP + (1.0 - WRAP) * ndotl));
+                    // A flame has a highlight too, and on wet rock beside a
+                    // fire it is most of what you see. The branch is on a
+                    // uniform, so it is coherent across the whole draw — and
+                    // on the path where it is false this loop does not run at
+                    // all, because the voxel world sets no lights.
+                    if (uPbr > 0.0) {
+                        vec3 h = normalize(view + toward);
+                        gloss += uLightColour[i].rgb * fresnel(f0, max(dot(view, h), 0.0))
+                                * (uLightColour[i].a * fall
+                                        * lobe(n, view, toward, rough));
+                    }
                     air += scattered(i, ray, viewLen, invView, mass);
                 }
                 for (int i = uLightCount; i < uAirCount; i++) {
@@ -514,7 +770,69 @@ final class GlTerrainProgram implements AutoCloseable {
                             * (WRAP + (1.0 - WRAP) * ndotl));
                     light -= full * (uLampShadow * (1.0 - lampLit(-to, ndotl)));
                 }
-                colour.rgb *= light;
+
+                // <b>And the sky itself, reflected — the term that makes water
+                // water.</b>
+                //
+                // A lake has no highlight to speak of except at the sun, and it
+                // is still the brightest thing in a valley, because what it is
+                // showing you is the whole sky. So the same two-colour ambient
+                // is sampled a second time along the <em>reflected</em> ray
+                // rather than along the normal, and weighted by a Fresnel that
+                // opens up at grazing angles — which is why the far side of a
+                // lake is bright and the water at your feet is not, and why the
+                // edge of a wet stone lights up as you walk past it.
+                //
+                // Karis's form of the roughness-aware Fresnel: a rough surface
+                // cannot mirror the sky whatever the angle, so the term it
+                // climbs toward is (1 − roughness) rather than one.
+                if (uPbr > 0.0) {
+                    vec3 bounce = reflect(-view, n);
+                    float above = dot(bounce, uUpAxis) * 0.5 + 0.5;
+                    // <b>The fog's colour is the sky's colour</b>, and it is the
+                    // only absolute one this shader is given: everything else
+                    // about the light arrives as a multiplier around one, which
+                    // is what an irradiance is and is no use at all as a thing
+                    // to see a reflection of. The haze at the horizon is
+                    // literally what a lake at a shallow angle is showing you,
+                    // it already has the hour and the weather in it, and it is
+                    // pink at dawn — so the water is too. With no fog at all
+                    // this falls back to the plain daylight multiplier and the
+                    // reflection is white, which is the old behaviour of a term
+                    // that did not exist.
+                    vec3 sky = mix(uDaylight, uFog.rgb, uFog.a)
+                            * (uGroundTint + (uSkyTint - uGroundTint) * above);
+                    float grazing = 1.0 - ndv;
+                    float g2 = grazing * grazing;
+                    vec3 mirrored = f0 + (max(vec3(1.0 - rough), f0) - f0)
+                            * (g2 * g2 * grazing);
+                    gloss += sky * mirrored;
+                    // How much of this fragment is reflection rather than
+                    // surface, kept for the alpha below.
+                    mirror = max(mirrored.r, max(mirrored.g, mirrored.b));
+                }
+
+                // <b>What the reflection takes, the body underneath does not
+                // get.</b> Standing at the edge of a lake you cannot see into
+                // the far half of it at all — every photon arriving from there
+                // bounced off the surface — and a model that adds a mirror on
+                // top of a fully lit diffuse instead of in place of it is a
+                // model whose water is brighter than the sky it is reflecting.
+                // Zero when there is no surface atlas, so the voxel world is
+                // untouched.
+                colour.rgb *= light * (1.0 - mirror);
+                colour.rgb += gloss;
+
+                // <b>A highlight has to survive the blend.</b> Water is drawn
+                // in the see-through pass, so everything above is about to be
+                // multiplied by an alpha that says how deep the lake is — and
+                // a reflection is not something you can see through. At a
+                // grazing angle water is a mirror rather than a window, which
+                // is exactly what `mirror` measures, so the same term that put
+                // the sky on the lake makes the lake opaque where it did.
+                // Nothing happens in the opaque pass, where the alpha is
+                // already one.
+                colour.a = colour.a + (1.0 - colour.a) * mirror;
 
                 // Fog after the light and before the air: haze interpolates, so
                 // a lit thing a long way off is still mostly haze — applying
@@ -542,12 +860,24 @@ final class GlTerrainProgram implements AutoCloseable {
 
                 if (uVibrance > 0.0) {
                     float grey = dot(colour.rgb, vec3(0.2126, 0.7152, 0.0722));
+                    vec3 off = colour.rgb - vec3(grey);
+                    // <b>Vibrance rather than saturation, which is the whole
+                    // difference between a graded frame and a tinted one.</b>
+                    // How much colour a fragment already has decides how much
+                    // more it is given: moss, lichen, a lake and a shaded
+                    // hillside all sit near the grey axis and come up, while a
+                    // fox, a rowan berry and a sunlit petal are already at the
+                    // top of the ramp and are left where they are. A flat
+                    // saturation lifts both and the second one clips.
+                    float have = clamp(length(off) / max(grey, 0.04), 0.0, 1.0);
                     colour.rgb = max(vec3(0.0),
-                            mix(vec3(grey), colour.rgb, 1.0 + 0.55 * uVibrance));
+                            vec3(grey) + off * (1.0 + uVibrance * (0.85 - 0.55 * have)));
                     // A knee rather than a clamp: everything above it is
                     // compressed toward one instead of stopping dead there, so
                     // the middle of a lantern's pool keeps the lantern's colour
-                    // rather than going white.
+                    // rather than going white — and so does the sun sitting on
+                    // the water, which is the brightest thing this shader can
+                    // now produce.
                     float knee = 1.0 - 0.34 * uVibrance;
                     vec3 over = max(colour.rgb - knee, vec3(0.0));
                     colour.rgb = min(colour.rgb, vec3(knee))
@@ -562,7 +892,14 @@ final class GlTerrainProgram implements AutoCloseable {
                     3 * 2 * Math.PI / DRIFT_PERIOD))
             .replace("DRIFT_B", String.format(Locale.ROOT, "%.8f",
                     2 * 2 * Math.PI / DRIFT_PERIOD))
-            .replace("CHORD", String.format(Locale.ROOT, "%.3f", CHORD_MEAN));
+            .replace("CHORD", String.format(Locale.ROOT, "%.3f", CHORD_MEAN))
+            .replace("DIELECTRIC", String.format(Locale.ROOT, "%.4f", DIELECTRIC))
+            .replace("MIN_ROUGH", String.format(Locale.ROOT, "%.4f", MIN_ROUGH))
+            .replace("MACRO_A", cycles(21))
+            .replace("MACRO_B", cycles(13))
+            .replace("MACRO_C", cycles(17))
+            .replace("MACRO_D", cycles(29))
+            .replace("MACRO", String.format(Locale.ROOT, "%.3f", MACRO_AMOUNT));
 
     private final int program;
     private final int uMvp;
@@ -570,6 +907,10 @@ final class GlTerrainProgram implements AutoCloseable {
     private final int uLightMvp;
     private final int uMeshOrigin;
     private final int uAtlas;
+    private final int uSurface;
+    private final int uPbr;
+    private final int uAtlasGain;
+    private final int uAtlasTexels;
     private final int uShadowMap;
     private final int uFog;
     private final int uFogRange;
@@ -641,6 +982,10 @@ final class GlTerrainProgram implements AutoCloseable {
         uLightMvp = glGetUniformLocation(program, "uLightMvp");
         uMeshOrigin = glGetUniformLocation(program, "uMeshOrigin");
         uAtlas = glGetUniformLocation(program, "uAtlas");
+        uSurface = glGetUniformLocation(program, "uSurface");
+        uPbr = glGetUniformLocation(program, "uPbr");
+        uAtlasGain = glGetUniformLocation(program, "uAtlasGain");
+        uAtlasTexels = glGetUniformLocation(program, "uAtlasTexels");
         uShadowMap = glGetUniformLocation(program, "uShadowMap");
         uFog = glGetUniformLocation(program, "uFog");
         uFogRange = glGetUniformLocation(program, "uFogRange");
@@ -705,6 +1050,20 @@ final class GlTerrainProgram implements AutoCloseable {
     }
 
     /**
+     * …and the material half's, which fail the same silent way a third time.
+     *
+     * <p>The failure mode here is the flattest of the three: a world with a
+     * surface atlas uploaded, a shader that never reads it, and a picture that
+     * is exactly the diffuse one it drew before — no highlight on the water, no
+     * relief on the ground, and nothing anywhere saying why. Worse, the atlas
+     * beside it is a <em>detail</em> map, so a lost {@code uAtlasGain} does not
+     * fail quietly at all: the whole world comes back at half brightness.
+     */
+    boolean surfaceUniformsResolved() {
+        return uSurface >= 0 && uPbr >= 0 && uAtlasGain >= 0 && uAtlasTexels >= 0;
+    }
+
+    /**
      * …and the lamp cube map's, which fail the same silent way again.
      *
      * <p>Worth its own method for the same reason the other two are: a
@@ -721,8 +1080,16 @@ final class GlTerrainProgram implements AutoCloseable {
     void use() {
         glUseProgram(program);
         glUniform1i(uAtlas, UNIT_ATLAS);
+        glUniform1i(uSurface, UNIT_SURFACE);
         glUniform1i(uShadowMap, UNIT_SHADOW);
         glUniform1i(uLampShadowMap, UNIT_LAMP_SHADOW);
+        // No surface atlas, and an atlas that means what it says: the voxel
+        // world's, whose tiles are colours and whose shading was baked into its
+        // vertices by SectionMesher. Every specular term in the shader is
+        // multiplied by an f0 this leaves black. See setSurface.
+        glUniform1f(uPbr, 0f);
+        glUniform1f(uAtlasGain, 1f);
+        glUniform2f(uAtlasTexels, 1f, 1f);
         // Neutral until somebody says otherwise. A GLSL uniform starts at zero,
         // so a caller that does not light its world — GlTerrainPass, whose
         // shading is baked in by SectionMesher — would otherwise draw it black.
@@ -926,6 +1293,32 @@ final class GlTerrainProgram implements AutoCloseable {
         glUniform1f(uLampShadow, strength);
     }
 
+    /**
+     * Switch the material half of the shader on, for a caller that has a
+     * surface atlas to sample.
+     *
+     * <p>Three things at once, and they are one decision rather than three:
+     * the specular lobes light up (they are multiplied by an {@code f0} that is
+     * black until the surface atlas says otherwise), the colour atlas starts
+     * being read as a detail map (see {@link MeshPass#DETAIL_GAIN}), and the
+     * atlas's size goes up so a fragment can tell how much of the normal map it
+     * is standing on. All three are properties of the same bake, which is why
+     * one call carries them.
+     *
+     * <p>{@link #use} turns all of it off again, which is what lets
+     * {@link GlTerrainPass} share this program and be unaffected to the bit.
+     *
+     * @param width  the atlas's width in texels, or {@code 0} to switch the
+     *               whole block off
+     * @param height …and its height
+     */
+    void setSurface(int width, int height) {
+        boolean on = width > 0 && height > 0;
+        glUniform1f(uPbr, on ? 1f : 0f);
+        glUniform1f(uAtlasGain, on ? MeshPass.DETAIL_GAIN : 1f);
+        glUniform2f(uAtlasTexels, on ? width : 1, on ? height : 1);
+    }
+
     void setMatrices(float[] mvp, float[] modelView) {
         glUniformMatrix4fv(uMvp, false, mvp);
         glUniformMatrix4fv(uModelView, false, modelView);
@@ -955,6 +1348,20 @@ final class GlTerrainProgram implements AutoCloseable {
 
     void setAlphaCut(float cut) {
         glUniform1f(uAlphaCut, cut);
+    }
+
+    /**
+     * {@code n} whole cycles per {@link #DRIFT_PERIOD} metres, as a GLSL
+     * literal — the only frequencies anything in world space may use here.
+     *
+     * <p>A world coordinate reaches this shader folded into that period,
+     * because {@code float} does not hold tens of thousands of metres at the
+     * precision a fragment needs. Anything read off it therefore has to come
+     * back to itself at the fold, and "a whole number of cycles" is the whole
+     * of that condition.
+     */
+    private static String cycles(int n) {
+        return String.format(Locale.ROOT, "%.8f", n * 2 * Math.PI / DRIFT_PERIOD);
     }
 
     private static void normalise(double[] v) {

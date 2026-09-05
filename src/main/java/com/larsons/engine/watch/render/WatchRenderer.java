@@ -577,6 +577,13 @@ public final class WatchRenderer {
     public void flush(DrawTarget target) {
         if (gpu) {
             meshPass.setTexture(WatchMaterials.atlas(), WatchMaterials.revision());
+            // …and what the light does to it: the normals, the roughness and
+            // the metalness, from the same bake and on the same tiles. Handing
+            // this over is also what tells the backend that the atlas above is
+            // a *detail* map rather than a colour one — see MeshPass.DETAIL_GAIN
+            // for why those two facts arrive together and what the alternative
+            // looked like.
+            meshPass.setSurface(WatchMaterials.surface(), WatchMaterials.revision());
             // The hour and the lamps, as uniforms, once for the whole frame.
             // <b>This is where the two paths stop being the same program and
             // start being the same picture.</b> The painter has already shaded

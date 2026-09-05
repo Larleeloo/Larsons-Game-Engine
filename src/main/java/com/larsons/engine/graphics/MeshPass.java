@@ -290,8 +290,53 @@ public interface MeshPass {
      * <p>Cheap to call with an unchanged image: implementations compare
      * {@code revision} and do nothing when it matches, so a caller can pass its
      * atlas every frame without thinking about it.
+     *
+     * <p>Read as a plain colour, unless {@link #setSurface} has been given an
+     * atlas as well — see {@link #DETAIL_GAIN}.
      */
     void setTexture(BufferedImage atlas, int revision);
+
+    /**
+     * What a <b>detail</b> atlas's mid-grey means: the tile's own average
+     * colour, unchanged.
+     *
+     * <p>Every mesher in {@code watch.render} bakes a material's colour into
+     * the vertex, because the Java2D painter fills a flat polygon with that
+     * colour and never samples a texture at all. A card shades a fragment as
+     * {@code texture × vertexColour}, so an atlas that also held the colour
+     * had the card multiplying it by itself — the whole world a third as bright
+     * as the painter drew it, and muddy with it.
+     *
+     * <p>So the atlas that arrives beside a surface map holds each tile
+     * <em>divided by its own average</em> and halved, because an eight-bit
+     * texture cannot hold a number above one and the interesting half of a
+     * detail map is the half above the average. A backend multiplies the
+     * sample by this and gets a number around one: the texture's variation, and
+     * nothing of its colour.
+     *
+     * <p>On the seam rather than in either side, for {@link #LIGHT_WRAP}'s
+     * reason — {@code WatchMaterials} divides by it when it bakes and the
+     * shader multiplies by it when it samples, and the two disagreeing is a
+     * world drawn at the wrong exposure with nothing to say so.
+     */
+    float DETAIL_GAIN = 2f;
+
+    /**
+     * Hand over <b>what the light does</b> to every material: a tangent-space
+     * normal in {@code rg}, roughness in {@code b} and metalness in {@code a},
+     * tile for tile with {@link #setTexture}'s atlas and sampled by the same
+     * texture coordinates.
+     *
+     * <p>Optional, like {@link #setSky}: a backend that ignores it draws the
+     * diffuse world it always drew. A backend that <em>takes</em> it is
+     * agreeing to two things at once — to shade with a real specular lobe, and
+     * to read the colour atlas as a detail map (see {@link #DETAIL_GAIN}) —
+     * because the two arrive from one bake and are two halves of one material.
+     *
+     * <p>Cheap to call with an unchanged image, on the same terms as
+     * {@link #setTexture}: the revision is compared, not the pixels.
+     */
+    default void setSurface(BufferedImage surface, int revision) { }
 
     /**
      * Draw a frame's worth of meshes.
