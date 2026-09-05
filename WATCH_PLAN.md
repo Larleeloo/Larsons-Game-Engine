@@ -606,6 +606,7 @@ party spread across the map costs what it should.
 | Click to highlight for everyone | `WatchGame.spot` → `Spotlight` → `WatchProto.seen` |
 | Tag: a voted-for round, 1.3× speed, a 30 s freeze, a water gun, a compass to the nearest player | `watch/Tag`, `WatchGame.suggestTag`/`voteTag`/`squirt`, `Hurl.squirted`, `WatchView.nearestOther` — see §7k |
 | Eye Spy: a random 10–100 point bounty on an animal, once a day, for everybody but the poster | `watch/Bounty`, `WatchGame.postBounty`, `FieldGuide.reward` — see §7k |
+| PBR materials everywhere, vibrant on the GL backend | `WatchMaterial`'s roughness/metalness/relief, `WatchMaterials.surface()`, `MeshPass.setSurface`/`DETAIL_GAIN`, `gl/GlTerrainProgram`'s specular half — see §7m |
 
 ---
 
@@ -2909,6 +2910,180 @@ and the same camp, drawn once with a sun in it and once without.
 
 ---
 
+## 7m. What everything is made of
+
+> Asked for: everything in the Field Guide with PBR textures that look vibrant,
+> and a game that is visually impressive on the GL backend.
+
+§7j gave the world its lamps and §7l gave it a sky. Both are about the **light**
+— how much of it arrives here, from where, and what colour. Neither says
+anything about what a surface *does* with it, and that is the difference between
+a world of coloured card and a world of things: water, wet stone and a beetle's
+shell are all "shiny" in a way no diffuse term can express at all. The highlight
+moves with your eye rather than with the surface, and it is the single strongest
+cue that a thing is made of something.
+
+### The bug underneath it, which was most of the answer
+
+Before any of that: **the GL backend had been drawing the whole world at a third
+of its colour, for as long as there has been one.**
+
+Every mesher in `watch.render` bakes a material's *colour* into the vertex. It
+has to — the Java2D painter fills a flat polygon with that colour and never
+samples a texture at all. A card shades a fragment as `texture × vertexColour`.
+So while the atlas also held colours, the card was multiplying the colour by
+itself: grass the painter fills at `547E37` came off the shader at `1D400C`, a
+third as bright and most of the way to black. Every surface in the game, all the
+time. It does not announce itself as a bug — it reads as "the lighting is a bit
+dark", which is the kind of thing that gets chased around a shader for a week.
+
+The fix is an encoding rather than a fudge. `WatchMaterials.atlas()` now holds
+each tile **divided by its own average**: mid-grey means "exactly this
+material's colour" and a texel carries nothing but the variation around it. Then
+`detail × colour × light` is the painter's own answer with the texture on top —
+for a generated tile *and* for a texture pack's, because `shade()` is the pack
+tile's average when a pack is installed. `MeshPass.DETAIL_GAIN` is the factor of
+two that lets a texel be brighter than its own average in an eight-bit image,
+and it sits on the seam for `LIGHT_WRAP`'s reason: the bake divides by it and
+the shader multiplies by it, and the two disagreeing is a world drawn at the
+wrong exposure with nothing to say so.
+
+`GlLightingTest.theCardDrawsTheColourThePainterFills` is that, as an assertion.
+
+### The seam: a second atlas, and what taking it means
+
+`MeshPass.setSurface` is optional in the way `setSky` is: a backend that ignores
+it draws the diffuse world it always drew. It carries the rest of a material —
+a tangent-space normal in `rg`, roughness in `b`, metalness in `a` — tile for
+tile with the colour atlas and addressed by the same texture coordinates, so a
+chunk is still one draw call and the vertex format has not changed by a byte.
+
+A backend that *takes* it is agreeing to two things at once: to shade with a
+real specular lobe, and to read the colour atlas as a detail map. They arrive
+from one bake and they are two halves of one material, which is why one call
+carries them and why `GlTerrainProgram.use()` switches both off again — that is
+what keeps `GlTerrainPass`, which shares the shader for the voxel world, drawing
+exactly what it drew before, to the bit.
+
+### The bake: two atlases from one height field
+
+Every `WatchMaterial` now carries roughness, metalness and how deep its own
+bumps are — *descriptions of a surface*, on the same terms `Sky` describes an
+environment, and the painter ignores all three.
+
+Both atlases come from **one height field per material**, and that is what makes
+them look like a surface rather than like two lots of noise: the bumps in the
+normal map are the bumps the colour is shaded by and the bumps the roughness
+varies with. A pit is dark, faces the way the normal says, and is a little
+rougher than the crest beside it, because that is what weathering does.
+
+What varies per material is the *shape* of that field, because one noise
+function over everything would make gravel and bark and open water look like
+three tints of the same fabric. Five shapes: fine speckle for soil and leaves,
+a cellular field for rubble — the **difference** of the two nearest distances,
+so the crack between two stones is dark and the stone is pale, where the nearest
+distance alone paints polka dots with pale mortar — a stretched, folded lattice
+for bark and planks, wind ripples for sand and snow, long swells for water and
+ice. Every one of them is periodic in the tile, because a tile is repeated every
+two metres across the ground and a grain that does not wrap is a line ruled
+along every quad edge in the world.
+
+Two things had to be normalised out, and both were found by looking at the
+palette rather than at the picture. A grain is *relief* and must not also be a
+brightness: a cellular field is mostly stone and sits well above a half, so a
+tile painted straight off one came out a quarter brighter than the colour the
+guide's own page draws it in. Both the height field and the hue field are
+therefore re-centred, and the cavity term is divided by its own average.
+
+A pack can supply `<material>_normal` and `<material>_surface` and is believed.
+A pack that supplies neither still gets relief, derived from the light in the
+picture it *did* supply — so dropping in a photograph of gravel gets bumps that
+agree with the gravel in it.
+
+### The shader
+
+A metal/roughness material, evaluated per fragment: GGX, height-correlated
+Smith in Hammon's form, Schlick — for the sun, for every lamp that touches the
+mesh, and for the sky itself. What is worth writing down is the parts that are
+about *this* renderer rather than about microfacets:
+
+**A normal map with no tangents in the vertex format.** The same screen-space
+gradients that already give a face its normal give the frame to perturb it in.
+A tangent per vertex would be twelve more bytes on every vertex of every chunk
+to carry something the gradients already know. Where a mesh gives all three
+vertices of a triangle one texture coordinate — every animal, plank and leaf in
+this game, because they are flat-shaded facets that want a single texel — the UV
+derivatives are exactly zero, there is no frame to build, and the geometric
+normal is the right answer. The guard for that is not defensive; it is the
+common case.
+
+**Relief that fades before it can sparkle.** A fragment measures how many texels
+of the surface map it covers; past one, what the screen can no longer resolve is
+handed to the *roughness* instead of sampled as noise. That is what a microfacet
+model is for, and it is why a hillside two hundred metres off is a soft sheen
+rather than a field of fireflies. In proportion to the map's own slope, so a
+flat material keeps its roughness at any distance and the lake still holds a
+sun.
+
+**The sky, reflected, off the fog's colour.** The two-colour ambient sampled a
+second time along the reflected ray, weighted by a Fresnel that opens at grazing
+angles and closes as a surface roughens. The colour is the *fog's*, because it
+is the only absolute colour of the sky this shader is given — everything else
+about the light arrives as a multiplier around one, which is what an irradiance
+is and is no use at all as a thing to see a reflection of. The haze at the
+horizon is literally what a lake at a shallow angle is showing you, it already
+has the hour and the weather in it, and it is pink at dawn.
+
+**And it takes what it gives.** The diffuse is scaled down by exactly the
+fraction the reflection took — standing at the edge of a lake you cannot see
+into the far half of it at all — and a see-through surface's alpha is raised by
+the same fraction, because water at a grazing angle is a mirror rather than a
+window and a highlight drawn into the blend would be faded straight back out
+of it.
+
+**A slow drift across the ground.** A tile is stretched across one two-metre
+quad, so without this the ground is the same stamp repeated to the horizon —
+which makes a textured world look *worse* than an untextured one, because the
+eye reads the grid rather than the ground. Two sines whose phases are modulated
+by two more: a value noise for four transcendentals and no texture fetch, at
+frequencies that are exact multiples of one cycle per `DRIFT_PERIOD` metres, for
+the reason the fog's own drift is.
+
+**And a grade that lifts colour rather than adding it.** The vibrance knob is a
+*vibrance* now rather than a saturation: how much colour a fragment already has
+decides how much more it is given, so moss, lichen, a lake and a shaded hillside
+come up while a fox and a rowan berry are left where they were. A flat
+saturation lifts both and the second one clips.
+
+### One material that was wrong, and now is not
+
+Every animal in the game shares one tile of the atlas, because what a
+flat-shaded animal reads by is the colour on its vertices — from its skin sheet
+— and not its texels. That tile was `BARK`'s, chosen when a tile was a pattern
+and nothing else. It is not only a pattern any more: it says what the light does
+to whatever is drawn with it, and bark says "deeply grooved, and dry", which is
+a fair description of an oak and a poor one of a wren. `PELT` is the material
+for the living things — fine grain, shallow relief, and enough of a sheen to
+catch a low sun the way a feathered back does.
+
+### What it cost, and what stayed the same
+
+Two atlases instead of one, at twice the resolution: still under a megabyte
+each, uploaded once and re-uploaded only when a texture pack is rescanned. Per
+fragment, a second texture fetch and a specular lobe per *surface* light — which
+is the list §7j already culls to a handful, and is zero for the hillside behind
+you. The voxel world pays none of it: with no surface atlas the reflectance is
+black, so every specular term multiplies out to nothing, and the colour atlas is
+read as a colour again.
+
+**The Java2D path is untouched by every line of this.** A specular lobe per
+light per *triangle*, on the thread that is also running the game, is not a
+trade worth making at that budget — so the painter keeps its flat fill, and the
+one thing it does inherit is the palette, because both backends read `shade()`
+and both now read the same number.
+
+---
+
 ## 8. Tests
 
 `src/test/java/com/larsons/engine/watch/`
@@ -3078,6 +3253,29 @@ and the same camp, drawn once with a sun in it and once without.
   **a flame flickering is not the fire moving**, which is the whole of the
   caching: `LightField` wobbles a flame's radius on every frame, so a map cached
   against it exactly is a map redrawn six faces at a time for ever.
+  For §7m's materials, two more on the same driver. **The card draws the colour
+  the painter fills** — a sheet of grass at neutral daylight under a plain sky,
+  averaged over the middle of the frame, against the number `TerrainMesher`
+  hands the painter for the same material; that is the assertion the world went
+  years without, and its absence is why the GL build was a third as bright as
+  the Java2D one. And **water catches the sky where moss does not**: two sheets
+  at a grazing angle with the *same vertex colour*, so nothing about their
+  albedo differs and the only thing separating them is which tile of the surface
+  atlas they sample — with the control being the same frame drawn without that
+  atlas, where the two have to come back the same, which is what makes the first
+  assertion about materials rather than about two textures that happen to
+  differ.
+  Two of that class's older thresholds moved with this work, and both had been
+  passing by a single unit out of 255. The ground under its fixtures is now cut
+  from `PAPER`, the one material whose tile is flat: these tests measure the
+  difference between two frames at a named patch of ground, that difference is
+  proportional to whatever the texture is doing under the sample window, and a
+  fixture cut from grass measures the light *times the grass*. And the two
+  samples either side of the lamp-seam test are now the **same distance from
+  the flame** — a lamp's brightness falls off with distance whether or not
+  there is a seam, so two points eighty centimetres either side of a join are
+  genuinely a fifth apart in brightness, and a tolerance tight enough to catch
+  a seam was measuring the falloff instead.
 * `DebugModeTest` also covers the clock: `,` and `.` move the time of day and
   `/` puts it back, none of it does anything until the code is typed, and the
   scrub is rate-limited against the animation clock rather than the drawing one
@@ -3151,6 +3349,27 @@ and the same camp, drawn once with a sun in it and once without.
   view both by snapshot and over the wire.
 * `WatchRenderTest` — a frame draws triangles, sorted far to near, and nothing
   behind the camera reaches the target.
+* `MaterialsTest` — §7m's two atlases, and every assertion in it is one that
+  failed silently before it existed. **The colour atlas holds detail**: every
+  tile averages to mid-grey, which is the whole invariant the encoding rests on
+  and the one that stops the card multiplying a material by itself — when it is
+  broken nothing fails, the world is simply drawn at the wrong exposure on one
+  backend and nobody can say why. **A map board's face is exactly white and
+  matte** on both backends, asserted per texel rather than by trusting the
+  switch, because every generated flourish since — the hue drift, the
+  saturation lift, the cavity — is a way for `PAPER` to stop being nothing.
+  **The surface atlas holds a material**: roughness that averages to the
+  material's own, metalness that *is* it to the texel, and normals that average
+  out flat — a normal map whose mean is tilted does not look like a bug in a
+  texture, it looks like the sun being in the wrong place. **The tiles join up
+  with themselves**, measured against the tile's own scale rather than a
+  constant: opposite edges must be more alike than two columns from the middle
+  of it, which is a statement about the noise wrapping and not about how strong
+  it is. That one caught bark, whose lattice had been stretched by scaling a
+  coordinate and so repeated at an interval that had nothing to do with the
+  tile's edge. And **a pack goes through all of it**: a sheet is installed, the
+  painter's flat colour becomes the pack's, the tile the card samples still
+  averages to neutral, and the pack gets relief it never drew.
 * `SpyglassTest` — three claims, in order. It is **optics**: each stop's field
   of view is the true ratio of tangents, the camera takes the narrowest one
   without clamping, and a thing at four hundred metres projects exactly ×N
