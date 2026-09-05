@@ -15,7 +15,7 @@ import java.util.Map;
  * Nothing about a campfire is <em>behaviour</em> that a lantern does not also
  * have, so the difference between them is a row rather than a subclass — the
  * same bargain {@link com.larsons.engine.watch.world.WatchBiome} and
- * {@link com.larsons.engine.watch.build.BuildPiece} strike, and for the same
+ * {@link com.larsons.engine.watch.home.HousePlan} strike, and for the same
  * reason: adding a fifth light should be adding a row.
  *
  * <p><b>The colours are the point of having four.</b> A camp lit by one warm

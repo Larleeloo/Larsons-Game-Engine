@@ -1,6 +1,6 @@
 package com.larsons.engine.watch;
 
-import com.larsons.engine.watch.build.Structure;
+import com.larsons.engine.watch.home.Homestead;
 import com.larsons.engine.watch.world.Grove;
 import com.larsons.engine.watch.world.TerrainField;
 import com.larsons.engine.watch.world.TreeInstance;
@@ -42,8 +42,10 @@ import java.util.Map;
  *       seed, so they are on the map whether or not anybody has found them.
  *       <b>That is deliberate</b>: a map whose trading posts appear only once
  *       you have walked to them is a map that cannot tell you where to walk.</li>
- *   <li>{@link Chart.Kind#CAMP} — {@link Structure}, clustered, so a treehouse
- *       of forty pieces is one icon and not forty.</li>
+ *   <li>{@link Chart.Kind#CAMP} — {@link Homestead}: one icon per house, named
+ *       for what it is. It needed clustering when a camp was forty separate
+ *       built pieces; a house is one purchase standing in one place, so the
+ *       icon can say "Mansion" instead of "forty pieces".</li>
  *   <li>{@link Chart.Kind#FEEDER} — the feeders standing.</li>
  *   <li>{@link Chart.Kind#PLANTING} — {@link Grove}, likewise clustered: an
  *       orchard is a place, and its individual trees are not.</li>
@@ -62,10 +64,7 @@ public final class Survey {
     /** How many icons of any one kind a map will carry. */
     private static final int PER_KIND = 12;
 
-    /** How close two built things have to be to count as one camp, in metres. */
-    private static final double CLUSTER = 14;
-
-    /** …and two planted trees, to count as one orchard. */
+    /** How close two planted trees have to be to count as one orchard, in metres. */
     private static final double ORCHARD_CLUSTER = 22;
 
     /** How coarse the grid the high ground is read off is. */
@@ -86,7 +85,7 @@ public final class Survey {
      * @param radius half the square's width, in metres
      */
     public static List<Chart.Landmark> survey(TerrainField field, Shops shops,
-                                              Structure structure,
+                                              Homestead homes,
                                               Collection<Lure> lures, Grove grove,
                                               Boats boats, FieldGuide guide,
                                               double centreX, double centreY,
@@ -107,15 +106,14 @@ public final class Survey {
             }
         }
 
-        if (structure != null) {
-            List<double[]> camps = cluster(points(structure, centreX, centreY, reach),
-                    CLUSTER);
-            for (double[] camp : camps) {
-                if (out.size() >= PER_KIND * 3) break;
-                if (!inside(camp[0], camp[1], centreX, centreY, radius)) continue;
-                int pieces = (int) camp[2];
-                out.add(new Chart.Landmark(Chart.Kind.CAMP, camp[0], camp[1],
-                        pieces == 1 ? "A single piece" : pieces + " pieces"));
+        if (homes != null) {
+            int taken = 0;
+            for (Homestead.Home home : homes.near(centreX, centreY, reach)) {
+                if (taken >= PER_KIND) break;
+                if (!inside(home.x(), home.y(), centreX, centreY, radius)) continue;
+                out.add(new Chart.Landmark(Chart.Kind.CAMP, home.x(), home.y(),
+                        home.plan().displayName()));
+                taken++;
             }
         }
 
@@ -262,15 +260,6 @@ public final class Survey {
     private static boolean inside(double x, double y, double centreX, double centreY,
                                   double radius) {
         return Math.abs(x - centreX) <= radius && Math.abs(y - centreY) <= radius;
-    }
-
-    private static List<double[]> points(Structure structure, double x, double y,
-                                         double radius) {
-        List<double[]> out = new ArrayList<>();
-        for (Structure.Placement piece : structure.near(x, y, radius)) {
-            out.add(new double[]{piece.x(), piece.y()});
-        }
-        return out;
     }
 
     private static List<double[]> points(List<TreeInstance> trees) {

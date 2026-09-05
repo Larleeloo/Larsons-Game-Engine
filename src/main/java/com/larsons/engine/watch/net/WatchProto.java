@@ -40,7 +40,7 @@ import java.util.Map;
  *   client → server   {"t":"lamp"}       (light, douse or fill what is in hand)
  *   client → server   {"t":"putlight"}   (set a light down, or build a fire)
  *   client → server   {"t":"plant","s":"acorn"}
- *   client → server   {"t":"build","p":"platform","r":2,"tree":true}
+ *   client → server   {"t":"home","h":"cabin","r":2}   {"t":"packup"}
  *   client → server   {"t":"craft","o":"suet_cake","st":"FIRE"}
  *   client → server   {"t":"cast"} {"t":"strike"}
  *   client → server   {"t":"glass","m":8}            (1 = put it away)
@@ -63,7 +63,7 @@ import java.util.Map;
  *   client → server   {"t":"bounty","sp":"otter_river_banded"}
  *
  *   server → client   {"t":"bag","items":{…}}          (private, after any change)
- *   server → all      {"t":"world","grove":{…},"crops":{…},"built":{…},"maps":{…},
+ *   server → all      {"t":"world","grove":{…},"crops":{…},"homes":{…},"maps":{…},
  *                      "spills":{…},"bounties":{…}}
  *   server → all      {"t":"guide","entries":[…],"pets":[…],"earned":…,"tally":[…]}
  *   both              info / error / ping / pong
@@ -254,7 +254,7 @@ public final class WatchProto {
 
         // The fires and lanterns, beside the feeders and for the feeders'
         // reason: they are world state that <em>changes on its own</em>. A
-        // built piece never does, so it can ride the five-second world sync;
+        // house never does, so it can ride the five-second world sync;
         // a fire goes out, and a party who watched their camp go dark five
         // seconds after it happened would learn to distrust the picture. A row
         // is six numbers and a key, and a well-lit camp has half a dozen.
@@ -299,13 +299,25 @@ public final class WatchProto {
         return m;
     }
 
-    public static Map<String, Object> build(String piece, int turn, boolean inTree) {
-        Map<String, Object> m = msg("build");
-        m.put("p", piece);
+    /**
+     * Buy a house.
+     *
+     * <p>Two fields, and that is the point of the whole feature: which plan and
+     * which way it faces. Where it goes is the host's — it lands in front of
+     * the buyer, and a client that could name its own coordinates could put a
+     * mansion on somebody's head from three kilometres away. Whether it goes up
+     * a tree is the plan's, not the buyer's, for the same reason a client does
+     * not choose its own prices. See {@code WatchGame.buyHome}.
+     */
+    public static Map<String, Object> home(String plan, int turn) {
+        Map<String, Object> m = msg("home");
+        m.put("h", plan);
         m.put("r", turn);
-        if (inTree) m.put("tree", true);
         return m;
     }
+
+    /** Take down the house we are standing at, for half of what it cost. */
+    public static Map<String, Object> packUp() { return msg("packup"); }
 
     public static Map<String, Object> craft(String output, String station) {
         Map<String, Object> m = msg("craft");
@@ -567,7 +579,7 @@ public final class WatchProto {
      */
     public static Map<String, Object> world(Map<String, Object> grove,
                                             Map<String, Object> crops,
-                                            Map<String, Object> built,
+                                            Map<String, Object> homes,
                                             Map<String, Object> maps,
                                             Map<String, Object> boats,
                                             Map<String, Object> spills,
@@ -576,7 +588,7 @@ public final class WatchProto {
         Map<String, Object> m = msg("world");
         m.put("grove", grove);
         m.put("crops", crops);
-        m.put("built", built);
+        m.put("homes", homes);
         // The Eye Spy board, on the slow channel with everything else the host
         // owns. It changes when somebody pins one up, when somebody claims one
         // and when one goes stale — a handful of times a day rather than a
@@ -591,7 +603,7 @@ public final class WatchProto {
         // so it is never five seconds stale in practice. See
         // com.larsons.engine.watch.Spill.
         if (spills != null) m.put("spills", spills);
-        // The maps ride with the buildings rather than on a channel of their
+        // The maps ride with the houses rather than on a channel of their
         // own: they change at the same rate and for the same reason — somebody
         // did something to the world — and a stroke of a pen is a few hundred
         // bytes beside a grove.

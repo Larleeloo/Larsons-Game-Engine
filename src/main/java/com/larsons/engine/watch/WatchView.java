@@ -1,6 +1,6 @@
 package com.larsons.engine.watch;
 
-import com.larsons.engine.watch.build.Structure;
+import com.larsons.engine.watch.home.Homestead;
 import com.larsons.engine.watch.life.Animal;
 import com.larsons.engine.watch.life.AnimState;
 import com.larsons.engine.watch.life.AnimalDef;
@@ -117,7 +117,7 @@ public final class WatchView {
     private final FieldGuide guide = new FieldGuide();
     private final Grove grove = new Grove();
     private final Cultivation crops = new Cultivation();
-    private final Structure structure = new Structure();
+    private final Homestead homes = new Homestead();
 
     /**
      * Every fire and lantern standing in the world.
@@ -242,7 +242,8 @@ public final class WatchView {
 
     public Cultivation crops() { return crops; }
 
-    public Structure structure() { return structure; }
+    /** Every house the party has bought. */
+    public Homestead homes() { return homes; }
 
     /** Every fire and lantern the party has left standing. */
     public Lights lights() { return lights; }
@@ -390,7 +391,7 @@ public final class WatchView {
         guide.load(game.guide().toMap());
         grove.load(game.grove().toMap());
         crops.load(game.crops().toMap());
-        structure.load(game.structure().toMap());
+        homes.load(game.homes().toMap());
         cartography.load(game.maps().toMap());
         spills.load(game.spills().toMap());
         // The two party games. Copied across on the same line of thinking as

@@ -8,7 +8,8 @@ import com.larsons.engine.graphics.MeshPass;
 import com.larsons.engine.graphics.draw.RecordingTarget;
 import com.larsons.engine.input.InputManager;
 import com.larsons.engine.scene.SceneManager;
-import com.larsons.engine.watch.build.BuildPiece;
+import com.larsons.engine.watch.home.Homestead;
+import com.larsons.engine.watch.home.HousePlan;
 import com.larsons.engine.watch.life.Animal;
 import com.larsons.engine.watch.net.WatchSession;
 import org.junit.jupiter.api.Test;
@@ -39,6 +40,11 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
  */
 @Timeout(180)
 class DebugModeTest {
+
+    /** Put a player somewhere, on the ground that is there. */
+    private static void stand(WatchGame game, int id, double x, double y) {
+        game.move(id, x, y, game.field().heightAt(x, y), 0, 0, false, 0.05);
+    }
 
     private static WatchGame solo() {
         return new WatchGame(WatchGame.Config.solo("Debug Walk"));
@@ -137,11 +143,15 @@ class DebugModeTest {
      * The claim the design is for: not a list of grants, a lens over the
      * registries.
      *
-     * <p>So this walks {@link Recipes#all()} and {@code BuildPiece.all()} rather
-     * than naming anything — every recipe there is, and every piece, is
-     * affordable and actually makeable. A recipe added tomorrow is in this test
-     * tomorrow, without the test being edited, which is the same property the
-     * feature has.
+     * <p>So this walks {@link Recipes#all()} rather than naming anything: every
+     * recipe there is, is affordable and actually makeable. A recipe added
+     * tomorrow is in this test tomorrow, without the test being edited, which
+     * is the same property the feature has.
+     *
+     * <p>{@link HousePlan#all()} gets the same treatment on the other power,
+     * because a house is the one thing in the game a bottomless satchel cannot
+     * pay for — see {@link Debug.Power#POINTS}, which is the row that exists
+     * for costs that escaped the satchel.
      */
     @Test
     void everythingInTheGameIsFreeIncludingWhatIsAddedNext() {
@@ -158,12 +168,28 @@ class DebugModeTest {
                     recipe.output() + " would not be made");
         }
 
-        assertFalse(BuildPiece.all().isEmpty());
-        for (BuildPiece piece : BuildPiece.all()) {
-            assertTrue(piece.affordable(bag),
-                    piece + " cannot be afforded with everything unlimited");
-            assertTrue(piece.pay(bag), piece + " would not take payment");
+        // Every house in the catalogue, on a guide with nothing in it, because
+        // the points power is not a balance — it is a lens that skips the
+        // charge. See WatchGame.buyHome.
+        //
+        // Asked as "never refused for want of money" rather than as "always
+        // goes up": a house also needs flat dry ground under it, and which
+        // spots in a generated world have that is not what this test is about.
+        assertEquals(0, game.guide().points(), "the walk started with points in it");
+        assertFalse(HousePlan.all().isEmpty());
+        int bought = 0;
+        for (int i = 0; i < HousePlan.all().size(); i++) {
+            HousePlan plan = HousePlan.all().get(i);
+            // Somewhere of its own, or the second one is refused for standing
+            // on the first rather than for costing anything.
+            stand(game, 1, i * 137.0, i * 61.0);
+            Homestead.Outcome receipt = game.buyHome(1, plan, 0);
+            assertFalse(receipt.line() != null && receipt.line().contains("Not enough"),
+                    plan + " was refused for want of points with the mode on");
+            if (receipt.done()) bought++;
         }
+        assertTrue(bought > 0, "not one house in the catalogue would go up anywhere");
+        assertEquals(0, game.guide().spent(), "unlimited points still spent some");
 
         // Every item there is, however many of it you like — including one that
         // no registry has heard of, which is what keeps a cost added later from

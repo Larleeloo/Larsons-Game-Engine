@@ -309,7 +309,7 @@ class LitterTest {
         assertEquals(piece.key(), game.pick(1));
 
         var message = com.larsons.engine.watch.net.WatchProto.world(
-                game.grove().toMap(), game.crops().toMap(), game.structure().toMap(),
+                game.grove().toMap(), game.crops().toMap(), game.homes().toMap(),
                 game.maps().toMap(), game.boats().toMap(), game.spills().toMap(),
                 game.bounties().toMap(), game.takenLitter());
 

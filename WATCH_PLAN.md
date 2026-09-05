@@ -423,8 +423,8 @@ twelve rows:
 
 | | |
 |---|---|
-| **Unlimited items** | Every recipe, every build piece, every feeder, every seed, every tool. |
-| **Unlimited points** | Anything on any keeper's shelf, at any price. *(Added in §7f — see below for why it had to be.)* |
+| **Unlimited items** | Every recipe, every feeder, every seed, every tool. |
+| **Unlimited points** | Anything on any keeper's shelf and any house in the catalogue, at any price. *(Added in §7f — see below for why it had to be; §7n put houses on the same row for the same reason.)* |
 | **Maps** | Draw a map, mark it, pin it to a board. *(Added in §7h — a gate on an unpriced feature rather than an abundance.)* |
 | **Summon mutants** | **K** puts a wendigo, a werewolf or a mirewraith on the ground twenty metres in front of you — any biome, any hour, however many. *(Added in §7i.)* |
 | **Readout** | Position, chunk and LOD, biome and material underfoot, streaming, triangles, what is alive and what is hunting, the glass, the guide, the nearest trading post. |
@@ -432,11 +432,12 @@ twelve rows:
 **A short list because the first row is structural.** Debug mode does not hand
 out a list of items — it makes the player's satchel `bottomless`, and *almost
 every* cost in this game is a `has` and a `take`
-against a `Satchel`. One lens over one class covers crafting, building,
-feeders, planting, fishing and the spyglass, and it covers whatever is added
-next **without being edited**: an item added to `Forage` is already unlimited, a
-recipe added to `Recipes` already affordable, a piece added to `BuildPiece`
-already free. A debug mode written as a list of grants is a copy of a registry
+against a `Satchel`. One lens over one class covers crafting, feeders,
+planting, fishing and the spyglass, and it covers whatever is added next
+**without being edited**: an item added to `Forage` is already unlimited and a
+recipe added to `Recipes` already affordable. (Houses are the exception that
+proves it, and the second cost after a keeper's shelf to escape the satchel:
+they are bought with points, so they went on the **Unlimited points** row.) A debug mode written as a list of grants is a copy of a registry
 that keeps moving, and it is stale a week later.
 
 Three properties worth keeping:
@@ -445,7 +446,7 @@ Three properties worth keeping:
   when it comes off, so switching it off leaves the walk exactly as it was.
 * **It reaches the screen.** The flag is on the player, rides in their own
   snapshot, and is copied onto the view's satchel on both the solo and the wire
-  paths — so a client's cooking and build screens light up exactly when the
+  paths — so a client's cooking and house screens light up exactly when the
   host says they should rather than greying out things the host would allow. It
   survives a save, too.
 * **The host's walk only.** `WatchGame.debug` refuses the code to anybody who
@@ -471,13 +472,20 @@ priced yet; this one grants something **no player will ever have**. It is not a
 verb waiting for a gate to lift, and that is why its key is the one thing in the
 walk that is not on the controls screen — see §7i.
 
-### 4.5 Building (`watch/build`)
+### 4.5 Houses (`watch/home`)
 
-Ten piece types — post, beam, floor, wall, window wall, roof, ladder, door,
-platform and rope bridge — each with a **foraged** recipe (fallen branches,
-bark, reeds, stone, vine). Pieces snap to a metre grid; a piece placed against a
-trunk anchors to it, which is how a treehouse gets built. Structures are shared:
-placement goes through the server and every player sees it.
+**Bought whole, not built up.** Ten plans on a price ladder from a 45-point
+lean-to to a 3400-point mansion, paid for out of the guide's shared points, and
+each one arrives complete: floors, walls with window and door openings, a roof,
+a staircase or a ladder between its storeys, a hearth, furniture and — from the
+lodge up — a wall to pin maps to. Four of the ten go **up a tree**, and each of
+those comes with the ladder from the ground to its deck.
+
+Size and intricacy scale with the price, structurally rather than as a label:
+`HousePlan` carries a footprint, a storey count, a roof and a level of `Trim`,
+and `HouseKit` reads all four. Walls are solid, floors carry you, stairs are
+walked up and ladders are climbed — see §7n for the whole argument, and for what
+was there before.
 
 ---
 
@@ -599,7 +607,7 @@ party spread across the map costs what it should.
 | 17+ biomes, incl. the seven named | `watch/world/WatchBiomes` (20) |
 | Luring: fishing, berries, seeds, cooking | `watch/Fishing`, `Forage`, `Cultivation`, `Recipes`, `Lure` |
 | Tree cross-pollination | `Grove.pollinate`, `TreeSpecies.hybrid` |
-| Building from foraged materials | `watch/build/BuildPiece`, `Structure` |
+| Houses you buy with points and put down anywhere, complete and collidable | `watch/home/HousePlan`, `HouseKit`, `Homestead`, `watch/render/HouseModel` — see §7n |
 | Real-life day/night | `WatchClock.fromSystem` |
 | 1000+ animals | `AnimalRegistry` (asserted in tests) |
 | Pets | `AnimalDef.tameable`, `Animal.trust`, `FieldGuide.pets` |
@@ -1534,15 +1542,16 @@ second map and the board is bigger. That is the entire interaction — no join,
 no orientation, no order — and it works because none of the maps was ever drawn
 relative to itself.
 
-`MAP_BOARD` is the eleventh `BuildPiece` and the first that is more than its
-box: building one registers a `Cartography.Board` twinned with the placement, so
-a board is a *place that holds something* rather than a wall the maps happen to
-be near.
+A board is a *place that holds something* rather than a wall the maps happen to
+be near: whatever timber it hangs on, a `Cartography.Board` is registered
+twinned with it. It was the eleventh `BuildPiece` when this was written; §7n
+made it a fitting on the wall of any house with a study, which is where a thing
+eight people stand in front of and read belonged all along.
 
 ### The board wears its maps
 
 A board whose maps only exist inside a screen is a noticeboard with the notice
-in a drawer. The whole reason a party builds one is that **anybody standing in
+in a drawer. The whole reason a party has one is that **anybody standing in
 front of it can see the map** — so `BoardImage` bakes the combined map and
 `WatchScene.boardFaces` lays it on the timber as a grid of flat facets, one per
 cell, in the colour of the ground it stands for. That is what the terrain
@@ -3084,6 +3093,212 @@ and both now read the same number.
 
 ---
 
+## 7n. Houses you buy, and the building system they replaced
+
+> Asked for: purchasable pre-built houses and treehouses, placed anywhere,
+> priced in points, scaling in size and intricacy, with real collision for
+> walls and floors, treehouses coming with the ladder up to the tree — and
+> **building replaced entirely**.
+
+### What was wrong with building
+
+`watch/build` sold a player ten boxes — a post, a beam, a floor, a wall, a
+window wall, a door, a roof, a ladder, a platform, a rope bridge — and asked
+them to make a house out of them. The honest thing to say about it is that
+nobody ever did. What a party actually built was a floor with a roof on it,
+because:
+
+* a wall was **one 2.6 m box**, so it could not have a window in it, and the
+  "window wall" was a differently-named box that also could not;
+* a door was a 1.2 m box that lined up with nothing, since the pieces snapped to
+  a 0.5 m grid and the wall was 2.6 m wide;
+* a **staircase was not expressible at all** — the only way up was a 3 m ladder
+  piece, one at a time;
+* and none of it collided with anything. A wall was a picture of a wall. You
+  walked through your own hide to get into it.
+
+So a game about standing still and looking at birds had acquired an afternoon of
+block-laying as its price of admission, and the thing it charged that price for
+was **worse than the trading post the generator puts down for free** (§7f). That
+comparison is the whole argument: `ShopModel` had already demonstrated that a
+building in this game should be a carpentry drawing — footings, corner posts,
+plate beams, rafters, an oversailing eave — and that the way to get one is to
+draw it once and place it, not to hand somebody a box.
+
+### The catalogue (`watch/home/HousePlan`)
+
+Ten plans, sorted by price, ground homes and treehouses interleaved so the row
+above a treehouse is what the same money buys on the floor of the wood:
+
+| | Price | Footprint | Floors | Roof | Trim |
+|---|---|---|---|---|---|
+| Lean-To | 45 | 3.0 × 3.4 | 1 | lean | rough |
+| Tree Perch | 90 | 3.2 × 3.2 | 1 | open | rough |
+| Timber Fort | 120 | 3.8 × 4.0 | 1 | deck | rough |
+| Tree Hide | 280 | 4.0 × 4.4 | 1 | lean | plain |
+| Cabin | 300 | 4.8 × 6.0 | 1 | gable | plain |
+| Treehouse | 720 | 5.2 × 6.0 | 1 | gable | fitted |
+| Lodge | 760 | 6.0 × 7.4 | 2 | gable | fitted |
+| Canopy House | 1500 | 6.2 × 7.4 | 2 | gable | fine |
+| Manor House | 1650 | 7.6 × 10.0 | 3 | hip | fine |
+| Mansion | 3400 | 9.2 × 12.8 | 3 | hip | grand |
+
+Read the ladder against `Rarity.points()` — a common bird is 1, an uncommon 3, a
+legendary 100 — and it says: a lean-to is an hour's watching, a cabin is a good
+weekend, and the mansion is the thing a party works toward for as long as they
+play. Paid out of the **guide's** balance, exactly as a purchase over a counter
+is (§7f), because there is one book, one page and one purse.
+
+**"Intricacy scales with price" is structural rather than a label.** Each step of
+`Trim` adds a *class* of part rather than making an existing one larger:
+
+* **rough** — bare timber, open slots for windows, a ladder to anything above;
+* **plain** — shutters, a door, a stone hearth, a bench;
+* **fitted** — glazed windows, a **staircase** instead of a ladder, a table, a
+  bed, shelves, a chimney, and the map board;
+* **fine** — a balcony over the front door, reached through its own doorway;
+* **grand** — the house stops being one box: a hall with a **wing** either side
+  of it and a **tower** standing where the hall's walls stop.
+
+`HomesTest.payingMoreBuysMoreHouse` holds that to the wall: the catalogue must
+be monotonic in volume across the whole list and in part count within each
+family. A mansion is 370 boxes against a lean-to's 37.
+
+### One drawing, not ten (`watch/home/HouseKit`)
+
+Ten hand-built houses would be ten files that share nothing, and the sixth time
+somebody wanted a window an inch lower they would move it in one of them. What
+is actually true of these houses is that they are the *same house* at ten sizes
+and five levels of finish, so the kit is one parameterised drawing:
+
+* a house is one or more **blocks** — a rectangle of ground, a run of storeys,
+  and which of its four faces carry outside walls. Blocks never overlap: a wing
+  is beside the hall and takes the hall's wall away where they meet, and the
+  tower starts at the storey the hall's walls stop at. That is what lets the
+  grandest plan grow wings and a tower out of the same forty lines that put four
+  walls round a lean-to;
+* a **wall** is a run with gaps cut in it. `openings` decides where the door, the
+  windows and the balcony door go; `wall` walks the sorted gaps and emits piers
+  between them, a panel under each sill, a panel over each head, and a pane in
+  the hole when the trim runs to glass;
+* a **floor above the ground has a hole in it** where the way up arrives, taken
+  from the same `wayUp` number the stair is placed from — because a staircase
+  that arrived at a continuous slab of boards is a staircase you climb through
+  the ceiling;
+* a **staircase** is a run of `STAIR` boxes at a fifth of a metre a tread, which
+  is inside the step a walker takes without jumping. That is why the walk needs
+  no case for stairs at all;
+* **no randomness**. A plan expands to the same house every time, which is why
+  the expansion is cached once per plan and why two players see the same house
+  without a byte on the wire.
+
+### The one list, drawn and collided (`HousePart`)
+
+The single most important decision here: **the list of boxes the mesher draws is
+the list the walk collides with.** `HouseKit` emits it once; `HouseModel` draws
+it and `Homestead` collides against it. A house therefore cannot have a wall you
+can see and walk through, or a floor you stand on that is not there — the two
+bugs a game with a separate "collision mesh" spends its life fixing.
+
+The price of that is one rule: every part is a **box**. A part may be *drawn* as
+something else — a floor is sawn into boards, a wall into weatherboarding, a
+roof into overlapping courses (`ShopModel`'s trick, and for its reason: a roof
+with lines across it reads as shingles from thirty metres and a flat plane reads
+as a lid), a ladder into two stiles and a dozen rungs — but what it collides as
+is the box. Where the two would disagree badly enough to matter the **role**
+says so instead: a roof is `ROOF`, which blocks nothing at all, precisely
+because a pitched roof's box is a lie about where the roof is and an invisible
+slab at ridge height across a whole house is a worse lie than none.
+
+Each role answers three questions and no more — can you stand on top of it, does
+it stop you, can you climb it — and that is the whole of a house's physics.
+
+### Three lines in the walk
+
+`Homestead` turns the *question* into the house's own frame rather than turning
+three hundred boxes into the world's, which is what lets a house stand at any of
+the eight compass turns without the collision ever meeting a rotated box. Three
+queries do all of it, and `WatchScene.walk` calls each once:
+
+* **`standOn`** — the highest walkable top that is not above you, or the ground.
+  A floor, a stair tread, a landing, a balcony and the fort's roof deck are all
+  the same rule; none of them has a line of its own.
+* **`solidAt`** — asked after a step and used to refuse it, one axis at a time,
+  so that walking into a wall at an angle slides along it and getting through a
+  1.16 m doorway does not require lining up on it first.
+* **`climbAt`** — the ladder you are holding. Gravity off, jump and crouch mean
+  up and down, and the climb is clamped to the ladder's own ends.
+
+One thing arrived with them: **you can now fall off a balcony.** The test is
+`pz - floor > FALL_STEP && pz - ground > FALL_STEP` — the first half says the
+floor has dropped away and the second says you were up on somebody's carpentry
+rather than on a hillside, because a walker coming down a steep bank must still
+*walk* down it.
+
+### Where a house goes
+
+In front of the buyer, its own depth away, **facing them** — `facingBuyer`
+resolves "three eighths round from facing me" into a compass bearing on the
+host, so the front door is always the side you were looking at and the turn key
+rotates away from there. A client never names coordinates; if it could, it could
+put a mansion on somebody's head from three kilometres away.
+
+The ground has to be dry, and it has to not fall away by more than about half
+the footprint's diagonal (capped at 2.2 m). It does **not** have to be level: the
+floor is laid at the highest ground under the footprint and the house stands on
+**piers** that reach down to the rest, with the front steps carried on down
+beside them. A trading post is sited far more strictly and can afford to be — the
+generator tries two dozen spots and keeps the flattest; a player has pressed a
+key and is looking at a hillside.
+
+A treehouse goes up the nearest trunk that will hold one, just over half way, and
+`HouseKit.trunkLadder` runs a ladder from the ground to a railed landing at its
+back door. That landing is why it is not just a ladder: a ladder that ends in
+mid-air beside a wall is a ladder you fall off.
+
+And it comes down again, for **half of it back** — `packUp`, on the same screen.
+Both verbs answer with a `Homestead.Outcome`: the house, and the line the player
+is told. One type for both, because the caller wants the same two things of
+each — did the world change, and what does the player get told — and because
+carrying the line is what lets a refusal reach a *networked* player, who has
+nobody else to hear it from. The old build verb returned `null` and the screen
+guessed at "cannot build there", which was right about a third of the time.
+The other half of "place it anywhere", and the reason the catalogue can be as
+expensive as it is: a player who has just spent three thousand points putting a
+mansion somewhere they did not mean to has to be able to undo it. Half rather
+than all, because a decision that costs nothing to reverse is not a decision.
+
+### What it costs on the wire, and what it saved
+
+A house is **a plan key and eight numbers** — about eighty bytes for a mansion —
+and both ends build its three hundred and seventy boxes from that. The old
+building system had to send every plank somebody nailed down. That is the
+practical half of "bought, not built".
+
+The mesh follows `TrackMesher`'s pattern rather than the dynamic mesh's: houses
+do not move, so they are meshed when the homestead changes — a purchase, a
+pack-up, a world sync — and the same object is resubmitted in between, which is
+one upload a session rather than sixty a second. Past seventy metres the boards
+are not sawn, the courses collapse from seven to two and the furniture is left
+out, which takes a mansion from about twenty thousand triangles to four and a
+half: the same call `ShopModel` makes about a keeper's wares, and none of the
+difference is visible from the far side of a valley.
+
+### The map board survived
+
+`MAP_BOARD` was the eleventh `BuildPiece` and the only one debug mode held back,
+so the build menu had to hide a row from most players. Deleting the building
+system would have taken the whole of §7h with it. Instead the board became a
+**fitting**: a house with a study has one on its wall, `buyHome` registers the
+`Cartography.Board` twinned with the house's id, and `packUp` takes it down and
+gives the maps pinned to it back to the world. Which is where a thing eight
+people stand in front of and read belonged all along.
+
+The gate did not disappear; it stayed on the *verbs*. A player without the code
+owns a handsome empty board.
+
+---
+
 ## 8. Tests
 
 `src/test/java/com/larsons/engine/watch/`
@@ -3154,9 +3369,38 @@ and both now read the same number.
 * `GroveTest` — growth stages advance with time; cross-pollination inherits
   traits and produces hybrids.
 * `WatchGameTest` — spotting discovers, re-spotting does not; lures attract only
-  species that eat them; fishing, cooking, planting and building round-trip.
+  species that eat them; fishing, cooking, planting and buying a house
+  round-trip.
+* `HomesTest` — the six claims of §7n. **Bought, not built**: a cabin is refused
+  to an empty book with the reason said out loud, taken out of the shared
+  balance when it is not, and it arrives with floors, walls, a roof and a step
+  up to its door already in it — then comes down again for half of it back,
+  booked as money returned rather than as animals seen. **Bigger costs more**:
+  the catalogue is monotonic in volume across the whole list and in part count
+  and storeys within each family, and the dearest house is five times the parts
+  of the cheapest, with glazing, staircases, furniture and a study that the
+  cheapest has none of. **Put down anywhere**: at each of the eight turns,
+  snapped to the grid, with turn zero putting the buyer out in front of their own
+  front door; refused with a reason when something is already standing there, and
+  never charged for a refusal. **Walls are solid and floors carry**: the middle
+  of a room is not solid and the back wall is, the doorway is a hole wide enough
+  that neither shoulder catches it and the wall beside it is not, a walker
+  inside is standing on the floor rather than on the hillside, a floor above
+  their head is not what they are standing on, a staircase is a run of floors
+  none of which is higher than a step, and every floor above the ground has a
+  hole in it where the stair arrives. **Treehouses come with the ladder**: every
+  plan in the family, reaching from within a step of the ground to within a step
+  of its own deck, takeable hold of at its foot, and arriving somewhere rather
+  than in mid-air. **They survive the wire and the save**: a mansion crosses as
+  a key and eight numbers and the far end builds the same number of boxes from
+  it; a lodge and its map board come back out of a save together. Finally
+  through the real `WatchScene`, because the collision is three lines of the
+  walk and every remaining way it breaks is a wiring fault: hold the forward key
+  at a house's front door and you end up standing on its floor, hold it at the
+  same house's back wall and you are stopped exactly one shoulder short of it —
+  and in neither case is the walker ever inside the timber on any frame.
 * `WatchNetTest` — an eight-player session over loopback: join, move, spot,
-  spotlight broadcast, build, disconnect; the ninth is refused.
+  spotlight broadcast, disconnect; the ninth is refused.
 * `WatchClockTest` — the real-clock mapping, both directions.
 * `LightingTest` — the four layers of §7j. **The catalogue**: every light names
   items, fuel and costs that exist, and every carried one can actually be made.
@@ -3411,9 +3655,12 @@ and both now read the same number.
   find it), what it grants, and who may have it: a guest on somebody else's
   walk is refused and the host is not. The test that carries the design is
   `everythingInTheGameIsFreeIncludingWhatIsAddedNext`, which walks
-  `Recipes.all()` and `BuildPiece.all()` rather than naming anything — so a
-  recipe added tomorrow is in the test tomorrow without the test being edited,
-  which is the same property the feature has. Then that the flag reaches the
+  `Recipes.all()` rather than naming anything — so a recipe added tomorrow is in
+  the test tomorrow without the test being edited, which is the same property
+  the feature has. It walks `HousePlan.all()` on the other power for the same
+  reason, and asks the honest question there: not "every house goes up", which
+  depends on where the generator put a flat clearing, but "no house is ever
+  refused for want of money". Then that the flag reaches the
   screen on both the solo and the wire paths, that it survives a save, and that
   typing the code into a running `WatchScene` turns it on, draws the readout,
   and turns it off again.
@@ -3524,8 +3771,11 @@ and both now read the same number.
   built from one seed paint the identical paper and two different seeds do not,
   the paper is terrain rather than a wash, and a camp built *after* a map was
   drawn is on the next map and not on that one. **It has the country on it**:
-  the post underfoot with its own sign, the feeder and the floor just laid, and
-  six pieces in one clearing drawn as one camp rather than six. **You can write
+  the post underfoot with its own sign, the feeder and the house just bought,
+  and a house drawn as one icon that says which house it is — it used to be six
+  built pieces clustered into one camp, and a house is one purchase standing in
+  one place, so the clustering went with the building system and the label got
+  better. **You can write
   on it**: a stroke goes on in world metres, one point is refused as not being a
   line, the eraser names one mark by id out of a space shared with the notes,
   and all of it survives a save and crosses the wire with the map. **It is in
@@ -3551,5 +3801,6 @@ and both now read the same number.
   did and lands inside the map, the eraser takes it off again, the note tool
   writes words, E at a board opens it, and clicking down the board's own list
   puts a map up. And the eighth: every one of the six verbs is refused to a
-  player who has not typed the code, the build menu does not list the board to
-  them, and the readout says maps are one of the powers.
+  player who has not typed the code — while the board itself is not, because it
+  is furniture in a house anybody may buy — and the readout says maps are one of
+  the powers.

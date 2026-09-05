@@ -252,7 +252,9 @@ public enum GameAction {
             InputBinding.key(KeyEvent.VK_R)),
     WATCH_CROSS("watch_cross", "Cross-Pollinate", Category.WATCH,
             InputBinding.key(KeyEvent.VK_C)),
-    WATCH_BUILD("watch_build", "Build Mode", Category.WATCH,
+    // B for "buy a building". The houses replaced the build pieces, and the key
+    // stayed where every player's hand already was.
+    WATCH_HOMES("watch_homes", "House Catalogue", Category.WATCH,
             InputBinding.key(KeyEvent.VK_B)),
     WATCH_ROD("watch_rod", "Cast / Strike", Category.WATCH,
             InputBinding.key(KeyEvent.VK_V)),
@@ -262,7 +264,7 @@ public enum GameAction {
     // the alternate, for anybody playing without a mouse worth the name.
     WATCH_SPYGLASS("watch_spyglass", "Raise Spyglass", Category.WATCH,
             InputBinding.mouse(MouseEvent.BUTTON3), InputBinding.key(KeyEvent.VK_Z)),
-    WATCH_TURN_PIECE("watch_turn_piece", "Turn Build Piece", Category.WATCH,
+    WATCH_TURN_HOME("watch_turn_home", "Turn House", Category.WATCH,
             InputBinding.key(KeyEvent.VK_X)),
     // The two the dark needs. N lights or puts out whatever is in your hand —
     // one key, because "make it light" and "make it dark" are one intention

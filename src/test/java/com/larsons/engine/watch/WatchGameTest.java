@@ -1,7 +1,7 @@
 package com.larsons.engine.watch;
 
-import com.larsons.engine.watch.build.BuildPiece;
-import com.larsons.engine.watch.build.Structure;
+import com.larsons.engine.watch.home.HousePlan;
+import com.larsons.engine.watch.home.Homestead;
 import com.larsons.engine.watch.life.Animal;
 import com.larsons.engine.watch.life.AnimalDef;
 import com.larsons.engine.watch.life.Diet;
@@ -590,25 +590,67 @@ class WatchGameTest {
         assertNull(Cultivation.treeFor(null));
     }
 
-    // --- building -------------------------------------------------------------------------
+    // --- houses ---------------------------------------------------------------------------
+
+    /**
+     * Stand somewhere a house will go up.
+     *
+     * <p>A few spots tried rather than one, because a house needs ground that
+     * does not fall away under it and which square metre of a generated world
+     * has that is not what these tests are about — see {@code WatchGame.siteFor}.
+     * The player is left standing wherever it worked.
+     */
+    private static boolean findSpot(WatchGame game, int id, HousePlan plan) {
+        WatchPlayer me = game.player(id);
+        for (int i = 0; i < 24; i++) {
+            double x = me.x() + i * 9.0, y = me.y() + i * 5.0;
+            game.move(id, x, y, game.field().heightAt(x, y), 0, 0, false, 0.05);
+            // Asked without buying: a dry run against the same siting the
+            // purchase uses, paid for out of nothing because the book is empty.
+            int before = game.guide().points();
+            game.guide().reward(plan.price());
+            Homestead.Outcome trial = game.buyHome(id, plan, 0);
+            if (trial.done()) {
+                game.homes().remove(trial.home().id());
+                game.guide().refund(plan.price());
+                game.guide().spend(game.guide().points() - before);
+                return true;
+            }
+            game.guide().spend(plan.price());
+        }
+        return false;
+    }
 
     @Test
-    void buildingCostsWhatYouForagedAndThenStands() {
+    void aHouseCostsPointsAndThenStands() {
         WatchGame game = game();
         WatchPlayer me = settled(game, 1, "Kara");
+        assertTrue(findSpot(game, 1, HousePlan.CABIN), "nowhere would take a cabin");
+        assertEquals(0, game.guide().points(), "the search left points behind");
 
-        assertNull(game.build(1, BuildPiece.FLOOR, 0, false),
-                "a floor was built out of nothing");
+        Homestead.Outcome broke = game.buyHome(1, HousePlan.CABIN, 0);
+        assertFalse(broke.done(), "a cabin was bought with an empty book");
+        assertTrue(broke.line().contains("Not enough"),
+                "the refusal did not say what was wrong: " + broke.line());
+        assertEquals(0, game.homes().size());
 
-        for (var cost : BuildPiece.FLOOR.cost().entrySet()) {
-            me.satchel().add(cost.getKey(), cost.getValue());
-        }
-        Structure.Placement placed = game.build(1, BuildPiece.FLOOR, 0, false);
-        assertNotNull(placed, "the floor would not go down");
-        assertEquals(1, game.structure().size());
-        for (var cost : BuildPiece.FLOOR.cost().entrySet()) {
-            assertEquals(0, me.satchel().count(cost.getKey()), "the materials were not paid");
-        }
+        game.guide().reward(HousePlan.CABIN.price());
+        Homestead.Outcome bought = game.buyHome(1, HousePlan.CABIN, 0);
+        assertTrue(bought.done(), "the cabin would not go up: " + bought.line());
+        assertEquals(1, game.homes().size());
+        assertEquals(0, game.guide().points(), "the points were not handed over");
+        assertEquals("Kara", bought.home().boughtBy());
+        // In front of the buyer rather than on top of them.
+        assertTrue(bought.home().distanceTo(me.x(), me.y()) > HousePlan.CABIN.halfAlong(),
+                "the house landed on the player who bought it");
+
+        // …and taken down again, for half of it back.
+        game.move(1, bought.home().x(), bought.home().y(), bought.home().z(),
+                0, 0, false, 0.05);
+        assertTrue(game.packUp(1).done(), "the cabin would not come down again");
+        assertEquals(0, game.homes().size());
+        assertEquals(HousePlan.CABIN.price() / 2, game.guide().points(),
+                "taking a house down did not put half of it back");
     }
 
     /**
@@ -617,47 +659,62 @@ class WatchGameTest {
      * refusal is asked for where it is made.
      */
     @Test
-    void twoPiecesCannotBeBuiltInTheSameSpace() {
-        Structure structure = new Structure();
-        assertNotNull(structure.place(BuildPiece.FLOOR, 0, 0, 0, 0, 0, "Kara", 0));
-        assertTrue(structure.blocked(BuildPiece.FLOOR, 0, 0, 0, 0),
-                "a second floor fits inside the first");
-        assertFalse(structure.blocked(BuildPiece.FLOOR, 20, 20, 0, 0));
+    void twoHousesCannotStandInTheSameSpace() {
+        Homestead homes = new Homestead();
+        assertNotNull(homes.place(HousePlan.CABIN, 0, 0, 0, 0, 0, 0, "Kara", 0));
+        assertTrue(homes.blocked(HousePlan.CABIN, 0, 0),
+                "a second cabin fits inside the first");
+        assertFalse(homes.blocked(HousePlan.CABIN, 60, 60));
 
         WatchGame game = game();
-        WatchPlayer me = settled(game, 1, "Kara");
-        for (int i = 0; i < 2; i++) {
-            for (var cost : BuildPiece.FLOOR.cost().entrySet()) {
-                me.satchel().add(cost.getKey(), cost.getValue());
+        settled(game, 1, "Kara");
+        assertTrue(findSpot(game, 1, HousePlan.CABIN), "nowhere would take a cabin");
+        game.guide().reward(HousePlan.CABIN.price() * 2);
+        assertTrue(game.buyHome(1, HousePlan.CABIN, 0).done());
+        Homestead.Outcome second = game.buyHome(1, HousePlan.CABIN, 0);
+        assertFalse(second.done(), "a second cabin was put up inside the first");
+        assertTrue(second.line().contains("already"), second.line());
+        assertEquals(1, game.homes().size());
+        assertEquals(HousePlan.CABIN.price(), game.guide().points(),
+                "the refused house was charged for anyway");
+    }
+
+    /**
+     * The catalogue's whole claim: pay more, get more house.
+     *
+     * <p>Checked as a ladder rather than against named numbers, so that a plan
+     * added tomorrow between two existing ones has to keep the promise too.
+     */
+    @Test
+    void everyHouseCostsSomethingAndBiggerHousesCostMore() {
+        assertFalse(HousePlan.all().isEmpty());
+        HousePlan previous = null;
+        for (HousePlan plan : HousePlan.all()) {
+            assertTrue(plan.price() > 0, plan + " is free");
+            assertTrue(plan.storeys() >= 1, plan + " has no floor to stand on");
+            assertTrue(plan.halfAlong() > 0 && plan.halfAcross() > 0,
+                    plan + " has no footprint");
+            assertFalse(plan.note().isBlank(), plan + " cannot say what it is");
+            assertEquals(plan, HousePlan.of(plan.key()), plan + " does not survive its key");
+            if (previous != null) {
+                assertTrue(plan.price() >= previous.price(),
+                        "the catalogue is not in price order at " + plan);
+                assertTrue(plan.volume() >= previous.volume(),
+                        plan + " costs more than " + previous + " and is smaller");
             }
+            previous = plan;
         }
-        assertNotNull(game.build(1, BuildPiece.FLOOR, 0, false));
-        assertNull(game.build(1, BuildPiece.FLOOR, 0, false),
-                "a second floor was built inside the first");
-        assertEquals(1, game.structure().size());
+        assertNull(HousePlan.of("a_house_nobody_wrote"));
     }
 
     @Test
-    void everyPieceHasACostAndSomethingToBuildItOutOf() {
-        for (BuildPiece piece : BuildPiece.all()) {
-            assertTrue(!piece.cost().isEmpty(), piece + " is free");
-            assertNotNull(piece.material(), piece.toString());
-            assertTrue(piece.sizeX() > 0 && piece.sizeY() > 0 && piece.sizeZ() > 0,
-                    piece + " has no size");
-            assertTrue(piece.costLine() != null && !piece.costLine().isBlank(),
-                    piece + " cannot say what it costs");
-            for (String item : piece.cost().keySet()) {
-                assertNotNull(Forage.byKey(item),
-                        piece + " is built out of '" + item + "', which is not a thing");
-            }
-        }
-    }
-
-    @Test
-    void aTreeHouseAnchorsToATreeAndNotToTheAir() {
-        long anchoredPieces = BuildPiece.all().stream().filter(BuildPiece::anchors).count();
-        assertTrue(anchoredPieces > 0,
-                "nothing can be fixed to a tree, so there are no tree houses");
+    void thereAreHousesForTheGroundAndHousesForTheTrees() {
+        assertFalse(HousePlan.onGround().isEmpty(), "nothing can be put on the ground");
+        assertFalse(HousePlan.inTrees().isEmpty(),
+                "nothing goes up a tree, so there are no treehouses");
+        assertEquals(HousePlan.all().size(),
+                HousePlan.onGround().size() + HousePlan.inTrees().size(),
+                "a plan is on neither list, or on both");
     }
 
     // --- saving ------------------------------------------------------------------------

@@ -10,7 +10,7 @@ import java.util.Map;
 /**
  * Every fire and every lantern the party has left standing.
  *
- * <p><b>A flat map, for {@link com.larsons.engine.watch.build.Structure}'s
+ * <p><b>A flat map, for {@link com.larsons.engine.watch.home.Homestead}'s
  * reason.</b> A world holds a handful of these — a camp has a fire and two or
  * three lanterns, and a party that has walked a long way has left a dozen more
  * behind them as waymarks. A spatial index for that is a structure to keep
@@ -20,7 +20,7 @@ import java.util.Map;
  * <p><b>The host owns all of it.</b> Placing, feeding and taking one back are
  * decisions, and decisions are the server's — see
  * {@link com.larsons.engine.watch.WatchGame}. This class does what it is told
- * and keeps the answer; it never adjudicates, exactly as {@code Structure}
+ * and keeps the answer; it never adjudicates, exactly as {@code Homestead}
  * never consults {@code blocked} from {@code place}.
  */
 public final class Lights {

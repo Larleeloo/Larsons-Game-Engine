@@ -3253,14 +3253,45 @@ the biome you are standing in, so "go and find a beach" is a real instruction �
 nobody has a glass in their first ten minutes, and wanting one is a reason to
 walk somewhere new.
 
-### Building
+### Houses
 
-Ten pieces — post, beam, floor, platform, wall, window wall, door, roof,
-ladder, rope bridge — each costing foraged material, snapped to a half-metre
-grid and turnable through eight facings
-([`BuildPiece`](src/main/java/com/larsons/engine/watch/build/BuildPiece.java)).
-Anything that anchors can be fixed **into a tree**, which is how the tree house
-happens.
+**You buy them, complete.** <kbd>B</kbd> opens a catalogue of ten houses priced
+in the same points a keeper's shelf takes — from a 45-point lean-to to a
+3400-point mansion — and the one you pick goes up in front of you, facing you,
+finished
+([`HousePlan`](src/main/java/com/larsons/engine/watch/home/HousePlan.java)).
+<kbd>X</kbd> turns it an eighth at a time before you buy; ← or → takes down the
+one you are standing in, for half of what it cost.
+
+**Size and intricacy scale with the price, and they scale structurally.** Each
+step up the ladder buys more ground, another floor, a roof with more sides to
+it, and then a class of thing the tier below did not have at all: shutters and a
+hearth, then glazed windows and a *staircase* and furniture and a chimney, then
+a balcony over the front door and a wall to pin maps to, and at the top a house
+that stops being one box and grows two wings and a tower. A mansion is 370
+boxes of carpentry against a lean-to's 37
+([`HouseKit`](src/main/java/com/larsons/engine/watch/home/HouseKit.java)).
+
+**They are places, not pictures.** The list of boxes the renderer draws is the
+same list the walk collides with, so a wall you can see is a wall you cannot
+walk through, a floor is what you are standing on, a stair tread is a floor
+twenty centimetres up, and a ladder is something you climb with the two keys
+that already mean up and down. Walk off a balcony and you fall
+([`Homestead`](src/main/java/com/larsons/engine/watch/home/Homestead.java)).
+
+**Four of the ten go up a tree**, and each comes with the ladder from the ground
+to a railed landing at its own back door — because a treehouse you have to
+build your own way into is the thing this replaced.
+
+The ground has to be dry and must not fall away too far, but it does **not**
+have to be level: the floor is laid at the highest ground under the footprint
+and the house stands on piers reaching down to the rest, with the front steps
+carried on down beside them.
+
+This replaced building outright. What was there before was ten boxes and a grid,
+and the honest thing to say about it is that a wall was one 2.6 m box that could
+not have a window in it, a staircase was not expressible at all, and none of it
+collided with anything — you walked through your own hide to get into it.
 
 ### The day
 
@@ -3689,7 +3720,8 @@ changes its stop while it is up — <kbd>E</kbd> does whatever is in reach,
 <kbd>G</kbd> opens the book,
 <kbd>Tab</kbd> the satchel, <kbd>F</kbd> puts down a feeder, <kbd>R</kbd>
 plants, <kbd>C</kbd> cross-pollinates, <kbd>Y</kbd> boards and leaves a boat,
-<kbd>B</kbd> builds, <kbd>X</kbd> turns the piece, <kbd>V</kbd> casts and
+<kbd>B</kbd> opens the house catalogue, <kbd>X</kbd> turns the house you have
+picked, <kbd>V</kbd> casts and
 strikes, <kbd>N</kbd> lights, douses or fills whatever is in your hand,
 <kbd>H</kbd> sets a light down — or builds a campfire, when your hands are
 empty — <kbd>M</kbd> draws a map (debug mode only, for now — see below),
@@ -3704,8 +3736,8 @@ engine's.
 Press <kbd>M</kbd> and you have a map of the country you are standing in. It
 goes in your satchel, it opens when you click it, you can write on it with a
 pen, and it shows where everybody is — including the ones who have walked off
-the edge of it. Build a **map board** and several of them join into one larger
-map that the whole party can read.
+the edge of it. Buy a house with a **map board** on its study wall and several
+of them join into one larger map that the whole party can read.
 
 The whole feature is behind
 [debug mode](#debug-mode-type-7799) while it is being finished; everything
@@ -3727,13 +3759,13 @@ moment the map exists
 relief-shaded, with the water darkening by depth and the trails drawn in. The
 icons are collected at that same moment
 ([`Survey`](src/main/java/com/larsons/engine/watch/Survey.java)): trading posts,
-camps, feeders, plantings, boats, the places species were first recorded, and
-the high ground read off the heightfield itself. A camp of forty pieces is one
-icon, not forty.
+houses, feeders, plantings, boats, the places species were first recorded, and
+the high ground read off the heightfield itself. A house is one icon, named for
+what it is.
 
 Which means a map **ages**. The post is on it for ever because a post cannot
 move; the feeder you had out that morning stays on it long after it rotted; the
-camp you build next week is not on it at all. That is the difference between a
+house you buy next week is not on it at all. That is the difference between a
 map and a minimap, and it is the only reason to ever draw a second map of the
 same place.
 
@@ -3756,8 +3788,8 @@ with a thumbnail of itself for an icon. <kbd>Enter</kbd> or a click opens one;
 <kbd>F2</kbd> renames it, with the old name selected so the first character you
 type replaces it.
 
-**A map board joins them up.** Build one (`plank` ×6, `rope` ×2), stand at it
-and press <kbd>E</kbd>. Maps in your satchel are listed to the right; click one
+**A map board joins them up.** Every house from the lodge up has one on its
+study wall ([Houses](#houses)); stand at it and press <kbd>E</kbd>. Maps in your satchel are listed to the right; click one
 and it goes up. The board's paper is the union of everything pinned to it, with
 each map drawn where it actually is — so pinning a second map of the next
 valley simply makes the board bigger, with **no join to line up, no orientation
@@ -3798,12 +3830,13 @@ control and a menu item is an invitation to press it
 
 It grants:
 
-- **Unlimited points.** Anything on any keeper's shelf, at any price, without
-  spending what the guide earned. The one row that had to be added by hand: a
-  trading post's prices come out of the book's balance rather than out of a
-  satchel, so the bottomless-satchel lens below does not reach them.
-- **Unlimited items.** Every recipe, every build piece, every feeder, every
-  seed and every tool, in any number, for ever.
+- **Unlimited points.** Anything on any keeper's shelf and any house in the
+  catalogue, at any price, without spending what the guide earned. The one row
+  that had to be added by hand: a trading post's prices — and a house's — come
+  out of the book's balance rather than out of a satchel, so the
+  bottomless-satchel lens below does not reach them.
+- **Unlimited items.** Every recipe, every feeder, every seed and every tool, in
+  any number, for ever.
 - **[Maps](#maps-debug-mode-only-for-now).** Draw one with <kbd>M</kbd>, mark
   it with a pen, and pin maps together on a board. The odd one out: it grants
   *access* rather than abundance, because the feature is finished and its price
@@ -3828,14 +3861,13 @@ answer to "it should keep working as the game grows". Debug mode does not hand
 out a list of items — a list is a copy of a registry, and it goes stale the
 week after it is written. It makes the player's satchel *bottomless*, and every
 cost in this game is a `has` and a `take` against a `Satchel`. So an item added
-to `Forage` is already unlimited, a recipe added to `Recipes` is already
-affordable, and a build piece added to `BuildPiece` is already free — with no
-edit to the debug code at all. The spyglass proved it: it was built before this
+to `Forage` is already unlimited and a recipe added to `Recipes` is already
+affordable — with no edit to the debug code at all. The spyglass proved it: it was built before this
 mode existed and debug mode granted it without a line.
 
 It is a **lens, not a gift**: what is really in the bag is untouched
 underneath, so switching the mode off leaves the walk exactly as it was. The
-flag rides in the player's own snapshot, so a client's cooking and build
+flag rides in the player's own snapshot, so a client's cooking and house
 screens light up exactly when the host says they should, and it survives a save
 — a walk played with everything unlimited is that walk when you reopen it.
 

@@ -130,9 +130,11 @@ public final class WatchClient implements AutoCloseable {
 
     public void sendPlant(String seed) { send(WatchProto.plant(seed)); }
 
-    public void sendBuild(String piece, int turn, boolean inTree) {
-        send(WatchProto.build(piece, turn, inTree));
-    }
+    /** Buy a house out of the catalogue, facing whichever way we chose. */
+    public void sendHome(String plan, int turn) { send(WatchProto.home(plan, turn)); }
+
+    /** Take down the house we are standing at. */
+    public void sendPackUp() { send(WatchProto.packUp()); }
 
     public void sendCraft(String output, String station) {
         send(WatchProto.craft(output, station));
@@ -273,7 +275,7 @@ public final class WatchClient implements AutoCloseable {
             case "world" -> {
                 view.grove().load(WatchJson.map(message, "grove"));
                 view.crops().load(WatchJson.map(message, "crops"));
-                view.structure().load(WatchJson.map(message, "built"));
+                view.homes().load(WatchJson.map(message, "homes"));
                 view.maps().load(WatchJson.map(message, "maps"));
                 view.boats().load(WatchJson.map(message, "boats"));
                 view.spills().load(WatchJson.map(message, "spills"));
