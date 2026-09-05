@@ -6,7 +6,8 @@ import com.larsons.engine.watch.Spotlight;
 import com.larsons.engine.watch.WatchGame;
 import com.larsons.engine.watch.WatchJson;
 import com.larsons.engine.watch.WatchPlayer;
-import com.larsons.engine.watch.build.BuildPiece;
+import com.larsons.engine.watch.home.HousePlan;
+import com.larsons.engine.watch.home.Homestead;
 
 import java.io.BufferedReader;
 import java.io.BufferedWriter;
@@ -350,7 +351,7 @@ public final class WatchServer implements WatchGame.Sink {
 
     private void sendWorld() {
         toAll(WatchProto.world(game.grove().toMap(), game.crops().toMap(),
-                game.structure().toMap(), game.maps().toMap(), game.boats().toMap(),
+                game.homes().toMap(), game.maps().toMap(), game.boats().toMap(),
                 game.spills().toMap(), game.bounties().toMap(), game.takenLitter()));
     }
 
@@ -410,7 +411,7 @@ public final class WatchServer implements WatchGame.Sink {
             case "use" -> {
                 // Ask what is in reach before acting, so we know afterwards
                 // whether the world changed or only the satchel. A world sync
-                // is the whole grove, every crop, every built piece and every
+                // is the whole grove, every crop, every house and every
                 // moved boat to every client — worth sending when a crop has
                 // been pulled or a boat taken, and absurd to send because
                 // somebody picked a berry, which is most presses of this key.
@@ -509,12 +510,33 @@ public final class WatchServer implements WatchGame.Sink {
                 }
             }
 
-            case "build" -> {
-                BuildPiece piece = BuildPiece.of(WatchJson.str(message, "p", ""));
-                if (game.build(id, piece, WatchJson.integer(message, "r", 0),
-                        WatchJson.bool(message, "tree", false)) != null) {
-                    bagChanged(id, "Built a " + piece.displayName());
+            case "home" -> {
+                HousePlan plan = HousePlan.of(WatchJson.str(message, "h", ""));
+                Homestead.Outcome outcome = game.buyHome(id, plan,
+                        WatchJson.integer(message, "r", 0));
+                // The line goes back whether or not anything was bought: a
+                // refusal a player cannot see is a refusal they will repeat.
+                if (outcome.line() != null) {
+                    conn.send(Protocol.encode(WatchProto.info(outcome.line())));
+                }
+                if (outcome.done()) {
                     sendWorld();
+                    // The purse is the party's, so everybody is told — the same
+                    // rule a purchase over a counter follows, and for the same
+                    // reason: a friend across the valley should see the points
+                    // go down when somebody spends them out of the shared book.
+                    sendLedger();
+                }
+            }
+
+            case "packup" -> {
+                Homestead.Outcome outcome = game.packUp(id);
+                if (outcome.line() != null) {
+                    conn.send(Protocol.encode(WatchProto.info(outcome.line())));
+                }
+                if (outcome.done()) {
+                    sendWorld();
+                    sendLedger();
                 }
             }
 

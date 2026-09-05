@@ -181,7 +181,10 @@ public final class Chart {
     public enum Kind {
         /** A trading post. See {@link Shops}. */
         SHOP("Trading post", 0xC9A227),
-        /** Somewhere the party has built. See {@link com.larsons.engine.watch.build.Structure}. */
+        /**
+         * Somewhere the party lives. See
+         * {@link com.larsons.engine.watch.home.Homestead}.
+         */
         CAMP("Camp", 0xB4763A),
         /** A feeder standing out. See {@link Lure}. */
         FEEDER("Feeder", 0x8FA84C),

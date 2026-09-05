@@ -10,7 +10,7 @@ import java.util.Map;
  *
  * <p><b>Mutable, like {@link com.larsons.engine.watch.Lure} and for its
  * reason.</b> Everything else a party leaves in this world is a record — a
- * built piece, a planted tree, a pinned map — because nothing about it changes
+ * house, a planted tree, a pinned map — because nothing about it changes
  * once it is there. A fire changes continuously: it burns down, it goes out, it
  * is fed and it comes back. Making that a new object every tick would be a new
  * object every tick.

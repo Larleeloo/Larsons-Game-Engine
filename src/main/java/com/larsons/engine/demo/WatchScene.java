@@ -36,8 +36,9 @@ import com.larsons.engine.watch.WatchSounds;
 import com.larsons.engine.watch.WatchStore;
 import com.larsons.engine.watch.WatchView;
 import com.larsons.engine.watch.Weather;
-import com.larsons.engine.watch.build.BuildPiece;
-import com.larsons.engine.watch.build.Structure;
+import com.larsons.engine.watch.home.HouseKit;
+import com.larsons.engine.watch.home.HousePlan;
+import com.larsons.engine.watch.home.Homestead;
 import com.larsons.engine.watch.life.AnimalDef;
 import com.larsons.engine.watch.life.AnimalModels;
 import com.larsons.engine.watch.life.AnimalRegistry;
@@ -55,6 +56,7 @@ import com.larsons.engine.watch.render.BoatModel;
 import com.larsons.engine.watch.render.ChartImage;
 import com.larsons.engine.watch.render.FloraMesher;
 import com.larsons.engine.watch.render.Gait;
+import com.larsons.engine.watch.render.HouseModel;
 import com.larsons.engine.watch.render.ItemModel;
 import com.larsons.engine.watch.render.ItemPortrait;
 import com.larsons.engine.watch.render.KeeperModel;
@@ -297,8 +299,10 @@ public class WatchScene extends AbstractScene {
 
     private static final long TRACKS_KEY = Long.MIN_VALUE + 2;
 
+    private static final long HOMES_KEY = Long.MIN_VALUE + 3;
+
     /** Which overlay is up, if any. */
-    private enum Panel { NONE, SATCHEL, BUILD, SHOP, MAP, BOUNTY, PAUSED }
+    private enum Panel { NONE, SATCHEL, HOMES, SHOP, MAP, BOUNTY, PAUSED }
 
     private final GameContext ctx;
 
@@ -364,6 +368,27 @@ public class WatchScene extends AbstractScene {
     private int trackRevision;
 
     private double trackFromX = Double.NaN, trackFromY, trackAge;
+
+    /**
+     * The party's houses as triangles, and what decides when to rebuild them.
+     *
+     * <p><b>Its own mesh, not the dynamic one</b>, and the numbers say why: a
+     * mansion is about four hundred boxes before the boards are sawn, and the
+     * dynamic mesh is rebuilt from scratch on every single frame. Houses do not
+     * move. They change when somebody buys one, sells one, or when a world sync
+     * brings news of somebody else's — a handful of times a session — so this
+     * follows {@link #trackMesh}'s pattern exactly: held between rebuilds, the
+     * same object resubmitted, and a backend caching by {@link Mesh#revision()}
+     * paying one upload for each of those handful rather than sixty a second.
+     */
+    private Mesh homeMesh = Mesh.empty(0, 0, 0);
+
+    private int homeRevision;
+
+    /** What the homestead looked like when the mesh was last built. */
+    private long homeStamp = Long.MIN_VALUE;
+
+    private double homeFromX = Double.NaN, homeFromY;
 
     /** Whichever of the two track ranges the backend turned out to afford. */
     private double trackRange = TRACK_RANGE_PAINTER;
@@ -638,9 +663,10 @@ public class WatchScene extends AbstractScene {
     private int satchelScroll;
     private int recipeIndex;
     private int recipeScroll;
-    private int pieceIndex;
-    private int pieceTurn;
-    private boolean pieceInTree;
+    /** Which row of the house catalogue is picked, and which way it will face. */
+    private int homeIndex;
+
+    private int homeTurn;
 
     /**
      * The post the shop panel is open on, and where the cursor is on its shelf.
@@ -1043,9 +1069,9 @@ public class WatchScene extends AbstractScene {
             recipeColumn = false;
             return;
         }
-        if (KeyBinds.pressed(input, GameAction.WATCH_BUILD)) {
-            panel = Panel.BUILD;
-            pieceIndex = 0;
+        if (KeyBinds.pressed(input, GameAction.WATCH_HOMES)) {
+            panel = Panel.HOMES;
+            homeIndex = 0;
             return;
         }
         if (KeyBinds.pressed(input, GameAction.WATCH_MAP)) {
@@ -1186,6 +1212,56 @@ public class WatchScene extends AbstractScene {
         trackMesh = TrackMesher.tracks(tracks, streamer, px, py, trackRange,
                 ++trackRevision);
         return trackMesh;
+    }
+
+    /** How far off a house is still drawn, in metres. */
+    private static final double HOUSE_RANGE = 320;
+
+    /** How far the player walks before the houses are re-meshed, in metres. */
+    private static final double HOUSE_RESTEP = 48;
+
+    /**
+     * How far off a house is still built out of boards rather than slabs, in
+     * metres.
+     *
+     * <p>A mansion is twenty thousand triangles with its floorboards sawn, its
+     * roof laid in courses and its furniture in it, and about a quarter of that
+     * without. None of the difference is visible from the far side of a valley,
+     * and the difference between one and eight mansions in a mesh is whether
+     * the rebuild is felt. Generous enough that you are inside the detail long
+     * before you can read anything.
+     */
+    private static final double HOUSE_DETAIL = 70;
+
+    /**
+     * Every house in sight, meshed when the party's houses change and not
+     * before.
+     *
+     * <p>The trigger is a <b>stamp</b> rather than a dirty flag, because the
+     * homestead this reads is a copy — the client replaces the whole thing on
+     * every world sync, and a flag set on the original would never reach it.
+     * Summing the ids catches a house bought, a house taken down, and a whole
+     * homestead swapped for somebody else's, which is every way this list can
+     * change.
+     */
+    private Mesh homeMesh() {
+        Homestead homes = view().homes();
+        long stamp = homes.size() * 1_000_003L;
+        for (Homestead.Home home : homes.all()) stamp += home.id() * 31 + home.turn();
+        boolean moved = Double.isNaN(homeFromX)
+                || Math.hypot(px - homeFromX, py - homeFromY) >= HOUSE_RESTEP;
+        if (!moved && stamp == homeStamp) return homeMesh;
+        homeStamp = stamp;
+        homeFromX = px;
+        homeFromY = py;
+        double ox = Math.floor(px), oy = Math.floor(py);
+        Mesh.Builder mesh = Mesh.builder(ox, oy, 0, false, ++homeRevision);
+        for (Homestead.Home home : homes.near(px, py, HOUSE_RANGE)) {
+            HouseModel.house(mesh, home, homes.partsOf(home), ox, oy,
+                    home.distanceTo(px, py) < HOUSE_DETAIL);
+        }
+        homeMesh = mesh.build();
+        return homeMesh;
     }
 
     /**
@@ -1661,6 +1737,15 @@ public class WatchScene extends AbstractScene {
      *   <li><b>Breath.</b> Which runs out, and floats you up rather than
      *       killing you. See {@link WatchPlayer#breath()}.</li>
      * </ul>
+     *
+     * <p>And a fourth, which arrived with the houses: <b>timber is solid.</b>
+     * Three lines of this method go through {@link Homestead} — a wall refuses
+     * a step, a floor is what you are standing on, and a ladder is what the two
+     * vertical keys mean while you are holding one — and between them they are
+     * the whole of why a bought house is a place rather than a picture. Each
+     * one is deliberately a <em>rule</em> rather than a case: a stair tread is
+     * a floor, a roof deck is a floor, a balcony is a floor, and none of the
+     * three has a line of its own.
      */
     private void walk(double dt, InputManager input) {
         // Frozen: nothing below this line happens at all, which is the shortest
@@ -1688,10 +1773,19 @@ public class WatchScene extends AbstractScene {
         boolean overWater = depth > 0.6;
         boolean rowing = boatId != 0 && overWater;
 
+        // The ladder we are holding, if we are holding one. Worked out before
+        // anything else, because it changes what three keys mean: up and down
+        // climb rather than jump and crouch, and there is no crouching on a
+        // ladder.
+        Homestead homes = view().homes();
+        Homestead.Climb rung = overWater || rowing ? null
+                : homes.climbAt(px, py, pz, pz + Homestead.BODY_HEIGHT);
+
         // A stance, and its own key. It used to be read off JUMP, so the one
         // key in every 3D game that means "jump" made you squat instead; now
         // Space does what it says and Control does the crouching.
-        if (KeyBinds.pressed(input, GameAction.CROUCH) && !overWater && !rowing) {
+        if (KeyBinds.pressed(input, GameAction.CROUCH) && !overWater && !rowing
+                && rung == null) {
             crouching = !crouching;
         }
         if (overWater) crouching = false;
@@ -1769,6 +1863,10 @@ public class WatchScene extends AbstractScene {
             px = startX;
             py = startY;
         }
+        // …and a wall cannot be walked through. Refusing the step for the same
+        // reason, and one axis at a time so that walking into a wall at an
+        // angle slides along it — see slideOffWalls.
+        if (!rowing) slideOffWalls(homes, startX, startY);
 
         double startZ = pz;
         // Still in the air over the water is still in the air: a jump that
@@ -1777,7 +1875,9 @@ public class WatchScene extends AbstractScene {
         // beneath them went deep would drop them onto the waterline from
         // whatever height they were at, in one frame.
         boolean overhead = airborne && pz > surface;
-        if (rowing) {
+        if (rung != null) {
+            climbLadder(dt, homes, rung, ground, rising, sinking);
+        } else if (rowing) {
             // Sitting in the boat: the body rides on the waterline whatever the
             // bed is doing under it.
             land(surface - Boats.DECK);
@@ -1797,15 +1897,27 @@ public class WatchScene extends AbstractScene {
                 climb = JUMP_SPEED;
                 crouching = false;
             }
+            // What is actually under our boots: the ground, or the highest
+            // floor, tread or deck of anybody's house that is not above us.
+            double floor = homes.standOn(px, py, pz + STEP_UP, ground);
             if (airborne) {
                 // Over water, the water is the floor: a jump that ends in a lake
                 // ends at the surface, and the step after that is a swim.
-                fly(dt, overWater ? surface : ground, overWater);
+                fly(dt, overWater ? surface : floor, overWater);
+            } else if (pz - floor > FALL_STEP && pz - ground > FALL_STEP) {
+                // Walked off the edge of something. Both halves of that test
+                // matter: the first says the floor has dropped away, and the
+                // second says we were up on somebody's carpentry rather than on
+                // a hillside — a walker coming down a steep bank must still
+                // <em>walk</em> down it, which is what the easing below is for.
+                airborne = true;
+                climb = 0;
+                fly(dt, floor, false);
             } else {
                 // Eased rather than snapped: on a two-metre grid the ground under
                 // a walker changes by tens of centimetres a step, and a camera
                 // that tracked it exactly would jolt with every one of them.
-                smoothedGround += (ground - smoothedGround)
+                smoothedGround += (floor - smoothedGround)
                         * Math.min(1, dt * STEP_SMOOTHING);
                 pz = smoothedGround;
             }
@@ -1826,6 +1938,91 @@ public class WatchScene extends AbstractScene {
         double covered = cycle == Gait.Cycle.SWIM
                 ? Math.hypot(over, pz - startZ) : over;
         driveGait(dt, covered / Math.max(1e-6, dt), cycle);
+    }
+
+    /**
+     * How high a step a walker takes without jumping, in metres.
+     *
+     * <p>What decides whether a thing in a house is somewhere you walk onto or
+     * somewhere you climb. A stair riser is 0.20 and the step up to a front
+     * door is 0.17, so both are walked; a table top is 0.72 and a rail is 1.02,
+     * so neither is. That is the whole rule, and it is one number rather than a
+     * flag on each of them.
+     */
+    private static final double STEP_UP = 0.62;
+
+    /**
+     * How far the floor has to fall away before a walker is falling, in metres.
+     *
+     * <p>Comfortably more than {@link #STEP_UP} so that walking <em>down</em> a
+     * staircase is walking rather than a series of small falls.
+     */
+    private static final double FALL_STEP = 0.85;
+
+    /** How fast a ladder is climbed, in metres per second. */
+    private static final double CLIMB_SPEED = 2.6;
+
+    /**
+     * How far off the boots the wall test starts, in metres.
+     *
+     * <p>A hair, so that the very bottom edge of a wall — which is level with
+     * the floor it stands on — cannot catch a walker whose feet are being eased
+     * onto that floor a centimetre at a time.
+     */
+    private static final double WALL_TOE = 0.10;
+
+    /**
+     * Undo a step that walked into somebody's wall.
+     *
+     * <p>One axis at a time, and it has to be: refusing both would stop a
+     * player dead the moment they brushed a doorframe at an angle, which is the
+     * single most common way anybody meets a wall in a game. Trying each axis on
+     * its own means a step into a wall becomes a step <em>along</em> it, and
+     * getting through a {@value HouseKit#DOOR_WIDTH}-metre doorway does not
+     * require lining up on it first.
+     */
+    private void slideOffWalls(Homestead homes, double startX, double startY) {
+        double foot = pz + WALL_TOE;
+        double head = pz + Homestead.BODY_HEIGHT;
+        if (!homes.solidAt(px, py, foot, head)) return;
+        if (!homes.solidAt(px, startY, foot, head)) {
+            py = startY;
+            return;
+        }
+        if (!homes.solidAt(startX, py, foot, head)) {
+            px = startX;
+            return;
+        }
+        px = startX;
+        py = startY;
+    }
+
+    /**
+     * One step of a climb.
+     *
+     * <p>The whole of how anybody gets into a treehouse, and it is deliberately
+     * the two keys that already mean up and down rather than a third one to
+     * remember. Gravity is off while a hand is on a rung, the climb is clamped
+     * to the ladder's own ends so nobody rides one into the sky, and a floor
+     * that has come within reach wins — which is what makes arriving at the top
+     * of a ladder feel like arriving rather than like stopping.
+     */
+    private void climbLadder(double dt, Homestead homes, Homestead.Climb rung,
+                             double ground, boolean rising, boolean sinking) {
+        airborne = false;
+        climb = 0;
+        dive = 0;
+        submerged = false;
+        crouching = false;
+        breath = Math.min(1, breath + dt * 4 / WatchPlayer.BREATH_SECONDS);
+        if (rising) pz += CLIMB_SPEED * dt;
+        if (sinking) pz -= CLIMB_SPEED * dt;
+        pz = Math.max(rung.bottom(), Math.min(rung.top(), pz));
+        double floor = homes.standOn(px, py, pz + STEP_UP, ground);
+        if (floor > pz) pz = floor;
+        // Hard, not eased: a rung is where your foot is, and a camera drifting
+        // up to it a tenth of a second late is a camera that is seasick.
+        smoothedGround = pz;
     }
 
     /**
@@ -2550,7 +2747,7 @@ public class WatchScene extends AbstractScene {
         keeperFor = Math.max(0, keeperFor - dt);
         switch (panel) {
             case SATCHEL -> updateSatchel(input);
-            case BUILD -> updateBuild(input);
+            case HOMES -> updateHomes(input);
             case SHOP -> updateShop(input);
             case MAP -> updateMap(input);
             case BOUNTY -> updateBounty(input);
@@ -2712,7 +2909,7 @@ public class WatchScene extends AbstractScene {
      * The shop screen: a shelf to buy from, and a keeper to have a page stamped
      * by.
      *
-     * <p>Driven by the same two hands as the satchel and the build screens, off
+     * <p>Driven by the same two hands as the satchel and the house screens, off
      * the same {@link SatchelBox}, because a third way of working a list would
      * be a third chance to select the row above the one that was clicked.
      *
@@ -3223,74 +3420,101 @@ public class WatchScene extends AbstractScene {
     }
 
     /**
-     * The build screen — driven by the same two hands as the satchel, and for
-     * the same reason.
+     * The house catalogue — driven by the same two hands as the satchel, and
+     * for the same reason.
      *
-     * <p>Ten pieces fit on one page, so there is nothing to scroll; what it
-     * needed was a pointer that selects a row, a click that builds it, and a ✕.
+     * <p>Ten houses fit on one page, so there is nothing to scroll; what it
+     * needed was a pointer that picks a row, a click that buys it, a key to
+     * turn it, and a ✕. Where the house goes is not on this screen at all: it
+     * lands in front of you, which is the whole of "place it anywhere" and is
+     * one fewer thing to explain than a ghost preview nobody asked for.
      */
-    private void updateBuild(InputManager input) {
-        // What this player may build, which is everything unless debug mode is
-        // still holding a piece back. The list decides the row count, so the
-        // screen and this must ask the same question — see buildBox.
-        List<BuildPiece> pieces = BuildPiece.available(debugging());
-        SatchelBox box = buildBox();
-        if (KeyBinds.pressed(input, GameAction.MENU_DOWN)) pieceIndex++;
-        if (KeyBinds.pressed(input, GameAction.MENU_UP)) pieceIndex--;
-        pieceIndex = Math.floorMod(pieceIndex, pieces.size());
-        if (KeyBinds.pressed(input, GameAction.WATCH_TURN_PIECE)) {
-            pieceTurn = (pieceTurn + 1) % Structure.TURNS;
+    private void updateHomes(InputManager input) {
+        List<HousePlan> plans = HousePlan.all();
+        SatchelBox box = homesBox();
+        if (KeyBinds.pressed(input, GameAction.MENU_DOWN)) homeIndex++;
+        if (KeyBinds.pressed(input, GameAction.MENU_UP)) homeIndex--;
+        homeIndex = Math.floorMod(homeIndex, plans.size());
+        if (KeyBinds.pressed(input, GameAction.WATCH_TURN_HOME)) {
+            homeTurn = (homeTurn + 1) % Homestead.TURNS;
         }
+        // Left or right takes the house you are standing in back down again,
+        // which is the one verb that needs no row of its own: there is only
+        // ever the one house under your feet.
         if (KeyBinds.pressed(input, GameAction.MENU_RIGHT)
                 || KeyBinds.pressed(input, GameAction.MENU_LEFT)) {
-            pieceInTree = !pieceInTree;
+            packUp();
+            return;
         }
 
         boolean moved = pointerMoved(input);
         int row = box.columnAt(pointerX, pointerY) == 0 ? box.rowAt(pointerY) : -1;
-        if (row >= 0 && row >= pieces.size()) row = -1;
-        if (row >= 0 && moved) pieceIndex = row;
+        if (row >= 0 && row >= plans.size()) row = -1;
+        if (row >= 0 && moved) homeIndex = row;
 
-        boolean build = KeyBinds.pressed(input, GameAction.MENU_SELECT);
+        boolean buy = KeyBinds.pressed(input, GameAction.MENU_SELECT);
         if (input.isMouseJustPressed()) {
             if (box.overClose(pointerX, pointerY)) {
                 panel = Panel.NONE;
                 return;
             }
+            if (overPackUp(box)) {
+                packUp();
+                return;
+            }
             if (row >= 0) {
-                pieceIndex = row;
-                build = true;
+                homeIndex = row;
+                buy = true;
             }
         }
-        if (build) {
-            BuildPiece piece = pieces.get(pieceIndex);
+        if (buy) {
+            HousePlan plan = plans.get(homeIndex);
             if (session.local() != null) {
-                say(session.local().build(session.selfId(), piece, pieceTurn, pieceInTree)
-                        != null
-                        ? "Built a " + piece.displayName()
-                        : "Cannot build there — " + piece.costLine());
+                // Solo, the refusal comes back with the reason attached. Online
+                // it arrives as an info line a moment later — see
+                // WatchServer's "home" case, which sends one either way.
+                say(session.local().buyHome(session.selfId(), plan, homeTurn).line());
             } else {
-                session.client().sendBuild(piece.key(), pieceTurn, pieceInTree);
+                session.client().sendHome(plan.key(), homeTurn);
             }
         }
-        if (KeyBinds.pressed(input, GameAction.WATCH_BUILD)) panel = Panel.NONE;
+        if (KeyBinds.pressed(input, GameAction.WATCH_HOMES)) panel = Panel.NONE;
+    }
+
+    /** Take down the house we are standing in, wherever the request has to go. */
+    private void packUp() {
+        if (session.local() != null) {
+            say(session.local().packUp(session.selfId()).line());
+        } else {
+            session.client().sendPackUp();
+        }
     }
 
     /**
-     * Where the build screen's parts are — the satchel's box, one column wide.
+     * Where the catalogue's parts are — the satchel's box, one column wide.
      *
      * <p>The same record, because the two panels want the same three answers
      * ("which row is that", "is the pointer on the ✕", "where does the list
      * start") and a second nearly-identical layout type would be a second
      * chance to get one of them wrong.
      */
-    private SatchelBox buildBox() {
-        int w = Math.min(600, Math.max(320, viewportWidth - 80));
-        int h = Math.min(460, Math.max(240, viewportHeight - 80));
+    private SatchelBox homesBox() {
+        int w = Math.min(660, Math.max(340, viewportWidth - 80));
+        int h = Math.min(500, Math.max(260, viewportHeight - 80));
         int x = (viewportWidth - w) / 2, y = (viewportHeight - h) / 2;
-        int listTop = y + 62;
-        return new SatchelBox(x, y, w, h, listTop, BuildPiece.available(debugging()).size(),
-                w - 40);
+        int listTop = y + 68;
+        return new SatchelBox(x, y, w, h, listTop, HousePlan.all().size(), w - 40);
+    }
+
+    /** The "take it down again" button: {@code x, y, w, h}. */
+    private int[] packUpButton(SatchelBox box) {
+        return new int[]{box.x() + box.w() - 158, box.y() + box.h() - 42, 138, 28};
+    }
+
+    private boolean overPackUp(SatchelBox box) {
+        int[] b = packUpButton(box);
+        return pointerX >= b[0] && pointerX < b[0] + b[2]
+                && pointerY >= b[1] && pointerY < b[1] + b[3];
     }
 
     private void updatePaused(InputManager input) {
@@ -3413,6 +3637,7 @@ public class WatchScene extends AbstractScene {
         // thing it is a decal on is not drawn at all, and half of one is worse
         // than none. See TrackMesher.SORT_BIAS for what that costs.
         renderer.submit(trackMesh(), TRACKS_KEY);
+        renderer.submit(homeMesh(), HOMES_KEY);
         renderer.flush(target);
 
         drawWeatherOverlay(target, weather);
@@ -3420,7 +3645,7 @@ public class WatchScene extends AbstractScene {
         drawHud(target, biome, weather);
         switch (panel) {
             case SATCHEL -> drawSatchel(target);
-            case BUILD -> drawBuild(target);
+            case HOMES -> drawHomes(target);
             case SHOP -> drawShop(target);
             case MAP -> mapPanel.draw(target, view(), streamer.field(), viewportWidth,
                     viewportHeight);
@@ -3866,13 +4091,6 @@ public class WatchScene extends AbstractScene {
             LightModel.light(mesh, standing, ox, oy, drawClock);
         }
 
-        for (Structure.Placement piece : view.structure().all()) {
-            WatchMaterials.uv(piece.piece().material(), uv);
-            Shapes.box(mesh, piece.x() - ox, piece.y() - oy, piece.z(),
-                    piece.piece().sizeX() / 2, piece.piece().sizeY() / 2,
-                    piece.piece().sizeZ() / 2, piece.yaw(), uv,
-                    WatchMaterials.shade(piece.piece().material()));
-        }
         boardFaces(mesh, view, ox, oy, uv);
 
         return mesh.build();
@@ -4003,7 +4221,7 @@ public class WatchScene extends AbstractScene {
             double ax = cos, ay = sin;
             double bx = -sin, by = cos;
             double half = BOARD_FACE / 2;
-            double stand = BuildPiece.MAP_BOARD.sizeY() / 2 + BOARD_LIFT;
+            double stand = HouseKit.BOARD_STAND + BOARD_LIFT;
             double cx = board.x() - ox, cy = board.y() - oy, cz = board.z();
 
             // The −b face, seen from the −b side: its right is +a, so the
@@ -4467,7 +4685,7 @@ public class WatchScene extends AbstractScene {
         }
         if (panel == Panel.NONE) {
             String keys = "E use · F feeder · R plant · C cross · V rod · Y boat "
-                    + "· B build · Tab satchel · G guide · J eye spy";
+                    + "· B houses · Tab satchel · G guide · J eye spy";
             if (view.satchel().has(Spyglass.ITEM)) {
                 keys += " · Right-click glass";
             }
@@ -5594,39 +5812,73 @@ public class WatchScene extends AbstractScene {
         target.fillRect(x, at, 3, thumb, new Color(140, 208, 150, 160));
     }
 
-    private void drawBuild(DrawTarget target) {
-        SatchelBox box = buildBox();
+    /**
+     * The house catalogue.
+     *
+     * <p>A shop screen more than a build screen, and it reads like one: what it
+     * is called, what it costs, what it is, and the balance the book has to pay
+     * with. The row is greyed when the guide cannot afford it rather than being
+     * hidden, because the top of this list is meant to be something a party can
+     * see and cannot yet have.
+     */
+    private void drawHomes(DrawTarget target) {
+        SatchelBox box = homesBox();
         int x = box.x(), y = box.y(), w = box.w(), h = box.h();
         target.fillRect(x, y, w, h, HUD_PANEL);
         target.drawRect(x, y, w, h, HUD_ACCENT);
-        target.drawText("Build", x + 20, y + 32, TITLE_FONT, HUD_INK);
+        target.drawText("Houses", x + 20, y + 32, TITLE_FONT, HUD_INK);
         drawCloseButton(target, box);
 
-        Satchel satchel = view().satchel();
-        List<BuildPiece> pieces = BuildPiece.available(debugging());
-        pieceIndex = Math.floorMod(pieceIndex, pieces.size());
-        for (int i = 0; i < pieces.size(); i++) {
-            BuildPiece piece = pieces.get(i);
-            boolean can = piece.affordable(satchel);
+        FieldGuide guide = view().guide();
+        int purse = guide.points();
+        String balance = purse + (purse == 1 ? " point" : " points") + " to spend";
+        target.drawText(balance, x + w - target.textWidth(balance, HUD_BOLD) - 46, y + 54,
+                HUD_BOLD, HUD_ACCENT);
+
+        List<HousePlan> plans = HousePlan.all();
+        homeIndex = Math.floorMod(homeIndex, plans.size());
+        for (int i = 0; i < plans.size(); i++) {
+            HousePlan plan = plans.get(i);
+            boolean can = guide.affords(plan.price()) || debugging();
             int top = box.rowTop(i);
             int text = top + ROW_HEIGHT - 9;
-            if (i == pieceIndex) {
+            if (i == homeIndex) {
                 target.fillRect(x + 14, top, w - 28, ROW_HEIGHT - 2,
                         new Color(60, 110, 70, 160));
             }
-            target.drawText(piece.displayName(), x + 20, text, HUD_FONT,
+            target.drawText(plan.displayName(), x + 20, text, HUD_FONT,
                     can ? HUD_INK : new Color(130, 140, 132));
-            target.drawText(piece.costLine(), x + 190, text, HUD_SMALL,
+            String shape = plan.storeys() + (plan.storeys() == 1 ? " floor" : " floors")
+                    + (plan.tree() ? " · up a tree" : "");
+            target.drawText(shape, x + 190, text, HUD_SMALL,
                     can ? HUD_DIM : new Color(120, 110, 100));
+            String price = plan.priceLine();
+            target.drawText(price, x + w - target.textWidth(price, HUD_SMALL) - 30, text,
+                    HUD_SMALL, can ? HUD_ACCENT : new Color(150, 110, 100));
         }
-        BuildPiece chosen = pieces.get(pieceIndex);
-        target.drawText(fitted(target, chosen.note(), w - 40), x + 20, y + h - 44,
+        // Both lines are cut to leave the button its corner: the panel is as
+        // narrow as 340 on a small window, and a note running under a button is
+        // a note nobody can read and a button nobody can see.
+        HousePlan chosen = plans.get(homeIndex);
+        int room = w - 200;
+        target.drawText(fitted(target, chosen.note(), room), x + 20, y + h - 46,
                 HUD_SMALL, HUD_DIM);
-        String facing = "Facing " + (pieceTurn * 45) + "°"
-                + (pieceInTree ? " · fixed to the nearest trunk" : " · on the ground");
-        target.drawText(facing, x + 20, y + h - 26, HUD_SMALL,
-                pieceInTree && !chosen.anchors() ? HUD_WARN : HUD_ACCENT);
-        String keys = "Click to build · X turn · ←→ ground/tree · B close";
+        String facing = (homeTurn == 0 ? "Front door facing you"
+                : "Turned " + (homeTurn * 45) + "° from facing you")
+                + (chosen.tree() ? " · up the nearest big tree" : " · in front of you");
+        target.drawText(fitted(target, facing, room), x + 20, y + h - 26,
+                HUD_SMALL, HUD_ACCENT);
+
+        int[] pack = packUpButton(box);
+        boolean over = overPackUp(box);
+        target.fillRect(pack[0], pack[1], pack[2], pack[3],
+                over ? new Color(90, 60, 55, 200) : new Color(50, 60, 54, 170));
+        target.drawRect(pack[0], pack[1], pack[2], pack[3], HUD_ACCENT);
+        String label = "Take this one down";
+        target.drawText(label, pack[0] + (pack[2] - target.textWidth(label, HUD_SMALL)) / 2,
+                pack[1] + 19, HUD_SMALL, HUD_INK);
+
+        String keys = "Click to buy · X turn · ←→ take down · B close";
         target.drawText(keys, x + w - target.textWidth(keys, HUD_SMALL) - 46, y + 32,
                 HUD_SMALL, HUD_DIM);
     }

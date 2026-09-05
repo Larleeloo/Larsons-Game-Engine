@@ -1,7 +1,8 @@
 package com.larsons.engine.watch;
 
-import com.larsons.engine.watch.build.BuildPiece;
-import com.larsons.engine.watch.build.Structure;
+import com.larsons.engine.watch.home.HouseKit;
+import com.larsons.engine.watch.home.HousePlan;
+import com.larsons.engine.watch.home.Homestead;
 import com.larsons.engine.watch.life.Animal;
 import com.larsons.engine.watch.life.AnimalDef;
 import com.larsons.engine.watch.life.AnimalRegistry;
@@ -289,7 +290,17 @@ public final class WatchGame implements Animal.Surroundings {
 
     private final Grove grove = new Grove();
     private final Cultivation crops = new Cultivation();
-    private final Structure structure = new Structure();
+
+    /**
+     * Every house the party has bought.
+     *
+     * <p>Where {@code Structure} used to be. See {@link Homestead} and
+     * {@link HousePlan} for why the building system became a catalogue: a house
+     * is now one purchase and eight numbers rather than forty placements, which
+     * is what makes a mansion cheap enough to send and possible to walk around
+     * inside.
+     */
+    private final Homestead homes = new Homestead();
 
     /**
      * Every fire and lantern the party has put down.
@@ -403,8 +414,8 @@ public final class WatchGame implements Animal.Surroundings {
     /** Every crop anybody planted. */
     public Cultivation crops() { return crops; }
 
-    /** Everything anybody built. */
-    public Structure structure() { return structure; }
+    /** Every house anybody bought. */
+    public Homestead homes() { return homes; }
 
     /** Every fire and lantern standing in the world. */
     public Lights lights() { return lights; }
@@ -1659,7 +1670,7 @@ public final class WatchGame implements Animal.Surroundings {
         double radius = Chart.radiusFor(reach);
         double cx = Chart.snap(player.x(), radius);
         double cy = Chart.snap(player.y(), radius);
-        List<Chart.Landmark> icons = Survey.survey(field, shops, structure,
+        List<Chart.Landmark> icons = Survey.survey(field, shops, homes,
                 List.copyOf(lures.values()), grove, boats, guide, cx, cy, radius);
         Chart chart = cartography.draw(Survey.nameFor(field, cx, cy), player.x(),
                 player.y(), reach, player.name(), playerId, System.currentTimeMillis(),
@@ -1829,9 +1840,10 @@ public final class WatchGame implements Animal.Surroundings {
     /**
      * How far in front of somebody a light is set down, in metres.
      *
-     * <p>Shorter than a built piece's two metres, because a light is a thing
-     * you put at your feet rather than a thing you erect: a fire that appeared
-     * two metres away would be a fire you have to walk to in order to tend.
+     * <p>Shorter than the stand-off a house is bought at, because a light is a
+     * thing you put at your feet rather than a building you put up: a fire that
+     * appeared two metres away would be a fire you have to walk to in order to
+     * tend.
      */
     private static final double PLACE_AHEAD = 1.6;
 
@@ -2112,58 +2124,225 @@ public final class WatchGame implements Animal.Surroundings {
         return null;
     }
 
-    // --- building --------------------------------------------------------------------
+    // --- houses ----------------------------------------------------------------------
 
     /**
-     * Put a piece down in front of the player.
+     * How steep the ground under a house may be, as a fall across its own
+     * footprint's diagonal, and the most that fall may ever be in metres.
      *
-     * @param turn  which of the eight compass turns it takes
-     * @param inTree whether to fix it to the nearest trunk instead of the ground
+     * <p><b>Deliberately generous, because a house does not have to be level
+     * with the ground — it has to stand on it.</b> A trading post is sited by a
+     * much stricter rule ({@code Shops.MAX_SLOPE}) and can afford to be: the
+     * generator tries two dozen spots and keeps the flattest. A player has
+     * pressed a key and is looking at a hillside, and a game that answers "not
+     * there" to most of a wood is a game whose house catalogue nobody uses. So
+     * the ground is allowed to fall away by over half the footprint's diagonal
+     * and the house is put up on piers that reach down to it — see
+     * {@link HouseKit}, which draws those piers, and the front steps that come
+     * down beside them.
+     *
+     * <p>The cap is what stops that becoming a tower. Past a couple of metres
+     * of fall the thing under the floor is scaffolding rather than footings —
+     * and, worse, a house you can walk <em>under</em> rather than into, since
+     * its walls start at its own floor. A player who wants to live that far off
+     * the ground should be buying a treehouse.
      */
-    public synchronized Structure.Placement build(int playerId, BuildPiece piece, int turn,
-                                     boolean inTree) {
+    private static final double MAX_HOUSE_FALL = 0.55, MAX_HOUSE_PIERS = 2.2;
+
+    /** How far above the water line a house has to stand, in metres. */
+    private static final double DRY_MARGIN = 0.5;
+
+    /**
+     * What the ground at a site will take.
+     *
+     * @param top     the height the floor is laid at, which is the highest
+     *                ground under the footprint — a floor below the hillside it
+     *                stands on is a floor you cannot walk on
+     * @param fall    how far the ground drops below that, which is how long the
+     *                piers have to be
+     * @param refusal why nothing can stand here, or {@code null}
+     */
+    private record Site(double top, double fall, String refusal) {}
+
+    /**
+     * Buy a house and stand it in front of the player.
+     *
+     * <p><b>The guide pays, exactly as it does at a counter.</b> See
+     * {@link #buy} for the argument: there is one book, one page and one purse,
+     * and a per-player wallet would be the one thing in this game that was not
+     * shared. A house therefore belongs to the party, and anybody may
+     * {@linkplain #packUp take one down} again.
+     *
+     * <p>The order of the checks matters and is deliberate: <b>site first, pay
+     * second.</b> A player who is charged three thousand points and then told
+     * there is a lake in the way has been robbed, and the refusal has to happen
+     * before {@link FieldGuide#spend} is reached.
+     *
+     * @param turn   how far round from facing the buyer the house is turned,
+     *               in eighths — see {@link #facingBuyer}
+     * @return what happened, always with a line for the HUD — see
+     *         {@link Homestead.Outcome}
+     */
+    public synchronized Homestead.Outcome buyHome(int playerId, HousePlan plan, int turn) {
         WatchPlayer player = players.get(playerId);
-        if (player == null || piece == null) return null;
-        // A piece the mode is still holding back — today only the map board.
-        // Checked here rather than only in the build screen, because the screen
-        // is a client and a client is a thing that asks.
-        if (piece.debugOnly() && !player.debugging()) return null;
-        if (!piece.affordable(player.satchel())) return null;
+        if (player == null || plan == null) return Homestead.Outcome.refused(null);
 
-        // Two metres in front, so a piece appears where you are looking rather
-        // than inside you.
-        double x = player.x() + Math.sin(player.yaw()) * 2.0;
-        double y = player.y() - Math.cos(player.yaw()) * 2.0;
-        double z = field.heightAt(x, y) + piece.sizeZ() / 2;
+        turn = facingBuyer(player.yaw(), turn);
+
+        // Its own depth in front of the buyer, so a mansion appears in front of
+        // them rather than around them.
+        double x = Homestead.snap(player.x() + Math.sin(player.yaw()) * plan.standOff());
+        double y = Homestead.snap(player.y() - Math.cos(player.yaw()) * plan.standOff());
+        double z = field.heightAt(x, y);
         long treeId = 0;
+        double drop = 0;
 
-        if (inTree && piece.anchors()) {
+        if (plan.tree()) {
             TreeInstance tree = nearestAnchorTree(x, y);
-            if (tree == null) return null;
-            x = tree.x();
-            y = tree.y();
-            z = tree.z() + Math.max(2.2, tree.height() * 0.55);
+            if (tree == null) {
+                return Homestead.Outcome.refused(
+                        "No tree big enough near here to hang a " + plan.displayName()
+                                + " in");
+            }
+            x = Homestead.snap(tree.x());
+            y = Homestead.snap(tree.y());
+            // Just over half way up, which is where a crown starts and where a
+            // deck is out of the wind and still under cover.
+            z = tree.z() + Math.max(2.6, tree.height() * 0.52);
+            drop = z - field.heightAt(x, y);
             treeId = tree.id();
+        } else {
+            Site site = siteFor(plan, x, y, turn);
+            if (site.refusal() != null) return Homestead.Outcome.refused(site.refusal());
+            z = site.top();
+            drop = site.fall();
         }
-        if (structure.blocked(piece, Structure.snap(x), Structure.snap(y),
-                Structure.snap(z), turn)) {
-            return null;
+        if (homes.blocked(plan, x, y)) {
+            return Homestead.Outcome.refused("There is already a house standing there");
         }
-        if (!piece.pay(player.satchel())) return null;
-        Structure.Placement placement = structure.place(piece, x, y, z, turn, treeId,
+        if (!player.debugging() && !guide.spend(plan.price())) {
+            return Homestead.Outcome.refused("Not enough points — " + plan.priceLine()
+                    + ", and the book has " + guide.points());
+        }
+
+        Homestead.Home home = homes.place(plan, x, y, z, turn, treeId, drop,
                 player.name(), System.currentTimeMillis());
-        // A map board is timber and a place maps can be pinned; the timber is
-        // the placement above and the place is this. Raised here rather than
-        // lazily on first use, so a board that nobody has walked up to yet is
-        // still a board in the save and on everybody else's copy of the world.
-        if (piece == BuildPiece.MAP_BOARD) {
-            cartography.raise(placement.id(), placement.x(), placement.y(),
-                    placement.z(), placement.yaw(), player.name());
-        }
-        return placement;
+        raiseBoard(home);
+        say(player.name() + " put up a " + plan.displayName());
+        return new Homestead.Outcome(home,
+                "Bought a " + plan.displayName() + " for " + plan.priceLine());
     }
 
-    /** The planted tree nearest a point that is big enough to hold a platform. */
+    /**
+     * Which compass turn a house takes, given the way its buyer is looking.
+     *
+     * <p><b>A house faces the person who bought it, and the turn is measured
+     * from there.</b> That is the only arrangement that makes sense of a
+     * catalogue: the house lands in front of you, so its front door has to be
+     * the side you are looking at, or every purchase begins by walking round
+     * the building to find the way in. The turn key then rotates it away from
+     * that, an eighth at a time.
+     *
+     * <p>Resolved on the host rather than sent by the client, like every other
+     * decision here: what travels is "three eighths round from facing me", and
+     * what is stored is a compass bearing the mesher can draw.
+     */
+    public static int facingBuyer(double buyerYaw, int turn) {
+        int eighths = (int) Math.round(buyerYaw / (Math.PI * 2 / Homestead.TURNS));
+        // …plus a half turn, which is what "facing back at them" is.
+        return Math.floorMod(eighths + Homestead.TURNS / 2 + turn, Homestead.TURNS);
+    }
+
+    /**
+     * What the ground at a site will take.
+     *
+     * <p>Nine samples — four corners, four edges and the middle — which is
+     * enough to catch the two things that actually happen: a footprint half in
+     * a lake, and a footprint across a bank. A proper sweep would be twenty
+     * heights off the generator on a verb a player presses once.
+     */
+    private Site siteFor(HousePlan plan, double x, double y, int turn) {
+        // The footprint as the house will actually stand: forward is
+        // (sin, −cos) and right is (cos, sin), the game's convention everywhere.
+        double yaw = Math.floorMod(turn, Homestead.TURNS) * Math.PI * 2 / Homestead.TURNS;
+        double sin = Math.sin(yaw), cos = Math.cos(yaw);
+        double low = Double.MAX_VALUE, high = -Double.MAX_VALUE;
+        double hA = plan.halfAlong(), hC = plan.halfAcross();
+        for (int a = -1; a <= 1; a++) {
+            for (int c = -1; c <= 1; c++) {
+                double px = x + a * hA * sin + c * hC * cos;
+                double py = y - a * hA * cos + c * hC * sin;
+                double h = field.heightAt(px, py);
+                if (field.waterDepth(h) > 0 || h < TerrainField.WATER_LEVEL + DRY_MARGIN) {
+                    return new Site(0, 0,
+                            "A " + plan.displayName() + " will not stand in water");
+                }
+                low = Math.min(low, h);
+                high = Math.max(high, h);
+            }
+        }
+        double fall = high - low;
+        double allowed = Math.min(plan.diagonal() * MAX_HOUSE_FALL, MAX_HOUSE_PIERS);
+        return fall > allowed
+                ? new Site(high, fall,
+                        "The ground here falls away too far for a " + plan.displayName())
+                : new Site(high, fall, null);
+    }
+
+    /**
+     * Take a house down and put half its price back in the book.
+     *
+     * <p>The other half of "place it anywhere", and the reason the catalogue can
+     * be as expensive as it is: a player who has just spent three thousand
+     * points putting a mansion somewhere they did not mean to has to be able to
+     * undo it. Half back rather than all, because a decision that costs nothing
+     * to reverse is not a decision.
+     *
+     * @return what happened, always with a line for the HUD — see
+     *         {@link Homestead.Outcome}
+     */
+    public synchronized Homestead.Outcome packUp(int playerId) {
+        WatchPlayer player = players.get(playerId);
+        if (player == null) return Homestead.Outcome.refused(null);
+        Homestead.Home home = homes.at(player.x(), player.y());
+        if (home == null) {
+            return Homestead.Outcome.refused("There is no house here to take down");
+        }
+        homes.remove(home.id());
+        // The board goes with the timber it hung on, and the maps that were
+        // pinned to it go back into the world rather than with it.
+        cartography.removeBoard(home.id());
+        int back = home.refund();
+        guide.refund(back);
+        say(player.name() + " packed up the " + home.plan().displayName());
+        return new Homestead.Outcome(home, "Packed up the "
+                + home.plan().displayName() + " — " + back
+                + (back == 1 ? " point" : " points") + " back");
+    }
+
+    /**
+     * Register the map board of a house that has one.
+     *
+     * <p>The last thing the building system did that nothing else could. A study
+     * wall is timber, which the house already draws, <em>and</em> a place maps
+     * can be pinned, which is this — and it is raised when the house is bought
+     * rather than lazily on first use, so that a board nobody has walked up to
+     * yet is still a board in the save and on everybody else's copy of the
+     * world. See {@link HousePlan#board()}.
+     */
+    private void raiseBoard(Homestead.Home home) {
+        double[] at = homes.boardOf(home);
+        if (at == null) return;
+        cartography.raise(home.id(), at[0], at[1], at[2], at[3], home.boughtBy());
+    }
+
+    /** The house a player is standing in or beside, or {@code null}. */
+    public synchronized Homestead.Home homeAt(int playerId) {
+        WatchPlayer player = players.get(playerId);
+        return player == null ? null : homes.at(player.x(), player.y());
+    }
+
+    /** The planted tree nearest a point that is big enough to hold a house. */
     private TreeInstance nearestAnchorTree(double x, double y) {
         TreeInstance best = null;
         double bestDistance = 6 * 6;
@@ -2942,7 +3121,7 @@ public final class WatchGame implements Animal.Surroundings {
         m.put("guide", guide.toMap());
         m.put("grove", grove.toMap());
         m.put("crops", crops.toMap());
-        m.put("built", structure.toMap());
+        m.put("homes", homes.toMap());
         // The maps, which are the one piece of world state that is mostly
         // somebody's handwriting: where each one is and what has been drawn on
         // it. The paper itself is not here — see Chart — so a walk with fifty
@@ -2998,7 +3177,7 @@ public final class WatchGame implements Animal.Surroundings {
         guide.load(WatchJson.map(m, "guide"));
         grove.load(WatchJson.map(m, "grove"));
         crops.load(WatchJson.map(m, "crops"));
-        structure.load(WatchJson.map(m, "built"));
+        homes.load(WatchJson.map(m, "homes"));
         cartography.load(WatchJson.map(m, "maps"));
         weather.load(WatchJson.map(m, "sky"));
         boats.load(WatchJson.map(m, "boats"));

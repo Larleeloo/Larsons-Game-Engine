@@ -339,6 +339,19 @@ public final class FieldGuide {
         return true;
     }
 
+    /**
+     * Give some of it back.
+     *
+     * <p>What a party gets for taking a house down again — see
+     * {@code WatchGame.packUp}. It reduces what was <b>handed over</b> rather
+     * than adding to what was earned, which is the difference between a refund
+     * and a lie: the guide's record of how many animals it has been paid for
+     * must not move because somebody rearranged their camp.
+     */
+    public void refund(int points) {
+        if (points > 0) spent = Math.max(0, spent - points);
+    }
+
     /** The last few sightings, newest first — what the journal page shows. */
     public List<Sighting> recent(int limit) {
         List<Sighting> out = new ArrayList<>();

@@ -8,7 +8,9 @@ import com.larsons.engine.demo.WatchScene;
 import com.larsons.engine.graphics.draw.RecordingTarget;
 import com.larsons.engine.input.InputManager;
 import com.larsons.engine.scene.SceneManager;
-import com.larsons.engine.watch.build.BuildPiece;
+import com.larsons.engine.watch.home.HouseKit;
+import com.larsons.engine.watch.home.HousePlan;
+import com.larsons.engine.watch.home.Homestead;
 import com.larsons.engine.watch.net.WatchProto;
 import com.larsons.engine.watch.net.WatchSession;
 import com.larsons.engine.watch.render.BoardImage;
@@ -80,6 +82,49 @@ class MapsTest {
 
     private static void stand(WatchGame game, int id, double x, double y) {
         game.move(id, x, y, game.field().heightAt(x, y), 0, 0, false, 0.05);
+    }
+
+    /**
+     * The cheapest house in the catalogue with a study in it.
+     *
+     * <p>Asked of the catalogue rather than named, so that reordering the price
+     * ladder does not quietly turn these tests into tests of a mansion.
+     */
+    private static HousePlan withStudy() {
+        for (HousePlan plan : HousePlan.all()) {
+            if (plan.board() && !plan.tree()) return plan;
+        }
+        throw new AssertionError("no house in the catalogue has a map board in it");
+    }
+
+    /**
+     * Put a house up near the origin, and hand it back.
+     *
+     * <p>A run of spots tried rather than one, because a house needs ground
+     * that does not fall away under it and which square metre of a generated
+     * world has that is not what any test in this file is about — the bigger
+     * the house, the rarer the site. The points are given first: what is being
+     * exercised here is the maps, not the economy.
+     */
+    private static Homestead.Home house(WatchGame game, HousePlan plan) {
+        game.guide().reward(plan.price());
+        for (int i = 0; i < 24; i++) {
+            stand(game, 1, i * 9.0, i * 5.0);
+            Homestead.Outcome receipt = game.buyHome(1, plan, 0);
+            if (receipt.done()) return receipt.home();
+        }
+        return null;
+    }
+
+    /** …and the board on its wall. */
+    private static Cartography.Board board(WatchGame game) {
+        Homestead.Home home = house(game, withStudy());
+        assertNotNull(home, "nowhere near the origin would take a house");
+        double[] at = game.homes().boardOf(home);
+        assertNotNull(at, "a house with a study has no board in it");
+        Cartography.Board board = game.maps().boardAt(at[0], at[1]);
+        assertNotNull(board, "buying a house with a study did not raise its board");
+        return board;
     }
 
     // --- 1. as wide as you can see ------------------------------------------------------
@@ -244,37 +289,39 @@ class MapsTest {
         WatchGame game = walking();
         stand(game, 1, 0, 0);
         assertNotNull(game.placeLure(1, "suet_cake"), "could not put a feeder out");
-        assertNotNull(game.build(1, BuildPiece.FLOOR, 0, false), "could not build");
+        assertNotNull(house(game, HousePlan.CABIN), "could not put a house up");
 
+        stand(game, 1, 0, 0);
         Chart chart = game.drawMap(1, 256);
         assertNotNull(chart);
         assertFalse(chart.landmarks(Chart.Kind.FEEDER).isEmpty(),
                 "the feeder standing at the player's feet is not on their map");
         assertFalse(chart.landmarks(Chart.Kind.CAMP).isEmpty(),
-                "the floor they just laid is not on their map");
+                "the house they just put up is not on their map");
     }
 
     /**
-     * A camp of many pieces is one icon.
+     * A house is one icon, and the icon says which house it is.
      *
-     * <p>Not a nicety: without it a treehouse is forty overlapping tents and the
-     * map is unreadable exactly where somebody has been busiest.
+     * <p>It used to be a cluster: a camp of forty separate built pieces drew
+     * forty overlapping tents, and the map was unreadable exactly where somebody
+     * had been busiest. A house is one purchase standing in one place, so the
+     * clustering went with the building system and the label got better —
+     * "Cabin" rather than "six pieces".
      */
     @Test
-    void aCampOfManyPiecesIsOneIcon() {
+    void aHouseIsOneIconAndSaysWhichHouseItIs() {
         WatchGame game = walking();
-        int built = 0;
-        for (int i = 0; i < 6; i++) {
-            stand(game, 1, i * 0.6, 0);
-            if (game.build(1, BuildPiece.POST, 0, false) != null) built++;
-        }
-        assertTrue(built >= 4, "only " + built + " pieces went down; nothing to cluster");
+        Homestead.Home home = house(game, HousePlan.CABIN);
+        assertNotNull(home);
         stand(game, 1, 0, 0);
         Chart chart = game.drawMap(1, 256);
         assertNotNull(chart);
-        assertEquals(1, chart.landmarks(Chart.Kind.CAMP).size(),
-                built + " pieces in one clearing drew "
-                        + chart.landmarks(Chart.Kind.CAMP).size() + " camps");
+        List<Chart.Landmark> camps = chart.landmarks(Chart.Kind.CAMP);
+        assertEquals(1, camps.size(),
+                "one house in one clearing drew " + camps.size() + " camps");
+        assertEquals(HousePlan.CABIN.displayName(), camps.get(0).label(),
+                "the map does not say what the house is");
     }
 
     /**
@@ -291,14 +338,15 @@ class MapsTest {
         assertNotNull(before);
         int camps = before.landmarks(Chart.Kind.CAMP).size();
 
-        assertNotNull(game.build(1, BuildPiece.FLOOR, 0, false));
+        assertNotNull(house(game, HousePlan.CABIN));
+        stand(game, 1, 0, 0);
         assertEquals(camps, before.landmarks(Chart.Kind.CAMP).size(),
-                "a camp built afterwards appeared on a map already drawn");
+                "a house bought afterwards appeared on a map already drawn");
 
         Chart after = game.drawMap(1, 256);
         assertNotNull(after);
         assertTrue(after.landmarks(Chart.Kind.CAMP).size() > camps,
-                "a map drawn after the camp went up does not have it");
+                "a map drawn after the house went up does not have it");
     }
 
     // --- 4. the pen --------------------------------------------------------------------
@@ -392,7 +440,7 @@ class MapsTest {
         game.markMap(1, chart.id(), 0, new double[]{1, 2}, new double[]{3, 4});
 
         Map<String, Object> message = WatchProto.world(game.grove().toMap(),
-                game.crops().toMap(), game.structure().toMap(), game.maps().toMap(),
+                game.crops().toMap(), game.homes().toMap(), game.maps().toMap(),
                 game.boats().toMap(), game.spills().toMap(), game.bounties().toMap(),
                 game.takenLitter());
 
@@ -526,12 +574,8 @@ class MapsTest {
                 "two maps drawn a span apart do not meet: " + west.maxX() + " vs "
                         + east.minX());
 
-        // Build the board, walk to it, and pin both.
-        stand(game, 1, 0, 0);
-        var placement = game.build(1, BuildPiece.MAP_BOARD, 0, false);
-        assertNotNull(placement, "a walker in debug mode could not build a map board");
-        Cartography.Board board = game.maps().boardAt(placement.x(), placement.y());
-        assertNotNull(board, "building a board did not put one in the world");
+        // Buy the house the board hangs in, walk to it, and pin both.
+        Cartography.Board board = board(game);
         stand(game, 1, board.x(), board.y());
         assertNotNull(game.boardAt(1), "standing at the board is not standing at it");
 
@@ -574,10 +618,7 @@ class MapsTest {
         stand(game, 1, 0, 0);
         Chart chart = game.drawMap(1, 128);
         assertNotNull(chart);
-        var placement = game.build(1, BuildPiece.MAP_BOARD, 0, false);
-        assertNotNull(placement);
-        Cartography.Board board = game.maps().boardAt(placement.x(), placement.y());
-        assertNotNull(board);
+        Cartography.Board board = board(game);
 
         int grid = 24;
         assertNull(BoardImage.cells(game.field(), game.maps(), board, grid),
@@ -626,16 +667,11 @@ class MapsTest {
             assertNotNull(chart);
             walk.press(KeyEvent.VK_ESCAPE);
 
-            var placement = walk.game.build(1, BuildPiece.MAP_BOARD, 0, false);
-            assertNotNull(placement);
+            Cartography.Board board = walk.boardInReach();
             walk.tick(4);
             walk.draw();
             assertEquals(0, walk.scene.boardTriangles(),
                     "an empty board is already covered in map");
-
-            Cartography.Board board = walk.game.maps().boardAt(placement.x(),
-                    placement.y());
-            assertNotNull(board);
             assertTrue(walk.game.pinMap(1, chart.id(), board.id()));
             ChartImage.bake(walk.scene.streamer().field(), chart.centreX(),
                     chart.centreY(), chart.radius());
@@ -655,10 +691,7 @@ class MapsTest {
         WatchGame game = walking();
         stand(game, 1, 0, 0);
         Chart chart = game.drawMap(1, 128);
-        var placement = game.build(1, BuildPiece.MAP_BOARD, 0, false);
-        assertNotNull(placement);
-        Cartography.Board board = game.maps().boardAt(placement.x(), placement.y());
-        assertNotNull(board);
+        Cartography.Board board = board(game);
 
         stand(game, 1, board.x() + 400, board.y());
         assertFalse(game.pinMap(1, chart.id(), board.id()),
@@ -673,10 +706,8 @@ class MapsTest {
     @Test
     void aBoardIsSomethingYouCanWalkUpTo() {
         WatchGame game = walking();
-        stand(game, 1, 0, 0);
-        var placement = game.build(1, BuildPiece.MAP_BOARD, 0, false);
-        assertNotNull(placement);
-        stand(game, 1, placement.x(), placement.y());
+        Cartography.Board board = board(game);
+        stand(game, 1, board.x(), board.y());
         WatchGame.Pickable target = game.pickTarget(1);
         assertNotNull(target, "there is nothing in reach at a map board");
         assertEquals(WatchGame.Pickable.Kind.BOARD, target.kind());
@@ -699,17 +730,15 @@ class MapsTest {
         stand(game, 1, 0, 0);
 
         assertNull(game.drawMap(1, 256), "a player without the code drew a map");
-        assertNull(game.build(1, BuildPiece.MAP_BOARD, 0, false),
-                "a player without the code built a map board");
 
-        // Then with the code, so we have something to be refused about.
+        // Then with the code, so we have something to be refused about. The
+        // board itself is not gated — it is furniture in a house anybody may
+        // buy — and that is the point: what debug mode holds back is the
+        // drawing, the writing and the pinning, not the wall they happen on.
         game.debug(1, Debug.CODE);
         Chart chart = game.drawMap(1, 256);
         assertNotNull(chart);
-        var placement = game.build(1, BuildPiece.MAP_BOARD, 0, false);
-        assertNotNull(placement);
-        Cartography.Board board = game.maps().boardAt(placement.x(), placement.y());
-        assertNotNull(board);
+        Cartography.Board board = board(game);
         stand(game, 1, board.x(), board.y());
         game.debug(1, Debug.CODE);
         assertFalse(game.player(1).debugging(), "the code did not toggle back off");
@@ -726,18 +755,29 @@ class MapsTest {
                 "a player without the code pinned a map to a board");
     }
 
-    /** The build screen does not list the board to somebody who cannot build it. */
+    /**
+     * The board is furniture now, not a build piece.
+     *
+     * <p>It used to be the eleventh {@code BuildPiece} and the only one debug
+     * mode held back, so the build menu had to hide a row from most players.
+     * With building gone it is a fitting on the wall of a house with a study —
+     * which is where a thing eight people stand in front of and read belonged
+     * all along. The gate did not disappear; it stayed on the verbs, which is
+     * what the test above checks. What a player without the code owns now is a
+     * handsome empty board.
+     */
     @Test
-    void theBuildScreenHidesWhatDebugModeIsHoldingBack() {
-        assertFalse(BuildPiece.available(false).contains(BuildPiece.MAP_BOARD),
-                "the map board is on the build menu for everybody");
-        assertTrue(BuildPiece.available(true).contains(BuildPiece.MAP_BOARD));
-        // Everything else is on both lists, so this is a gate rather than a
-        // second menu that could drift from the first.
-        for (BuildPiece piece : BuildPiece.all()) {
-            if (piece.debugOnly()) continue;
-            assertTrue(BuildPiece.available(false).contains(piece),
-                    piece + " vanished from the ordinary build menu");
+    void theMapBoardComesWithTheHouseRatherThanWithTheCode() {
+        long studies = HousePlan.all().stream().filter(HousePlan::board).count();
+        assertTrue(studies > 0, "no house in the catalogue has anywhere to pin a map");
+        assertTrue(studies < HousePlan.all().size(),
+                "every house has a study, so a study is not something the price buys");
+        for (HousePlan plan : HousePlan.all()) {
+            assertEquals(plan.trim().atLeast(HousePlan.Trim.FITTED), plan.board(),
+                    plan + " disagrees with its own trim about having a study");
+            if (!plan.board()) continue;
+            assertNotNull(HouseKit.boardOf(plan),
+                    plan + " claims a study and has no board on its wall");
         }
     }
 
@@ -805,6 +845,24 @@ class MapsTest {
             input.newFrame();
             input.releaseMouse(MouseEvent.BUTTON1);
             scenes.update(1.0 / 60, input);
+        }
+
+        /**
+         * Buy a house with a study in it and put the walker in front of its
+         * board.
+         *
+         * <p>The house goes up wherever the ground will take one, which is not
+         * necessarily next to where the walk happens to have spawned — so the
+         * walker is moved to it through the one mechanism the screen already
+         * has for being moved by the host, a respawn. See
+         * {@link WatchPlayer#respawns()}, which is what the screen watches.
+         */
+        Cartography.Board boardInReach() {
+            Cartography.Board board = MapsTest.board(game);
+            game.player(1).respawnAt(board.x(), board.y(),
+                    game.field().heightAt(board.x(), board.y()));
+            tick(6);
+            return board;
         }
 
         /** Press M, and hand back the map it drew. */
@@ -981,12 +1039,8 @@ class MapsTest {
             assertNotNull(chart);
             walk.press(KeyEvent.VK_ESCAPE);
 
-            var placement = walk.game.build(1, BuildPiece.MAP_BOARD, 0, false);
-            assertNotNull(placement, "the walk could not build a map board");
+            Cartography.Board board = walk.boardInReach();
             walk.tick(4);
-            Cartography.Board board = walk.game.maps().boardAt(placement.x(),
-                    placement.y());
-            assertNotNull(board);
 
             assertNotNull(walk.scene.inReach(), "nothing is in reach at the board");
             assertEquals(WatchGame.Pickable.Kind.BOARD, walk.scene.inReach().kind(),

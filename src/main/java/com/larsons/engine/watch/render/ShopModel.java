@@ -12,14 +12,20 @@ import java.util.List;
  *
  * <h2>Why it is built out rather than blocked in</h2>
  *
- * <p>Everything else standing in this world is either something a player put
- * there one piece at a time ({@code build.BuildPiece}) or something the
- * generator scattered — and a shop is neither. It has to read as
- * <b>prebuilt</b>: as a thing somebody else made, on purpose, before you got
- * here, and made properly. A hut assembled from four of the player's own wall
- * pieces would read as a player's hut, which is exactly the wrong impression,
- * because the point of the post is that there is somebody in this wood who is
- * not you.
+ * <p>A shop has to read as <b>somebody else's</b>: as a thing another person
+ * made, on purpose, before you got here, and made properly — because the whole
+ * point of the post is that there is somebody in this wood who is not you. A
+ * hut blocked in out of four boxes would read as a shed the generator dropped,
+ * which is exactly the wrong impression.
+ *
+ * <p>The player's own {@linkplain com.larsons.engine.watch.home.HousePlan
+ * houses} are now drawn on the same argument and by the same means — see
+ * {@link HouseModel}, which came later and took this file's lesson with it. The
+ * two are still separate drawings rather than one, and deliberately: a trading
+ * post is <em>one</em> building, with a counter and a keeper and a hanging
+ * sign, and generalising it into a parameterised plan would cost every one of
+ * those the specificity that makes it a shop rather than a house with things in
+ * it.
  *
  * <p>So it is a carpentry drawing rather than a box: stone footings, a raised
  * plank deck with a step up to it, corner posts carrying a plate beam, a pitched
