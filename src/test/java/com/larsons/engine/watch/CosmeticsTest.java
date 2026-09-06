@@ -12,6 +12,8 @@ import com.larsons.engine.watch.life.AnimalRegistry;
 import com.larsons.engine.watch.net.WatchClient;
 import com.larsons.engine.watch.net.WatchServer;
 import com.larsons.engine.watch.net.WatchSession;
+import com.larsons.engine.watch.model.ModelRig;
+import com.larsons.engine.watch.model.SceneModel;
 import com.larsons.engine.watch.model.SceneModels;
 import com.larsons.engine.watch.render.CosmeticModel;
 import com.larsons.engine.watch.render.ItemPortrait;
@@ -30,11 +32,14 @@ import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.ArrayList;
+import java.util.HashMap;
 import java.util.HashSet;
 import java.util.List;
 import java.util.Map;
 import java.util.Random;
 import java.util.Set;
+import java.util.regex.Matcher;
+import java.util.regex.Pattern;
 
 import static org.junit.jupiter.api.Assertions.assertArrayEquals;
 import static org.junit.jupiter.api.Assertions.assertEquals;
@@ -418,6 +423,196 @@ class CosmeticsTest {
         double arm = h * 0.36;
         double drop = -arm * 0.52 - Math.cos(0.22) * arm * 0.48;
         assertEquals(0.80, lift + h * 0.80 + drop - 0.02, 0.005, "hand centre");
+    }
+
+    /**
+     * A point modelled at Blender {@code (x, y, z)} arrives at world
+     * {@code (x, y, z)}.
+     *
+     * <p><b>The single fact an artist works from</b>, and the reason §16 can
+     * give a table of heights and stop there: the Blender → glTF → importer
+     * chain composes to the identity for a walker standing at the origin. Three
+     * separate conventions have to keep agreeing for that to hold — Blender's
+     * {@code +Y}-up export, {@code SceneModel}'s axis permutation and
+     * {@link SceneModel#PERSON_TURN} — and any one of them moving turns every
+     * modelled piece in the game by ninety degrees or stands it on its ear.
+     *
+     * <p>Off-centre in all three axes on purpose: a probe on an axis cannot tell
+     * a swap from an identity.
+     */
+    @Test
+    void theBlenderOriginIsTheGamesOrigin(@TempDir Path dir) throws IOException {
+        String key = "oilskin_cape";
+        double bx = 0.30, by = 0.50, bz = 1.60;
+        // Blender (x, y, z) leaves the exporter as (x, z, -y) — both glTF's
+        // "+Y up" and OBJ's "-Z forward" write it that way.
+        Files.createDirectories(dir.resolve("cosmetics"));
+        Files.writeString(dir.resolve("cosmetics/" + key + ".obj"),
+                "g spine\n"
+                        + "v " + bx + " " + bz + " " + (-by) + "\n"
+                        + "v " + (bx + 0.002) + " " + bz + " " + (-by) + "\n"
+                        + "v " + bx + " " + (bz + 0.002) + " " + (-by) + "\n"
+                        + "f 1 2 3\n",
+                StandardCharsets.UTF_8);
+
+        SceneModels.setDirectory(dir);
+        try {
+            Mesh drawn = wornLegs(key, 0);
+            assertEquals(bx, (drawn.minX() + drawn.maxX()) / 2, 0.005,
+                    "Blender's x is not the game's x");
+            assertEquals(by, (drawn.minY() + drawn.maxY()) / 2, 0.005,
+                    "Blender's y is not the game's y");
+            assertEquals(bz, (drawn.minZ() + drawn.maxZ()) / 2, 0.005,
+                    "Blender's z is not the game's z");
+        } finally {
+            SceneModels.setDirectory(Path.of(SceneModels.DIRECTORY));
+        }
+    }
+
+    /**
+     * A modelled piece walks in step with the legs underneath it.
+     *
+     * <p><b>The one convention an artist cannot derive and would get wrong half
+     * the time.</b> A walker's boxes swing the {@code +x} leg on
+     * {@code sin(phase)}; the importer's fallback swings whichever bone is
+     * called {@code left} on {@code sin(phase)} too. So {@code _l} goes on
+     * {@code +x} — not because that is anybody's anatomy, but because it is what
+     * keeps a modelled gaiter moving with the boot inside it.
+     *
+     * <p>Asserted by sign rather than by distance: the boxes and the fallback
+     * swing by different amounts and always will, and the only thing that has to
+     * agree is <em>which leg is in front</em>.
+     */
+    @Test
+    void aModelledPieceWalksInStepWithTheBoxesUnderIt(@TempDir Path dir) throws IOException {
+        String key = "canvas_gaiters";
+        Files.createDirectories(dir.resolve("cosmetics"));
+        // A speck low on each leg, in Blender space, where a swing shows as
+        // movement fore and aft. See tools/blender/cosmetic_reference.py.
+        Files.writeString(dir.resolve("cosmetics/" + key + ".obj"),
+                speck("leg_l", 0.09, 0.20, 1) + speck("leg_r", -0.09, 0.20, 4),
+                StandardCharsets.UTF_8);
+
+        SceneModels.setDirectory(dir);
+        try {
+            for (double phase : new double[]{0.25, 0.75}) {
+                double modelled = leadingSide(wornLegs(key, phase));
+                double boxed = leadingSide(walker(WalkerModel.WEARING_NOTHING,
+                        0x4A6B33, phase, 3.0));
+                assertEquals(Math.signum(boxed), Math.signum(modelled),
+                        "at phase " + phase + " a modelled piece has the other leg "
+                                + "forward from the boxes under it — swap _l and _r");
+            }
+        } finally {
+            SceneModels.setDirectory(Path.of(SceneModels.DIRECTORY));
+        }
+    }
+
+    /** One modelled piece on a walking figure. */
+    private static Mesh wornLegs(String key, double phase) {
+        Mesh.Builder mesh = Mesh.builder(0, 0, 0, false, 1);
+        CosmeticModel.overlay(mesh, List.of(key), 0, 0, 0, 0, WalkerModel.HEIGHT,
+                3.0, phase, new float[]{0, 0, 1, 1});
+        return mesh.build();
+    }
+
+    /**
+     * Which side's leg is in front, as a sign: negative when it is the
+     * {@code +x} one.
+     *
+     * <p>Forward is {@code −y}, so this is the {@code +x} side's mean depth less
+     * the {@code −x} side's. Only the lowest quarter of the figure counts —
+     * higher up is a chest and a hat, which do not swing.
+     */
+    private static double leadingSide(Mesh mesh) {
+        float[] v = mesh.vertices();
+        double plus = 0, minus = 0;
+        int plusN = 0, minusN = 0;
+        for (int i = 0; i < mesh.vertexCount(); i++) {
+            double x = v[i * Mesh.FLOATS_PER_VERTEX];
+            double y = v[i * Mesh.FLOATS_PER_VERTEX + 1];
+            double z = v[i * Mesh.FLOATS_PER_VERTEX + 2];
+            if (z > 0.45) continue;
+            if (x > 0.02) { plus += y; plusN++; } else if (x < -0.02) { minus += y; minusN++; }
+        }
+        assertTrue(plusN > 0 && minusN > 0, "nothing on one side of the figure to compare");
+        return plus / plusN - minus / minusN;
+    }
+
+    /** A speck at a point in BLENDER space, in a named group, as an OBJ writes it. */
+    private static String speck(String group, double bx, double bz, int base) {
+        // Blender (x, y, z) leaves the exporter as (x, z, -y); this one is on
+        // the centre line, so its y is zero either way.
+        return "g " + group + "\n"
+                + "v " + bx + " " + bz + " 0\n"
+                + "v " + (bx + 0.002) + " " + bz + " 0\n"
+                + "v " + bx + " " + (bz + 0.002) + " 0\n"
+                + "f " + base + " " + (base + 1) + " " + (base + 2) + "\n";
+    }
+
+    /**
+     * The Blender script hands an artist the same figure the game draws.
+     *
+     * <p><b>The other half of the drift problem.</b> The test above pins the
+     * README's table; this one pins the script that builds the body somebody
+     * actually fits a cape to, by reading its own constants back out of it. A
+     * number that changes in {@code WalkerModel} and not in
+     * {@code tools/blender/cosmetic_reference.py} is a reference figure quietly
+     * telling every artist the wrong thing, and nothing else in this repository
+     * would notice.
+     */
+    @Test
+    void theBlenderReferenceScriptAgreesWithTheWalker() throws IOException {
+        Path script = Path.of("tools/blender/cosmetic_reference.py");
+        assertTrue(Files.isReadable(script), "the reference script is missing: " + script);
+        Map<String, Double> said = pythonConstants(Files.readString(script));
+
+        double h = WalkerModel.HEIGHT;
+        double lift = 0.065 - (h * 0.47 - h * 0.45);
+        assertEquals(h, said.get("HEIGHT"), 1e-9, "HEIGHT");
+        assertEquals(1.95, said.get("HAT_TOP"), 0.005, "HAT_TOP");
+        assertEquals(0.00, said.get("SOLE"), 1e-9, "SOLE");
+        assertEquals(lift + h * 0.47 - h * 0.45 - 0.015, said.get("BOOT_Z"), 0.005, "BOOT_Z");
+        assertEquals(lift + h * 0.47 - h * 0.45 * 0.52, said.get("KNEE_Z"), 0.005, "KNEE_Z");
+        assertEquals(lift + h * 0.47, said.get("HIP_Z"), 0.005, "HIP_Z");
+        assertEquals(lift + h * 0.68, said.get("CHEST_Z"), 0.005, "CHEST_Z");
+        assertEquals(lift + h * 0.70, said.get("PACK_Z"), 0.005, "PACK_Z");
+        assertEquals(lift + h * 0.80, said.get("SHOULDER_Z"), 0.005, "SHOULDER_Z");
+        assertEquals(lift + h * NECK_SHARE, said.get("NECK_Z"), 0.005, "NECK_Z");
+        assertEquals(lift + h * 0.94, said.get("HEAD_Z"), 0.005, "HEAD_Z");
+        assertEquals(lift + h * 0.94 + h * 0.08, said.get("BRIM_Z"), 0.005, "BRIM_Z");
+
+        double arm = h * 0.36;
+        assertEquals(lift + h * 0.80 - arm * 0.52 - Math.cos(0.22) * arm * 0.48 - 0.02,
+                said.get("HAND_Z"), 0.005, "HAND_Z");
+        assertEquals(0.09, said.get("HIP_X"), 1e-9, "HIP_X");
+        assertEquals(0.20, said.get("SHOULDER_X"), 1e-9, "SHOULDER_X");
+
+        // …and the bone names it writes are ones the importer actually binds,
+        // which is the other way the script could be quietly useless.
+        String text = Files.readString(script);
+        for (String bone : List.of("root", "spine", "head", "arm_l", "arm_r",
+                "hand_l", "hand_r", "leg_l", "leg_r", "foot_l", "foot_r")) {
+            assertTrue(text.contains("\"" + bone + "\""),
+                    "the reference rig lost its " + bone + " bone");
+            assertNotNull(ModelRig.jointOf(bone, ModelRig.Kind.HUMANOID),
+                    bone + " is in the reference rig and binds to no joint");
+        }
+    }
+
+    /** Where {@code WalkerModel} puts the neck, as a share of the height. */
+    private static final double NECK_SHARE = 0.875;
+
+    /** Every {@code NAME = number} at the top level of a Python file. */
+    private static Map<String, Double> pythonConstants(String text) {
+        Map<String, Double> out = new HashMap<>();
+        // Trailing comments allowed: half of these carry the note that says
+        // which of WalkerModel's proportions they came out of.
+        Matcher m = Pattern.compile(
+                "(?m)^([A-Z][A-Z0-9_]*) = (-?\\d+(?:\\.\\d+)?)\\s*(?:#.*)?$")
+                .matcher(text);
+        while (m.find()) out.put(m.group(1), Double.parseDouble(m.group(2)));
+        return out;
     }
 
     /**

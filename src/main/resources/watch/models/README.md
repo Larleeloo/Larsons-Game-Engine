@@ -569,6 +569,10 @@ One file replaces one piece. Everything else on the rail keeps its boxes, so you
 can do these one at a time — and the game will happily draw a modelled hat over
 a boxed scarf.
 
+**There is a walkthrough with the clicks in it**, plus a Blender script that
+builds the reference figure and its armature for you, in `tools/blender/` at the
+root of this repository. This section is the contract; that is the tutorial.
+
 ### A cosmetic is a rigged figure, not a prop
 
 **This is the difference from everything else in this folder, and the only thing
@@ -578,8 +582,9 @@ the way you would model a coat: on a body, in place, rigged to that body's
 skeleton.
 
 1. **Stand a reference figure at the origin** — feet on `Z = 0`, facing **−Y**
-   (Blender's Front view), 1.95 m to the top of its hat. The table below is that
-   figure, landmark by landmark. §9's axes apply unchanged, and they are what
+   (Blender's Front view), 1.95 m to the top of its hat. Run
+   `tools/blender/cosmetic_reference.py` and you have one, armature included;
+   the table below is what it builds, landmark by landmark. §9's axes apply unchanged, and they are what
    tells a cape from a bib: **−Y is the front**, so a cape goes at **+Y**, behind
    the chest's back face (0.22 m from its middle).
 2. **Model your piece where it sits on them.** A hat goes at head height. A cape

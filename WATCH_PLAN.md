@@ -3562,6 +3562,16 @@ table says the shoulders are at, exports, and never runs any of this. So
 it against the mesh the game emits. A change to `WalkerModel`'s proportions now
 fails a test rather than quietly moving somebody's art six inches off their back.
 
+Better than a table, though, is not having to read one: `tools/blender/`
+carries a script that **builds the reference walker and its armature in
+Blender**, so an artist imports a body, fits the garment to it, and deletes it.
+Its constants are read back out of the file by a second test, because a
+reference figure that has drifted is worse than none — it is confidently wrong,
+in every piece anybody makes against it, for ever. And a third pins the one
+convention nobody could derive: `_l` bones go on `+x`, not for anatomy (the
+engine's two halves disagree about which side that is) but because it is what
+keeps a modelled gaiter swinging with the boot inside it.
+
 ---
 
 ## 8. Tests

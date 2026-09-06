@@ -3704,7 +3704,11 @@ two of them if it needs to, and **plays its own animation** — name a Blender
 action `walk` and it runs on the wearer's own gait clock, in step with the legs
 underneath it. A piece with no clip still moves. The contract is §16 of
 [`watch/models/README.md`](src/main/resources/watch/models/README.md), whose
-reference-figure table is itself held to the real mesh by a test.
+reference-figure table is itself held to the real mesh by a test — and
+[`tools/blender/`](tools/blender/README.md) has the walkthrough with the clicks
+in it plus a script that builds the reference walker and its armature in
+Blender for you, so there is a body to fit the garment to and no numbers to
+retype.
 
 Wiring that up found a ninety-degree bug older than the wardrobe. This game has
 **two facing conventions** — an animal's boxes point along `+x` at a yaw of zero

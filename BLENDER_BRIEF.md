@@ -287,7 +287,11 @@ brief below is shaped differently from the ranger's: you are making a garment,
 not a figure.
 
 **Read `src/main/resources/watch/models/README.md` §16 first.** It is the
-contract; this is a summary of it.
+contract; this is a summary of it. If you are doing the modelling yourself
+rather than handing it to a local session, go to
+[`tools/blender/README.md`](tools/blender/README.md) instead — it is the same
+thing with the clicks in it, and it comes with a script that builds the
+reference figure and its armature in one go.
 
 ### Paste this into the local session
 
@@ -299,11 +303,13 @@ game in this repository and export it as a `.glb`.
 **Read `src/main/resources/watch/models/README.md` §16, then §9–§14.** §16 is the
 contract for a worn piece specifically; the rest is the mesh pipeline it sits on.
 
-**Build the reference figure first**, from §16's landmark table — a stack of
-plain boxes is enough, you are going to delete it. Feet on `Z = 0`, facing `−Y`
-(numpad 1), 1.95 m to the top of its hat, shoulders at Z 1.45 and ±0.20 across,
-head a 0.23 m cube centred at Z 1.70. That figure is what you fit the garment to
-and it is the only way to get the placement right.
+**Build the reference figure first** by running
+`tools/blender/cosmetic_reference.py` — it makes the walker as the boxes the game
+draws, plus an armature with the bone names the importer binds. That figure is
+what you fit the garment to and it is the only way to get the placement right.
+(If you would rather build it by hand, §16's landmark table is what the script
+writes: feet on `Z = 0`, facing `−Y`, 1.95 m to the top of the hat, shoulders at
+Z 1.45 and ±0.20 across, head a 0.23 m cube centred at Z 1.70.)
 
 Then:
 
