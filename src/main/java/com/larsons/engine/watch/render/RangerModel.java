@@ -189,7 +189,11 @@ public final class RangerModel {
             // Standing, with the head following. A model that supplies no idle
             // clip is posed by ModelRig's humanoid table instead, which is what
             // makes a model with no animations at all still worth committing.
-            imported.mesh(mesh, x, y, z, yaw, AnimState.IDLE,
+            // Turned, because this figure's boxes and an imported model do not
+            // agree about which way a yaw of zero points — see
+            // SceneModel.PERSON_TURN. Without it a dropped-in ranger stands
+            // square to the counter they are supposed to be facing.
+            imported.mesh(mesh, x, y, z, yaw + SceneModel.PERSON_TURN, AnimState.IDLE,
                     t * AnimState.IDLE.cyclesPerSecond(), height, uv, turn);
             return;
         }

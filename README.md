@@ -3694,6 +3694,25 @@ face slots go on through the same call that already puts the ordinary hat on —
 which is why your boater is still on your head when you are swimming face-down
 across a lake.
 
+**And every one of them can be modelled in Blender instead.** Drop
+`watch/models/cosmetics/<piece key>.glb` beside the jar or on the classpath and
+it is worn instead of the boxes — the same drop-in the ranger and the 1323
+animals already have, failing the same soft way if the file is broken. A worn
+model is a *rigged garment*: authored in place on a reference figure, bound to
+the same bone names a character uses, so it follows the joint it hangs on, spans
+two of them if it needs to, and **plays its own animation** — name a Blender
+action `walk` and it runs on the wearer's own gait clock, in step with the legs
+underneath it. A piece with no clip still moves. The contract is §16 of
+[`watch/models/README.md`](src/main/resources/watch/models/README.md), whose
+reference-figure table is itself held to the real mesh by a test.
+
+Wiring that up found a ninety-degree bug older than the wardrobe. This game has
+**two facing conventions** — an animal's boxes point along `+x` at a yaw of zero
+and a person's point along `−y` — and the model importer was written against the
+animals, so the first imported *person* would have stood square to the figure it
+replaced. Nobody had hit it because nobody had committed one yet. `PERSON_TURN`
+is the correction, and the forest ranger needed it too.
+
 Everything you can pick up has a **model** too
 ([`ItemModel`](src/main/java/com/larsons/engine/watch/render/ItemModel.java)) —
 one per kind, tinted per item — so a feeder shows what it was filled with from

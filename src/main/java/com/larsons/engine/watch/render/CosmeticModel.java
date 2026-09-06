@@ -1,9 +1,14 @@
 package com.larsons.engine.watch.render;
 
 import com.larsons.engine.watch.Cosmetics;
+import com.larsons.engine.watch.life.AnimState;
+import com.larsons.engine.watch.model.ModelRig;
+import com.larsons.engine.watch.model.SceneModel;
+import com.larsons.engine.watch.model.SceneModels;
 import com.larsons.engine.watch.world.WatchMaterial;
 import com.larsons.engine.watch.world.WatchMaterials;
 
+import java.util.ArrayList;
 import java.util.List;
 
 /**
@@ -43,6 +48,40 @@ import java.util.List;
  * they are covering rather than in a colour of their own — see
  * {@link Cosmetics.Piece#tinted()} — so six people in matching oilskins are
  * still six people. Everything else is small enough to be its own colour.
+ *
+ * <h2>Every one of them can be replaced by a modelled one</h2>
+ *
+ * <p>Drop {@code watch/models/cosmetics/<key>.glb} beside the jar or on the
+ * classpath and it is drawn instead of the boxes below — the same drop-in the
+ * ranger and the thirteen hundred animals already have ({@link SceneModels}),
+ * under the same rules, failing the same soft way. That is what
+ * {@link #importedFor} answers and it is the whole of the mechanism.
+ *
+ * <p><b>An imported piece is a rigged figure, not a box on an anchor.</b> The
+ * descriptions below are written against a {@link Fit} — a point on one body
+ * part — because that is the cheapest way to place a box. A modelled piece is
+ * the other thing entirely: a cape is authored <em>in place</em> on a reference
+ * walker standing at the origin, rigged to the same bone names a character uses
+ * ({@code head}, {@code spine}, {@code arm_l}, {@code leg_r}…), and drawn at
+ * that walker's feet in that walker's pose. So it follows the joints it is
+ * hung on, it can span two of them, and — the point of the whole exercise — an
+ * artist can ship a {@code walk} clip and have the cloak swing on its own.
+ * {@link SceneModel.Size#AS_PLACED} is what keeps the hat at the height it was
+ * modelled at.
+ *
+ * <p>Two consequences worth knowing before you model one:
+ *
+ * <ul>
+ *   <li>a piece with an imported model is <b>skipped here</b> and drawn by
+ *       {@link #overlay} instead — {@link #boxesOnly} is the filter, and the
+ *       reason it is a filter rather than a branch inside {@link #wear} is that
+ *       the two are drawn at different <em>times</em>: one per joint, one per
+ *       figure;</li>
+ *   <li>and only where there is a walker to hang it on. A
+ *       {@linkplain WalkerModel#swimmer swimmer} and a
+ *       {@linkplain WalkerModel#rower rower} are posed by numbers no clip
+ *       knows, so they keep the boxes. See {@link #overlay}.</li>
+ * </ul>
  */
 public final class CosmeticModel {
 
@@ -149,12 +188,132 @@ public final class CosmeticModel {
         }
     }
 
+    // --- modelled pieces ------------------------------------------------------------
+
+    /** Where an imported piece is filed, under the models folder. */
+    public static final String FOLDER = "cosmetics/";
+
+    /**
+     * How the file is read: as a person, at the size and the height it was
+     * modelled at.
+     *
+     * <p>{@link ModelRig.Kind#HUMANOID} because the thing wearing it is one and
+     * its bones are named for one — a cape rigged to {@code spine} has to bind
+     * to a body and not to a flank. {@link SceneModel.Size#AS_PLACED} because a
+     * cosmetic is the one model in this game that is <em>not</em> measured: it
+     * was authored on a reference walker, in metres, at the height it belongs
+     * at, and both of those are answers rather than accidents.
+     */
+    private static final SceneModel.Size WORN_SIZE = SceneModel.Size.AS_PLACED;
+
+    /**
+     * The modelled version of a piece, or {@code null} for one that is still
+     * boxes.
+     *
+     * <p>Every rule about where the file may be and what may be wrong with it is
+     * {@link SceneModels}'s, unchanged: beside the jar first and then the
+     * classpath, {@code .glb} then {@code .gltf} then {@code .obj}, and anything
+     * missing, truncated or empty leaves the boxes in place with one line on
+     * stderr. Nothing a player drops in this folder can stop the game starting.
+     */
+    public static SceneModel importedFor(String key) {
+        return key == null ? null
+                : SceneModels.of(FOLDER + key, ModelRig.Kind.HUMANOID, WORN_SIZE);
+    }
+
+    /** Whether anybody has modelled this piece. */
+    public static boolean modelled(String key) { return importedFor(key) != null; }
+
+    /**
+     * The worn keys that are still boxes — what a {@link Fit} is handed.
+     *
+     * <p>Returns the list it was given when none of it is modelled, which is
+     * every walker in an installation nobody has dropped a file into: the common
+     * path allocates nothing and the uncommon one allocates a list six long.
+     */
+    public static List<String> boxesOnly(List<String> worn) {
+        if (worn == null || worn.isEmpty()) return worn;
+        List<String> out = null;
+        for (int i = 0; i < worn.size(); i++) {
+            if (!modelled(worn.get(i))) {
+                if (out != null) out.add(worn.get(i));
+                continue;
+            }
+            if (out == null) out = new ArrayList<>(worn.subList(0, i));
+        }
+        return out == null ? worn : out;
+    }
+
+    /**
+     * Every modelled piece somebody is wearing, drawn over a standing figure.
+     *
+     * <p>One call per piece, each at the walker's own feet, facing the way they
+     * face, at the walker's own scale — so a crouching walker's cape crouches
+     * with them — and posed by the walker's own state and gait clock. A piece
+     * that ships a clip for that state plays it; one that does not is posed by
+     * {@code ModelRig}'s humanoid table, exactly as a half-finished ranger is.
+     * That is what makes a model with no animation in it worth committing.
+     *
+     * <p><b>Only the standing figure calls this.</b> A swimmer is laid along a
+     * spine that may point anywhere and a rower is folded onto a thwart, and
+     * neither is a pose {@link SceneModel} can be asked for — it takes a yaw and
+     * no more. So those two keep the boxes, which is a visible inconsistency
+     * (your hat changes shape when you dive) and the honest one: the alternative
+     * is a full-length oilskin standing bolt upright in the middle of a lake.
+     *
+     * @param z      the ground under their feet, in world metres
+     * @param height how tall this walker is — {@code WalkerModel.HEIGHT}, or the
+     *               crouched one
+     * @param speed  how fast they are moving, which is what picks the clip
+     * @param phase  the gait clock, in turns, so a walk cycle is in step with
+     *               the legs underneath it
+     */
+    public static void overlay(Mesh.Builder mesh, List<String> worn, double x, double y,
+                               double z, double yaw, double height, double speed,
+                               double phase, float[] uv) {
+        if (worn == null || worn.isEmpty()) return;
+        AnimState state = stateFor(speed);
+        double scale = height / WalkerModel.HEIGHT;
+        for (String key : worn) {
+            SceneModel model = importedFor(key);
+            if (model == null) continue;
+            model.mesh(mesh, x, y, z, yaw + SceneModel.PERSON_TURN, state, phase,
+                    scale, uv);
+        }
+    }
+
+    /**
+     * Which clip a walker at this speed is asking for.
+     *
+     * <p>Three states, because three is what a person in this game does with
+     * their legs and because every one of them has a procedural fallback behind
+     * it. Read off the speed rather than passed in: the speed is already the
+     * number the gait is driven by, so a cloak's clip and the legs under it
+     * cannot disagree about whether this is a walk.
+     */
+    private static AnimState stateFor(double speed) {
+        if (speed >= RUNNING) return AnimState.RUN;
+        return speed >= WALKING ? AnimState.WALK : AnimState.IDLE;
+    }
+
+    /**
+     * How fast counts as walking, and as running, in metres per second.
+     *
+     * <p>{@code WALKING} is low deliberately — a hair above standing still —
+     * because the alternative is a figure whose legs are swinging while their
+     * coat is on the idle clip. {@code RUNNING} is between this game's walk
+     * (4.4) and its sprint (8.0).
+     */
+    private static final double WALKING = 0.35, RUNNING = 6.2;
+
     /**
      * One piece, standing on its own at the origin — what a portrait renders.
      *
      * <p>The same descriptions the figure wears, at the same scale relative to
      * the part they hang on, which is the point: a picture drawn from a second
-     * description would eventually be a picture of a hat nobody owns.
+     * description would eventually be a picture of a hat nobody owns. A
+     * {@linkplain #importedFor modelled} piece answers with its own geometry
+     * here too, for that reason and not for a different one.
      *
      * @param size what to treat the missing body part as being — pass the
      *             {@linkplain #portraitSize natural size} for its slot
@@ -163,6 +322,18 @@ public final class CosmeticModel {
                              double yaw, double size, int coat) {
         Cosmetics.Piece piece = Cosmetics.byKey(key);
         if (piece == null) return;
+        SceneModel model = importedFor(key);
+        if (model != null) {
+            // Standing still at the origin, and the frame is found by measuring
+            // the triangles — so a hat authored at head height comes back as a
+            // picture of a hat rather than a picture of the empty metre and a
+            // half under it. See ItemPortrait.
+            float[] uv = new float[4];
+            WatchMaterials.uv(WatchMaterial.PLANK, uv);
+            model.mesh(mesh, x, y, z, yaw + SceneModel.PERSON_TURN, AnimState.IDLE,
+                    0, 1, uv);
+            return;
+        }
         draw(mesh, piece, Fit.upright(x, y, z, yaw, size), coat);
     }
 

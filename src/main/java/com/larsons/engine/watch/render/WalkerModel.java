@@ -236,6 +236,11 @@ public final class WalkerModel {
                               Leap leap, int tint, List<String> worn) {
         float[] uv = new float[4];
         WatchMaterials.uv(WatchMaterial.PLANK, uv);
+        // Anything somebody has modelled in Blender is a rigged figure of its
+        // own rather than a box on a joint, so it is drawn once, whole, at the
+        // end — and taken off the list the joints below are handed. See
+        // CosmeticModel.overlay.
+        List<String> boxes = CosmeticModel.boxesOnly(worn);
 
         double height = crouching ? CROUCH_HEIGHT : HEIGHT;
         double base = z;
@@ -339,7 +344,7 @@ public final class WalkerModel {
             // …and whatever is buckled over it. On the boot rather than on the
             // shin, so a gaiter follows the foot through the stride instead of
             // hanging off the leg above it.
-            CosmeticModel.wear(mesh, worn, Cosmetics.Slot.FEET,
+            CosmeticModel.wear(mesh, boxes, Cosmetics.Slot.FEET,
                     CosmeticModel.Fit.upright(ax + fx * 0.03, ay + fy * 0.03,
                             base + lift + ankleUp[i] - BOOT_DROP, yaw, 0.085), coat);
         }
@@ -390,13 +395,13 @@ public final class WalkerModel {
                     0.055, 0.055, sx, sy, 0, uv, coat);
             Shapes.box(mesh, shX + fx * wx, shY + fy * wx, shoulderZ + wu - 0.02,
                     0.055, 0.055, 0.055, yaw, uv, skin);
-            CosmeticModel.wear(mesh, worn, Cosmetics.Slot.HANDS,
+            CosmeticModel.wear(mesh, boxes, Cosmetics.Slot.HANDS,
                     CosmeticModel.Fit.upright(shX + fx * wx, shY + fy * wx,
                             shoulderZ + wu - 0.02, yaw, 0.055), coat);
         }
 
         head(mesh, x + fx * headAlong, y + fy * headAlong, base + lift, height, yaw,
-                uv, skin, worn, coat);
+                uv, skin, boxes, coat);
         // A pack, because everybody in this game is carrying a satchel.
         Shapes.box(mesh, x + fx * (chestAlong - 0.20), y + fy * (chestAlong - 0.20),
                 base + lift + height * 0.70, 0.12, 0.09, 0.14, yaw, uv,
@@ -404,13 +409,18 @@ public final class WalkerModel {
         // What is over the pack, and what is round the throat. Both are hung
         // off the leaning upper body rather than off the world, so a cape
         // leaning into a sprint leans with the back it is buckled to.
-        CosmeticModel.wear(mesh, worn, Cosmetics.Slot.BACK,
+        CosmeticModel.wear(mesh, boxes, Cosmetics.Slot.BACK,
                 CosmeticModel.Fit.upright(x + fx * (chestAlong - 0.20),
                         y + fy * (chestAlong - 0.20), base + lift + height * 0.70,
                         yaw, 0.115), coat);
-        CosmeticModel.wear(mesh, worn, Cosmetics.Slot.NECK,
+        CosmeticModel.wear(mesh, boxes, Cosmetics.Slot.NECK,
                 CosmeticModel.Fit.upright(x + fx * shoulderAlong, y + fy * shoulderAlong,
                         base + lift + height * NECK, yaw, 0.115), coat);
+        // …and the modelled pieces, whole, over the figure just drawn. At `base`
+        // rather than at `base + lift`: the lift is what puts the lower boot on
+        // the floor, and the floor is where a piece authored on a reference
+        // walker measured itself from.
+        CosmeticModel.overlay(mesh, worn, x, y, base, yaw, height, speed, phase, uv);
     }
 
     /**
@@ -946,6 +956,27 @@ public final class WalkerModel {
                              double dirX, double dirY, double dirZ,
                              double rightX, double rightY, double bob, double sway,
                              double reach, int sleeve) {
+        hands(mesh, eyeX, eyeY, eyeZ, dirX, dirY, dirZ, rightX, rightY, bob, sway,
+                reach, sleeve, WEARING_NOTHING);
+    }
+
+    /**
+     * The same two arms, in whatever is on the hands.
+     *
+     * <p>Your own mittens, from inside your own head. Worth the six lines: the
+     * hands are the one part of yourself you look at all the time in first
+     * person, and a pair of gloves you can see on everybody else and not on
+     * yourself is the version of this feature that feels broken.
+     *
+     * <p>Only the {@linkplain Cosmetics.Slot#HANDS hand} slot, and only its
+     * boxes. Nothing else is in shot — a hat is behind the camera — and a
+     * {@linkplain CosmeticModel#importedFor modelled} piece is a whole figure
+     * in the world's frame, which is the one place this method is not.
+     */
+    public static void hands(Mesh.Builder mesh, double eyeX, double eyeY, double eyeZ,
+                             double dirX, double dirY, double dirZ,
+                             double rightX, double rightY, double bob, double sway,
+                             double reach, int sleeve, List<String> worn) {
         float[] uv = new float[4];
         WatchMaterials.uv(WatchMaterial.PLANK, uv);
         int skin = WatchMaterials.shade(WatchMaterial.CLAY);
@@ -957,6 +988,7 @@ public final class WalkerModel {
         double yaw = Math.atan2(dirX, -dirY);
         double bobUp = Math.sin(bob * Math.PI * 2) * 0.035 * sway;
         double bobSide = Math.sin(bob * Math.PI) * 0.028 * sway;
+        List<String> boxes = CosmeticModel.boxesOnly(worn);
 
         for (int side = -1; side <= 1; side += 2) {
             // The right hand reaches; the left stays where it is. One hand
@@ -976,6 +1008,12 @@ public final class WalkerModel {
             Shapes.box(mesh, cx - dirX * half, cy - dirY * half, cz - dirZ * half,
                     0.055, half, 0.055, yaw, uv, sleeve);
             Shapes.box(mesh, cx, cy, cz, 0.062, 0.062, 0.062, yaw, uv, skin);
+            // On the fist, stacked along the camera's own up rather than the
+            // world's: in first person "up" is wherever you are looking, and a
+            // cuff laid out along the world's would swing off the wrist the
+            // moment you looked at your feet.
+            CosmeticModel.wear(mesh, boxes, Cosmetics.Slot.HANDS,
+                    new CosmeticModel.Fit(cx, cy, cz, upX, upY, upZ, yaw, 0.055), sleeve);
         }
     }
 

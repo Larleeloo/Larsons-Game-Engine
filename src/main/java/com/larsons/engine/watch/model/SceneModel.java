@@ -55,20 +55,63 @@ import java.util.Set;
 public final class SceneModel {
 
     /**
-     * How big a model should come out.
+     * What to add to a <b>person's</b> yaw before handing it to {@link #mesh}.
      *
-     * @param height floor to crown, in whatever units the caller then draws at
-     *               — one body length for a creature, one person for a person —
-     *               or {@code 0} to keep the file's own units
+     * <p><b>This game has two facing conventions and they are ninety degrees
+     * apart.</b> An animal's boxes point along {@code +x} at a yaw of zero
+     * ({@code AnimalModel}), and this class was written to match them — so a
+     * file's front, which the README asks you to point down Blender's {@code −Y},
+     * comes out along {@code +x} too and an imported wren faces the way its
+     * placeholder did. A <em>person</em> is drawn the other way round:
+     * {@code WalkerModel}, {@code KeeperModel} and {@code RangerModel} all take
+     * forward as {@code (sin yaw, −cos yaw)}, which at zero is {@code −y}.
+     *
+     * <p>Nothing was wrong until a person was imported. Handed a walker's yaw
+     * unturned, a modelled figure stands square to the one underneath it and a
+     * cape hangs off somebody's left shoulder — which is the "walks sideways"
+     * failure the README warns about, arriving from the engine rather than from
+     * the export. So every caller drawing an imported <em>person</em> adds this,
+     * and {@code ModelImportTest.anImportedPersonFacesTheWayTheBoxesFace} pins
+     * it: the file's front lands exactly where the box model's forward is, at
+     * three different yaws.
+     *
+     * <p>A creature adds nothing. Its two conventions already agree.
      */
-    public record Size(double height) {
+    public static final double PERSON_TURN = -Math.PI / 2;
 
-        /** The file's own units, taken to be metres. What a prop wants. */
-        public static final Size AS_MODELLED = new Size(0);
+    /**
+     * How big a model should come out, and where its floor is.
+     *
+     * @param height   floor to crown, in whatever units the caller then draws
+     *                 at — one body length for a creature, one person for a
+     *                 person — or {@code 0} to keep the file's own units
+     * @param grounded whether the model's lowest point is dropped to the
+     *                 caller's {@code z}. True for anything that stands on the
+     *                 ground, which is nearly everything; false for a thing
+     *                 modelled <em>in place</em> against something else, where
+     *                 the height the artist put it at is the answer rather than
+     *                 an accident. See {@link #AS_PLACED}
+     */
+    public record Size(double height, boolean grounded) {
+
+        /** The file's own units, taken to be metres, stood on the floor. */
+        public static final Size AS_MODELLED = new Size(0, true);
+
+        /**
+         * The file's own units <em>and</em> the file's own height off the floor.
+         *
+         * <p>For something modelled <em>on</em> something else rather than
+         * standing on the ground — a hat, a cape, a pair of boots, authored
+         * where they sit on a reference figure at the origin. Grounding one of
+         * those is exactly wrong: it takes a hat modelled at 1.8 m and puts it
+         * on the floor, because the lowest point of a hat is the underside of
+         * its brim.
+         */
+        public static final Size AS_PLACED = new Size(0, false);
 
         /** Scale so the model stands exactly this many units tall. */
         public static Size height(double units) {
-            return new Size(Math.max(1e-6, units));
+            return new Size(Math.max(1e-6, units), true);
         }
     }
 
@@ -144,7 +187,10 @@ public final class SceneModel {
 
         double spanF = maxF - minF, spanR = maxR - minR, spanU = maxU - minU;
         double unit = size.height() > 0 ? size.height() / Math.max(1e-6, spanU) : 1;
-        double floor = minU * unit;
+        // Where the model's own floor is, and therefore how much comes off
+        // every vertex to stand it on the caller's z. Zero for something
+        // modelled in place — see Size.AS_PLACED.
+        double floor = size.grounded() ? minU * unit : 0;
 
         Bone[] bones = new Bone[nodes.size()];
         for (int i = 0; i < nodes.size(); i++) {

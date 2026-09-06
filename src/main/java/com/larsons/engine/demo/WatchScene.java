@@ -4589,7 +4589,8 @@ public class WatchScene extends AbstractScene {
         double bob = cycle == Gait.Cycle.SWIM ? swimPhase : gait;
         WalkerModel.hands(mesh, 0, 0, 0, eye.dirX(), eye.dirY(), eye.dirZ(),
                 eye.rightX(), eye.rightY(), bob,
-                cycle == Gait.Cycle.SWIM ? 0.6 : sway, reach, sleeve);
+                cycle == Gait.Cycle.SWIM ? 0.6 : sway, reach, sleeve,
+                view().outfit().wornKeys());
 
         if (held != null) {
             double forward = WalkerModel.HAND_FORWARD + reach * 0.42 + 0.10;

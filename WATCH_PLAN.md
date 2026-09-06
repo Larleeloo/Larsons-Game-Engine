@@ -3480,6 +3480,88 @@ player changes at a counter. That is where the rows are drawn and not what the
 rules allow: `WatchGame.wear` is deliberately ungated and costs nothing, so a
 wardrobe on the satchel screen would be a panel and no host change at all.
 
+### Every one of them can be modelled instead (`cosmetics/<key>.glb`)
+
+Eighteen piles of boxes is a starting position, not an art style, and this game
+already had the answer to that before the wardrobe existed: §7i's mutants and the
+ranger are both `.glb` files dropped into `watch/models/`, and 1323 animals are
+waiting for theirs. The clothes join them. Drop
+`watch/models/cosmetics/heron_cloak.glb` beside the jar or on the classpath and
+it is worn instead of the boxes — same loader, same search order, same
+fail-soft: a file that is missing, truncated or empty leaves the boxes and prints
+one line.
+
+**A worn model is a rigged figure, not a box on an anchor**, and that is the
+whole of the design. The boxes are written against a `Fit` — one point on one
+body part — because that is the cheapest way to place a box. A garment is the
+other thing: it is authored *in place* on a reference walker standing at the
+origin, rigged to the same bone names a character uses, and drawn at that
+walker's feet in that walker's pose. Three things fall out of it, and they are
+the three the anchor could not do:
+
+* **it follows the joint it is hung on**, because `ModelRig` binds `spine`,
+  `head`, `hand_l` and the rest exactly as it does for the ranger;
+* **it can span two joints** — a cape off the shoulders and down to the knee is
+  one mesh over one bone, which no single anchor point describes;
+* **it can be animated.** Name a Blender action `walk` and it plays when the
+  wearer walks, on the wearer's own gait clock, so a cloak's swing is in step
+  with the legs under it by construction. A piece with no clip at all still
+  moves, posed by `ModelRig`'s humanoid table — the same reason a half-finished
+  ranger is worth committing.
+
+The one thing that had to change in the importer is a **placement** rule.
+Everything else in that folder stands on the ground, so it is measured and
+dropped to it. A hat is the opposite: it is authored at head height and the
+height it was authored at *is* the answer, and grounding one puts it on the floor
+because the lowest point of a hat is the underside of its brim. Hence
+`SceneModel.Size.AS_PLACED` — the file's own units and the file's own height off
+the floor — which is one boolean on a record and one line in `bake`.
+
+### The bug this found, which was older than the wardrobe
+
+Wiring the first modelled cape on produced a cape hanging off somebody's left
+shoulder — and it was not the export. **This game has two facing conventions,
+ninety degrees apart, and nobody had noticed because no imported *person* had
+ever been drawn.** An animal's boxes point along `+x` at a yaw of zero, and
+`SceneModel` was written to match them, so an imported wren faces the way its
+placeholder did. A person is the other way round: `WalkerModel`, `KeeperModel`
+and `RangerModel` all take forward as `(sin yaw, −cos yaw)`, which at zero is
+`−y`.
+
+`SceneModel.PERSON_TURN` is the correction, and `RangerModel` needed it too —
+the ranger has had this latent since §7f, waiting for the first `.glb` to be
+committed against `BLENDER_BRIEF.md`, at which point the figure outside every
+trading post would have stood square to the counter it is supposed to be facing.
+`ModelImportTest.anImportedPersonFacesTheWayTheBoxesFace` pins it at three yaws,
+and its sibling pins that a *creature* still adds nothing, because that half was
+already right and is the half that would break silently if somebody "fixed" this
+in the importer instead.
+
+Two limits, both stated in the folder README rather than hidden:
+
+* **a swimmer and a rower keep the boxes.** `SceneModel.mesh` takes a yaw and no
+  more, and neither of those poses is a yaw — one is a spine laid along the way
+  somebody is diving and the other is a body folded onto a thwart. Falling back
+  means your hat changes shape when you dive, which is visible and odd; the
+  alternative is a full-length oilskin standing bolt upright in a lake, which is
+  worse. `CosmeticModel.boxesOnly` is the filter, and it is a filter rather than
+  a branch inside `wear` because the two are drawn at different *times* — one per
+  joint, one per figure;
+* **your own hands in first person keep them too**, for the same reason: the view
+  model is built in the camera's frame and an imported piece is in the world's.
+
+And the shop row draws whatever was modelled, through `ItemPortrait` unchanged —
+which is the argument the row already made, now paying for itself: one catalogue,
+one picture, whatever the geometry turns out to be.
+
+**The reference figure is a tested document.** §16 of the models README is a
+table of landmarks — soles at 0.00, hip at 0.87, shoulder at 1.45, head centre at
+1.70, top of the hat at 1.95 — and somebody modelling a cape puts it at the Z that
+table says the shoulders are at, exports, and never runs any of this. So
+`CosmeticsTest.theReferenceFigureIsTheOneThisFolderDescribes` asserts every row of
+it against the mesh the game emits. A change to `WalkerModel`'s proportions now
+fails a test rather than quietly moving somebody's art six inches off their back.
+
 ---
 
 ## 8. Tests
@@ -3956,7 +4038,14 @@ wardrobe on the satchel screen would be a panel and no host change at all.
   and the friend's screen never learns what else is in that wardrobe. Finally
   through the real `WatchScene`: the panel opens on the shelf, an arrow key turns
   it to the rail, a click buys and wears, the same click again undresses without
-  charging, and the other arrow goes back to the shelf.
+  charging, and the other arrow goes back to the shelf. **And modelled instead of
+  boxed**: a file in `cosmetics/` replaces its piece on a walker and nothing else
+  on the figure moves, it arrives at the height it was modelled at rather than on
+  the floor, a swimmer and a rower fall back to the boxes, and the shop row draws
+  the model. Plus the one test that is really on a *document* —
+  `theReferenceFigureIsTheOneThisFolderDescribes` holds every landmark in §16 of
+  the models README against the real mesh, because that table is what somebody
+  models a cape against and nothing else would notice it drifting.
 * `TrackFieldTest` — three claims, in order. **It is made by walking**: standing
   in one place for a minute writes one print and draws nothing, sixty metres of
   walking comes out as prints a stride apart, and the path is under the line

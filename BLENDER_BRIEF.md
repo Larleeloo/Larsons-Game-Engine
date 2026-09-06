@@ -1,14 +1,14 @@
-# Making the forest ranger in Blender
+# Making models for this game in Blender
 
 This file is for a **local** Claude Code session — one running on your own
 machine, with Blender open and a Blender MCP server attached. A cloud session
 cannot reach Blender; see the note at the bottom for why.
 
-There are three parts:
-
 1. [Setting up](#1-setting-up) — twenty minutes, once.
-2. [The brief](#2-the-brief) — the thing to paste into the local session.
+2. [The brief](#2-the-brief) — the forest ranger, to paste into the local session.
 3. [Committing it](#3-committing-it) — where the file goes and how to check it worked.
+4. [Clothes for the player](#4-clothes-for-the-player) — the cosmetics a trading
+   post sells, which are authored differently and have a brief of their own.
 
 ---
 
@@ -271,9 +271,88 @@ README:
 | File | Replaces |
 |---|---|
 | `characters/ranger.glb` | the ranger |
+| `cosmetics/<piece key>.glb` | one thing the player wears — see part 4 |
 | `<species key>.glb` | one of the 1323 animals |
 | `<family key>.glb` | all 49 animals of a family |
 | `<anything>.obj` | any of the above, static, no animation |
+
+---
+
+## 4. Clothes for the player
+
+The eighteen things a trading post sells off its clothes rail are boxes too, and
+replaceable the same way — one `.glb` per piece, in `cosmetics/`. **This is the
+one kind of model in this game that is authored *on* something else**, so the
+brief below is shaped differently from the ranger's: you are making a garment,
+not a figure.
+
+**Read `src/main/resources/watch/models/README.md` §16 first.** It is the
+contract; this is a summary of it.
+
+### Paste this into the local session
+
+---8<---
+
+You have Blender available over MCP. Build a **<the piece>** for the Field Guide
+game in this repository and export it as a `.glb`.
+
+**Read `src/main/resources/watch/models/README.md` §16, then §9–§14.** §16 is the
+contract for a worn piece specifically; the rest is the mesh pipeline it sits on.
+
+**Build the reference figure first**, from §16's landmark table — a stack of
+plain boxes is enough, you are going to delete it. Feet on `Z = 0`, facing `−Y`
+(numpad 1), 1.95 m to the top of its hat, shoulders at Z 1.45 and ±0.20 across,
+head a 0.23 m cube centred at Z 1.70. That figure is what you fit the garment to
+and it is the only way to get the placement right.
+
+Then:
+
+1. Model the piece **where it sits on that figure**, in metres, flat-shaded,
+   painted with materials rather than textures (§12). Match the density of the
+   existing boxed version — read it in
+   `src/main/java/com/larsons/engine/watch/render/CosmeticModel.java`, which
+   describes all eighteen pieces box by box, and take its colours from
+   `Cosmetics.java`.
+2. **Rig it** to bones named per §10 — `spine` for anything on the body, `head`
+   for anything on the head, `hand_l` / `hand_r`, `foot_l` / `foot_r`. A cape is
+   `spine`; a hood is `head`; mittens are one piece per hand.
+3. Animate **`walk`** if you animate anything. It is driven by the wearer's own
+   gait clock, so a cloak's swing lands in step with the legs under it. `idle`
+   and `run` are the other two states. A piece with no animation still moves —
+   it follows the bone it is rigged to.
+4. **Delete the reference figure.** Export only your piece.
+5. `Ctrl+A → All Transforms`, triangulate, keep it under **250 triangles** — six
+   of these can be on one person and eight people can be in one clearing.
+6. **File → Export → glTF 2.0**, **glTF Binary (.glb)**, *+Y Up*, *Apply
+   Modifiers* on, *Animation* on.
+7. Save to `src/main/resources/watch/models/cosmetics/<piece key>.glb`.
+
+The keys are in `Cosmetics.java`:
+
+```
+wool_mittens      knitted_beanie   canvas_gaiters   wool_scarf
+rolled_bedroll    wire_spectacles  feathered_band   glass_lanyard
+leather_gloves    straw_boater     snow_goggles     oilskin_hood
+river_waders      moth_veil        fur_collar       oilskin_cape
+antler_circlet    heron_cloak
+```
+
+### Checking it
+
+```bash
+./gradlew :test --tests '*ModelImportTest*' --tests '*CosmeticsTest*'
+./gradlew run     # buy it at a trading post, then F5 for third person
+```
+
+If it did not load, one line goes to stderr saying why and the boxes are drawn
+instead.
+
+---8<---
+
+**Two things a worn model does not do**, both documented in §16 and both worth
+knowing before you spend an evening on a cape: a **swimmer and a rower keep the
+boxes** (their poses are numbers no clip knows), and so do **your own hands in
+first person** (the view model is built in the camera's frame, not the world's).
 
 ---
 

@@ -12,6 +12,7 @@ import com.larsons.engine.watch.life.AnimalRegistry;
 import com.larsons.engine.watch.net.WatchClient;
 import com.larsons.engine.watch.net.WatchServer;
 import com.larsons.engine.watch.net.WatchSession;
+import com.larsons.engine.watch.model.SceneModels;
 import com.larsons.engine.watch.render.CosmeticModel;
 import com.larsons.engine.watch.render.ItemPortrait;
 import com.larsons.engine.watch.render.Mesh;
@@ -25,6 +26,8 @@ import org.junit.jupiter.api.io.TempDir;
 import javax.swing.JPanel;
 import java.awt.event.KeyEvent;
 import java.io.IOException;
+import java.nio.charset.StandardCharsets;
+import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.ArrayList;
 import java.util.HashSet;
@@ -290,6 +293,151 @@ class CosmeticsTest {
                     addedColours(piece.key(), 0x7A4630),
                     piece.key() + " changes colour with the coat under it");
         }
+    }
+
+    // --- modelled in Blender ---------------------------------------------------------------
+
+    /**
+     * A hat somebody modelled replaces the boxes on the figure, and nothing
+     * else about the figure moves.
+     *
+     * <p>The drop-in the ranger and the animals already have, pointed at the
+     * wardrobe: {@code watch/models/cosmetics/<key>.glb}. See
+     * {@code resources/watch/models/README.md} §16 — this is the assertion
+     * behind the sentence that folder makes.
+     */
+    @Test
+    void aModelledPieceReplacesItsBoxesOnAWalker(@TempDir Path dir) throws IOException {
+        String key = "straw_boater";
+        // Both figures measured before the folder is pointed anywhere, so the
+        // comparison is against what this game draws today rather than against
+        // whatever a previous test left in the loader's cache.
+        Mesh bare = walker(WalkerModel.WEARING_NOTHING);
+        Mesh boxed = walker(List.of(key));
+
+        writePiece(dir, key);
+        SceneModels.setDirectory(dir);
+        try {
+            Mesh modelled = walker(List.of(key));
+            assertEquals(bare.triangleCount() + 2, modelled.triangleCount(),
+                    "a modelled piece should be its own triangles and none of the boxes");
+            assertTrue(boxed.triangleCount() > modelled.triangleCount(),
+                    "the boxes were drawn as well as the model");
+            assertTrue(containsAllTriangles(modelled, bare),
+                    "the modelled hat moved the walker underneath it");
+            // Modelled at 2 m on a reference figure standing at the origin, and
+            // that is where it comes out — the one thing a grounded importer
+            // would get wrong. See SceneModel.Size.AS_PLACED.
+            assertEquals(2.0, modelled.maxZ(), 0.05,
+                    "a worn model was dropped to the walker's feet");
+        } finally {
+            SceneModels.setDirectory(Path.of(SceneModels.DIRECTORY));
+        }
+    }
+
+    /**
+     * A swimmer and a rower keep the boxes, which is the documented edge of
+     * this.
+     *
+     * <p>Neither pose is one {@code SceneModel} can be asked for — it takes a
+     * yaw and no more — so the alternative to falling back is a full-length
+     * oilskin standing bolt upright in the middle of a lake.
+     */
+    @Test
+    void aSwimmerAndARowerKeepTheirBoxes(@TempDir Path dir) throws IOException {
+        String key = "straw_boater";
+        writePiece(dir, key);
+        SceneModels.setDirectory(dir);
+        try {
+            assertTrue(swimmer(0.2, List.of(key)).triangleCount()
+                            > swimmer(0.2, WalkerModel.WEARING_NOTHING).triangleCount(),
+                    "a swimmer lost their hat entirely rather than falling back");
+            assertTrue(rower(List.of(key)).triangleCount()
+                            > rower(WalkerModel.WEARING_NOTHING).triangleCount(),
+                    "a rower lost their hat entirely rather than falling back");
+        } finally {
+            SceneModels.setDirectory(Path.of(SceneModels.DIRECTORY));
+        }
+    }
+
+    /** …and the shop row shows the modelled piece rather than a picture of the boxes. */
+    @Test
+    void theShopRowDrawsWhateverWasModelled(@TempDir Path dir) throws IOException {
+        String key = "wool_scarf";
+        writePiece(dir, key);
+        SceneModels.setDirectory(dir);
+        try {
+            Mesh.Builder mesh = Mesh.builder(0, 0, 0, false, 1);
+            CosmeticModel.alone(mesh, key, 0, 0, 0, 0.4,
+                    CosmeticModel.portraitSize(Cosmetics.slotOf(key)), 0x4A6B33);
+            assertEquals(2, mesh.build().triangleCount(),
+                    "the row still drew the boxes for a piece somebody has modelled");
+        } finally {
+            SceneModels.setDirectory(Path.of(SceneModels.DIRECTORY));
+        }
+    }
+
+    /**
+     * The reference figure §16 of the models README describes is the figure this
+     * game draws.
+     *
+     * <p><b>A test on a document, and it is the most useful one in this file.</b>
+     * Somebody modelling a cape in Blender puts it at the Z that table says the
+     * shoulders are at, exports, and never runs any of this. If a number there
+     * drifts from the walker, their cape is worn six inches off their back and
+     * nothing in the build says a word. So the table is asserted here, row by
+     * row, against the mesh the game actually emits — and a change to
+     * {@code WalkerModel}'s proportions fails this rather than somebody's art.
+     */
+    @Test
+    void theReferenceFigureIsTheOneThisFolderDescribes() {
+        Mesh figure = walker(WalkerModel.WEARING_NOTHING, 0x4A6B33, 0, 0);
+        assertEquals(0, figure.minZ(), 1e-4, "a standing walker's soles are on the ground");
+        assertEquals(1.95, figure.maxZ(), 0.005, "the top of the default hat");
+        assertEquals(0.54, figure.maxX() - figure.minX(), 0.005,
+                "the hat brim is the widest thing on the figure");
+
+        double h = WalkerModel.HEIGHT;
+        // The lift the walk solves for, which every landmark below is measured
+        // from: the drop that puts the lower boot's sole on the floor. Written
+        // out rather than read off, because a number this table is built on
+        // should not be able to change quietly.
+        double lift = 0.065 - (h * 0.47 - h * 0.45);
+        assertEquals(0.05, lift + h * 0.47 - h * 0.45 - 0.015, 0.005, "boot centre");
+        assertEquals(0.45, lift + h * 0.47 - h * 0.45 * 0.52, 0.005, "knee");
+        assertEquals(0.87, lift + h * 0.47, 0.005, "hip");
+        assertEquals(1.24, lift + h * 0.68, 0.005, "chest centre");
+        assertEquals(1.28, lift + h * 0.70, 0.005, "pack centre");
+        assertEquals(1.45, lift + h * 0.80, 0.005, "shoulder");
+        assertEquals(1.70, lift + h * 0.94, 0.005, "head centre");
+        assertEquals(1.82, lift + h * 0.94 + 0.115, 0.005, "top of the head");
+        assertEquals(1.85, lift + h * 0.94 + h * 0.08, 0.005, "hat brim");
+
+        // …and the hand, which is where a mitten goes and is solved rather than
+        // proportional: an arm hanging with the elbow at its resting fold.
+        double arm = h * 0.36;
+        double drop = -arm * 0.52 - Math.cos(0.22) * arm * 0.48;
+        assertEquals(0.80, lift + h * 0.80 + drop - 0.02, 0.005, "hand centre");
+    }
+
+    /**
+     * One piece as an OBJ: a quad two metres up, in a group the rig binds to the
+     * body.
+     *
+     * <p>An {@code .obj} rather than a {@code .glb} because this file is about
+     * the wardrobe rather than about the reader — {@code ModelImportTest} owns
+     * the byte-level fixtures, and it is where the animated case is asserted.
+     */
+    private static void writePiece(Path dir, String key) throws IOException {
+        Files.createDirectories(dir.resolve("cosmetics"));
+        Files.writeString(dir.resolve("cosmetics/" + key + ".obj"), """
+                g spine
+                v 0.0 1.8 0.0
+                v 0.2 1.8 0.0
+                v 0.2 2.0 0.0
+                v 0.0 2.0 0.0
+                f 1 2 3 4
+                """, StandardCharsets.UTF_8);
     }
 
     // --- one piece to a slot ------------------------------------------------------------------
@@ -716,8 +864,13 @@ class CosmeticsTest {
     private static Mesh walker(List<String> worn) { return walker(worn, 0x4A6B33); }
 
     private static Mesh walker(List<String> worn, int coat) {
+        return walker(worn, coat, 0.25, 3.0);
+    }
+
+    /** …at a chosen point of a chosen gait; standing still is phase and speed zero. */
+    private static Mesh walker(List<String> worn, int coat, double phase, double speed) {
         Mesh.Builder mesh = Mesh.builder(0, 0, 0, false, 1);
-        WalkerModel.walker(mesh, 0, 0, 0, 0.7, false, 0.25, 3.0,
+        WalkerModel.walker(mesh, 0, 0, 0, 0, false, phase, speed,
                 WalkerModel.Leap.GROUNDED, coat, worn);
         return mesh.build();
     }

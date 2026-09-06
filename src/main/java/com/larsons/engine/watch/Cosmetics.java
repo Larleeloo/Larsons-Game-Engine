@@ -56,6 +56,18 @@ import java.util.Random;
  * <em>not</em> is a satchel item: it never goes in a bag, so it is never
  * dropped on death, never cooked with, and never handed to anybody. It goes in
  * an {@link Outfit}, which belongs to the person rather than to the party.
+ *
+ * <h2>Every one of them is a placeholder</h2>
+ *
+ * <p>The boxes below are a starting position rather than an art style, exactly
+ * as the thirteen hundred animals and the forest ranger are. Drop
+ * {@code watch/models/cosmetics/<key>.glb} beside the jar or on the classpath
+ * and it is worn instead — modelled in Blender, rigged to the wearer's own
+ * bones, with its own animation if the artist made one. The mechanism is
+ * {@link com.larsons.engine.watch.render.CosmeticModel#importedFor} and the
+ * contract an artist reads is §16 of {@code resources/watch/models/README.md}.
+ * Nothing here changes when they do it: the price, the slot, the note and the
+ * key are this file's business and the geometry is theirs.
  */
 public final class Cosmetics {
 

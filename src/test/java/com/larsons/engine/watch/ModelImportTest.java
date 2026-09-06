@@ -10,8 +10,10 @@ import com.larsons.engine.watch.model.ObjReader;
 import com.larsons.engine.watch.model.RawModel;
 import com.larsons.engine.watch.model.SceneModel;
 import com.larsons.engine.watch.model.SceneModels;
+import com.larsons.engine.watch.render.CosmeticModel;
 import com.larsons.engine.watch.render.Mesh;
 import com.larsons.engine.watch.render.RangerModel;
+import com.larsons.engine.watch.render.WalkerModel;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
 
@@ -22,6 +24,7 @@ import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.Base64;
+import java.util.List;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
@@ -685,6 +688,189 @@ class ModelImportTest {
         } finally {
             reset();
         }
+    }
+
+    // --- cosmetics ------------------------------------------------------------------
+
+    /**
+     * A modelled cosmetic replaces its boxes, and does it <b>in place</b>.
+     *
+     * <p>The second half is the one that would be missed. Everything else this
+     * importer loads stands on the ground, so it is measured and dropped to it;
+     * a hat is authored on a reference figure at head height and the height it
+     * was authored at <em>is</em> the answer. Grounded, this fixture's triangles
+     * would sit at zero instead of at the two units up the file puts them.
+     */
+    @Test
+    void aFileInTheCosmeticsFolderReplacesThePiece(@TempDir Path dir) throws IOException {
+        String key = Cosmetics.all().get(0).key();
+        Files.createDirectories(dir.resolve("cosmetics"));
+        Files.write(dir.resolve("cosmetics/" + key + ".glb"), glbBytes());
+
+        SceneModels.setDirectory(dir);
+        try {
+            assertTrue(CosmeticModel.modelled(key), "the dropped-in piece was not found");
+            assertEquals(List.of(), CosmeticModel.boxesOnly(List.of(key)),
+                    "a modelled piece should be taken off the list the joints draw");
+
+            Mesh.Builder mesh = Mesh.builder(0, 0, 0, false, 1);
+            CosmeticModel.overlay(mesh, List.of(key), 0, 0, 0, 0,
+                    WalkerModel.HEIGHT, 0, 0, new float[]{0, 0, 1, 1});
+            Mesh drawn = mesh.build();
+            assertEquals(2, drawn.triangleCount(), "the imported piece was not drawn");
+            // The fixture's head triangle is two units up its own +y, and its
+            // body triangle two high from zero. Nothing was dropped to the floor
+            // and nothing was rescaled: this is AS_PLACED doing its one job.
+            assertEquals(2.5, drawn.maxZ(), 0.02,
+                    "a worn model was moved off the height it was modelled at");
+        } finally {
+            reset();
+        }
+    }
+
+    /**
+     * A piece nobody has modelled is untouched, and a broken file is the same as
+     * no file.
+     */
+    @Test
+    void anUnmodelledOrMalformedPieceKeepsItsBoxes(@TempDir Path dir) throws IOException {
+        String key = Cosmetics.all().get(1).key();
+        Files.createDirectories(dir.resolve("cosmetics"));
+        Files.writeString(dir.resolve("cosmetics/" + key + ".gltf"), "{ not glTF }",
+                StandardCharsets.UTF_8);
+
+        SceneModels.setDirectory(dir);
+        try {
+            assertFalse(CosmeticModel.modelled(key), "a broken file replaced something");
+            assertEquals(List.of(key), CosmeticModel.boxesOnly(List.of(key)));
+            Mesh.Builder mesh = Mesh.builder(0, 0, 0, false, 1);
+            CosmeticModel.overlay(mesh, List.of(key), 0, 0, 0, 0,
+                    WalkerModel.HEIGHT, 0, 0, new float[]{0, 0, 1, 1});
+            assertTrue(mesh.build().isEmpty(), "a broken file drew something");
+        } finally {
+            reset();
+        }
+    }
+
+    /**
+     * The clip a walker asks for is the one their legs are doing.
+     *
+     * <p>The fixture animates {@code walk} and nothing else, so a walking figure
+     * is posed by the file and a standing one by the humanoid fallback — and the
+     * two have to differ, or the speed is not reaching the model at all.
+     */
+    @Test
+    void aWornModelPlaysItsOwnClipAtTheSpeedTheWalkerIsGoing(@TempDir Path dir)
+            throws IOException {
+        String key = Cosmetics.all().get(2).key();
+        Files.createDirectories(dir.resolve("cosmetics"));
+        Files.write(dir.resolve("cosmetics/" + key + ".glb"), glbBytes());
+
+        SceneModels.setDirectory(dir);
+        try {
+            SceneModel model = CosmeticModel.importedFor(key);
+            assertNotNull(model);
+            assertTrue(model.animates(AnimState.WALK), "the fixture lost its walk clip");
+            assertFalse(model.animates(AnimState.IDLE),
+                    "the fixture was supposed to leave idle to the fallback");
+
+            // Half way through the clip is a quarter turn about the head bone;
+            // standing still is the fallback's small breath. Different meshes,
+            // which is the whole assertion.
+            assertNotEquals(bounds(worn(key, 0, 0.5)), bounds(worn(key, 5.0, 0.5)),
+                    "the walker's speed did not pick the clip");
+        } finally {
+            reset();
+        }
+    }
+
+    /**
+     * An imported person faces the way the boxes under them face.
+     *
+     * <p><b>The bug this pins was in the engine and not in anybody's export.</b>
+     * An animal's boxes point along {@code +x} at a yaw of zero and this
+     * importer matches them; a walker, a keeper and a ranger all point along
+     * {@code −y}. So a file's front — the {@code −Y} Blender is asked to face —
+     * came out ninety degrees round from the figure it was replacing, and a
+     * modelled cape hung off somebody's left shoulder. {@link SceneModel#PERSON_TURN}
+     * is the correction and this is what says it is still applied.
+     */
+    @Test
+    void anImportedPersonFacesTheWayTheBoxesFace() {
+        // A speck a unit along the file's front — the direction the README tells
+        // a modeller to point a character's nose — and another along its right.
+        SceneModel front = objModel(speck(0, 0, 1));
+        SceneModel side = objModel(speck(1, 0, 0));
+
+        for (double yaw : new double[]{0, Math.PI / 2, 2.4}) {
+            double[] nose = middle(person(front, yaw));
+            double[] flank = middle(person(side, yaw));
+            // Where the box models put forward and right at the same yaw —
+            // WalkerModel, KeeperModel and RangerModel all use these two lines.
+            assertEquals(Math.sin(yaw), nose[0], 0.01,
+                    "an imported person's front is not the boxes' forward at " + yaw);
+            assertEquals(-Math.cos(yaw), nose[1], 0.01,
+                    "an imported person's front is not the boxes' forward at " + yaw);
+            assertEquals(Math.cos(yaw), flank[0], 0.01,
+                    "an imported person's right is not the boxes' right at " + yaw);
+            assertEquals(Math.sin(yaw), flank[1], 0.01,
+                    "an imported person's right is not the boxes' right at " + yaw);
+        }
+    }
+
+    /** A triangle small enough that where it is, is where its corners are. */
+    private static String speck(double x, double y, double z) {
+        return "g spine\n"
+                + "v " + x + " " + y + " " + z + "\n"
+                + "v " + (x + 0.002) + " " + y + " " + z + "\n"
+                + "v " + x + " " + (y + 0.002) + " " + z + "\n"
+                + "f 1 2 3\n";
+    }
+
+    private static double[] middle(Mesh mesh) {
+        return new double[]{(mesh.minX() + mesh.maxX()) / 2,
+                (mesh.minY() + mesh.maxY()) / 2};
+    }
+
+    /** …and a creature adds nothing, because its two conventions already agree. */
+    @Test
+    void anImportedCreatureIsLeftAloneBecauseItAlreadyAgreed() {
+        SceneModel front = objModel(speck(0, 0, 1));
+        double[] nose = middle(draw(front, AnimState.RUN, 0, 1, 0));
+        // AnimalModel's own forward at a yaw of zero, which is the one this
+        // importer was written against and must go on agreeing with.
+        assertEquals(1, nose[0], 0.01, "a creature's front moved");
+        assertEquals(0, nose[1], 0.01, "a creature's front moved");
+    }
+
+    private static SceneModel objModel(String obj) {
+        RawModel raw = ObjReader.parse(obj, "probe", null);
+        assertNotNull(raw, "the probe did not parse");
+        SceneModel model = SceneModel.bake(raw, ModelRig.Kind.HUMANOID,
+                SceneModel.Size.AS_PLACED);
+        assertNotNull(model);
+        return model;
+    }
+
+    /** One person, drawn at rest so no procedural pose moves the probe. */
+    private static Mesh person(SceneModel model, double yaw) {
+        Mesh.Builder mesh = Mesh.builder(0, 0, 0, false, 1);
+        model.mesh(mesh, 0, 0, 0, yaw + SceneModel.PERSON_TURN, AnimState.RUN, 0, 1,
+                new float[]{0, 0, 1, 1}, 0, (s, j, p) -> AnimalModel.Pose.REST);
+        return mesh.build();
+    }
+
+    /** One overlay, drawn at a walker's feet and scaled with them. */
+    private static Mesh worn(String key, double speed, double phase) {
+        Mesh.Builder mesh = Mesh.builder(0, 0, 0, false, 1);
+        CosmeticModel.overlay(mesh, List.of(key), 0, 0, 0, 0, WalkerModel.HEIGHT,
+                speed, phase, new float[]{0, 0, 1, 1});
+        return mesh.build();
+    }
+
+    private static String bounds(Mesh mesh) {
+        return mesh.minX() + "," + mesh.minY() + "," + mesh.minZ() + ";"
+                + mesh.maxX() + "," + mesh.maxY() + "," + mesh.maxZ();
     }
 
     /** Put the loaders back where the rest of the suite expects to find them. */
