@@ -354,15 +354,33 @@ public final class Blockbench {
      */
     public static AnimalModel.Joint jointOf(String boneName) {
         if (boneName == null) return null;
-        String n = boneName.toLowerCase().replace('-', '_').replace(' ', '_');
+        String n = normalise(boneName);
         boolean left = n.contains("left") || n.endsWith("_l") || n.contains("_l_");
         boolean right = n.contains("right") || n.endsWith("_r") || n.contains("_r_");
         boolean front = n.contains("front") || n.contains("fore");
         if (n.contains("wing") || n.contains("fin") || n.contains("flipper")) {
             return right ? AnimalModel.Joint.WING_R : AnimalModel.Joint.WING_L;
         }
+        // <b>Arms, before legs, and as the wing joint.</b> A quadruped has no
+        // arms and a biped has no wings; WING_L/R is the upper limb pair, and
+        // giving a mutant's arms their own joint would mean every renderer,
+        // picker and test learning a second vocabulary for one of the three
+        // species that needs it. This runs before the leg branch so that a
+        // `forearm` is an arm rather than nothing at all.
+        if (n.contains("arm") || n.contains("hand") || n.contains("clavicle")
+                || n.contains("shoulder") || n.contains("elbow")
+                || n.contains("wrist")) {
+            return right ? AnimalModel.Joint.WING_R : AnimalModel.Joint.WING_L;
+        }
+        // <b>`claw` is deliberately not here.</b> A claw is on whatever limb it
+        // hangs off — a talon is a foot, a wendigo's claws are on its hands —
+        // and it is always parented under that limb, so inheritance gets it
+        // right where a keyword cannot. Matching `claw` as a leg put both of a
+        // biped's hands on its front left foot.
         if (n.contains("leg") || n.contains("foot") || n.contains("paw")
-                || n.contains("talon") || n.contains("claw")) {
+                || n.contains("talon") || n.contains("thigh") || n.contains("shin")
+                || n.contains("knee") || n.contains("ankle") || n.contains("toe")
+                || n.contains("hoof") || n.contains("hock")) {
             if (front) return right ? AnimalModel.Joint.LEG_FR : AnimalModel.Joint.LEG_FL;
             if (n.contains("back") || n.contains("hind") || n.contains("rear")) {
                 return right ? AnimalModel.Joint.LEG_BR : AnimalModel.Joint.LEG_BL;
@@ -370,20 +388,67 @@ public final class Blockbench {
             return right ? AnimalModel.Joint.LEG_FR : AnimalModel.Joint.LEG_FL;
         }
         if (n.contains("tail")) return AnimalModel.Joint.TAIL;
-        if (n.contains("ear") || n.contains("antenna")) return AnimalModel.Joint.EAR;
+        // <b>`ear` is matched as a word, not as a substring.</b> Everything else
+        // here is a substring, because `leftWing` and `wingL` have to work; but
+        // three letters catch far too much — `forearm` and `rear` are the two
+        // this game actually met, and `bear` is one of its own family keys, so a
+        // top-level bone named for the family would have become an ear.
+        if (word(n, "ear") || n.contains("antenna")) return AnimalModel.Joint.EAR;
         if (n.contains("horn") || n.contains("antler") || n.contains("crest")) {
             return AnimalModel.Joint.HORN;
         }
         if (n.contains("head") || n.contains("skull") || n.contains("beak")
-                || n.contains("bill") || n.contains("snout") || n.contains("neck")
-                || n.contains("eye") || n.contains("jaw")) {
+                || n.contains("bill") || n.contains("snout") || n.contains("muzzle")
+                || n.contains("neck") || n.contains("eye") || n.contains("jaw")) {
             return AnimalModel.Joint.HEAD;
         }
         if (n.contains("body") || n.contains("torso") || n.contains("chest")
-                || n.contains("root")) {
+                || n.contains("spine") || n.contains("hip") || n.contains("pelvis")
+                || n.contains("abdomen") || n.contains("root")) {
             return AnimalModel.Joint.BODY;
         }
         return null;
+    }
+
+    /**
+     * A bone name in the one spelling everything here matches against.
+     *
+     * <p>Lower case, with {@code -}, {@code .}, spaces and <b>camel-case
+     * humps</b> all folded to {@code _}. The dot is what Blender's mirror
+     * modifier and Rigify produce — {@code claw_0.L}, {@code upperarm.R} — and
+     * without folding it neither {@code _l} nor {@code _r} is ever found, so a
+     * whole rig binds to its left side. The hump is what makes {@code leftEar}
+     * a left ear and, just as importantly, keeps {@code forearm} from being one.
+     */
+    public static String normalise(String boneName) {
+        StringBuilder out = new StringBuilder(boneName.length() + 4);
+        for (int i = 0; i < boneName.length(); i++) {
+            char c = boneName.charAt(i);
+            if (c == '-' || c == '.' || c == ' ') {
+                out.append('_');
+                continue;
+            }
+            if (i > 0 && Character.isUpperCase(c)
+                    && Character.isLowerCase(boneName.charAt(i - 1))) {
+                out.append('_');
+            }
+            out.append(Character.toLowerCase(c));
+        }
+        return out.toString();
+    }
+
+    /** Whether {@code word} appears in {@code n} delimited by {@code _} or an end. */
+    private static boolean word(String n, String word) {
+        int at = n.indexOf(word);
+        while (at >= 0) {
+            boolean startsClean = at == 0 || n.charAt(at - 1) == '_';
+            int after = at + word.length();
+            boolean endsClean = after == n.length() || n.charAt(after) == '_'
+                    || Character.isDigit(n.charAt(after));
+            if (startsClean && endsClean) return true;
+            at = n.indexOf(word, at + 1);
+        }
+        return false;
     }
 
     /** Which part of the skin a joint's boxes are painted from. */

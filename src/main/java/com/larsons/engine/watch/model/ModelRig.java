@@ -55,9 +55,10 @@ public final class ModelRig {
         if (boneName == null) return null;
         if (kind == Kind.CREATURE) return Blockbench.jointOf(boneName);
 
-        String n = boneName.toLowerCase().replace('-', '_').replace(' ', '_').replace('.', '_');
-        // Blender's mirror modifier and its rigify names both end a side with
-        // .L/.R, which the dot-folding above has already turned into _l/_r.
+        // The same spelling the creature matcher uses: Blender's .L/.R folded to
+        // _l/_r, and camel-case humps split, so `upperArm.L` and `upper_arm_l`
+        // are one name. See Blockbench.normalise.
+        String n = Blockbench.normalise(boneName);
         boolean left = n.contains("left") || n.endsWith("_l") || n.contains("_l_");
         boolean right = n.contains("right") || n.endsWith("_r") || n.contains("_r_");
 

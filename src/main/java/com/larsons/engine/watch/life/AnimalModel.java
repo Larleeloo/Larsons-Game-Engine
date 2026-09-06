@@ -122,6 +122,31 @@ public final class AnimalModel {
     /** How far the animal's back is off the ground, in body lengths. */
     public double standHeight() { return standHeight; }
 
+    /**
+     * Floor to crown, in body lengths — <b>the size an imported model is
+     * matched to.</b>
+     *
+     * <p>Not {@link #standHeight}, which is the back rather than the top, and
+     * not the longest horizontal extent either. An import used to be normalised
+     * so that its widest horizontal measurement became one body length, which
+     * is a fair description of a heron and a nonsense for a wendigo: a biped's
+     * widest horizontal measurement is its antler spread, and normalising to it
+     * made the imported wendigo ten metres tall against the placeholder's seven
+     * and two and a half times as wide. Height is the measurement both a
+     * quadruped and a biped have, and matching the placeholder's means an
+     * imported model is exactly the size of the thing it replaces — which is
+     * the same rule {@code RangerModel.HEIGHT} states for people.
+     */
+    public double height() {
+        double low = Double.MAX_VALUE, high = -Double.MAX_VALUE;
+        for (Part part : parts) {
+            double centre = part.pivotZ() + part.cz();
+            low = Math.min(low, centre - part.hz());
+            high = Math.max(high, centre + part.hz());
+        }
+        return low > high ? 0 : high - low;
+    }
+
     /** How many boxes this plan has — what a test counts. */
     public int boxCount() { return parts.size(); }
 

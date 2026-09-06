@@ -69,46 +69,47 @@ public final class SceneModels {
      * <p>Cached on the name <em>and</em> how it was asked for, because the same
      * file read as a creature and as a person binds its bones differently and
      * handing back the first answer to the second question would be a ranger
-     * whose arms folded like wings.
+     * whose arms folded like wings. The size is part of that key too — one
+     * family file dresses forty-nine species, and the builds among them do not
+     * all stand the same height.
      */
     public static synchronized SceneModel of(String name, ModelRig.Kind kind,
-                                             SceneModel.Normalise normalise) {
-        String key = name + "|" + kind + "|" + normalise;
+                                             SceneModel.Size size) {
+        String key = name + "|" + kind + "|" + size.height();
         SceneModel cached = CACHE.get(key);
         if (cached != null) return cached;
         if (CACHE.containsKey(key)) return null;
 
-        SceneModel model = find(name, kind, normalise);
+        SceneModel model = find(name, kind, size);
         CACHE.put(key, model);
         return model;
     }
 
     /** Whether anything has been imported under a name. */
-    public static boolean has(String name, ModelRig.Kind kind,
-                              SceneModel.Normalise normalise) {
-        return of(name, kind, normalise) != null;
+    public static boolean has(String name, ModelRig.Kind kind, SceneModel.Size size) {
+        return of(name, kind, size) != null;
     }
 
     private static SceneModel find(String name, ModelRig.Kind kind,
-                                   SceneModel.Normalise normalise) {
+                                   SceneModel.Size size) {
         for (String extension : EXTENSIONS) {
             Path file = root.resolve(name + extension);
             if (!Files.isReadable(file)) continue;
-            SceneModel model = bake(read(file), file.toString(), kind, normalise);
+            SceneModel model = bake(read(file), file.toString(), kind, size);
             if (model != null) return model;
         }
         for (String extension : EXTENSIONS) {
             String resource = DIRECTORY + "/" + name + extension;
-            SceneModel model = bake(readResource(resource), resource, kind, normalise);
+            SceneModel model = bake(readResource(resource), resource, kind, size);
             if (model != null) return model;
         }
         return null;
     }
 
     private static SceneModel bake(RawModel raw, String where, ModelRig.Kind kind,
-                                   SceneModel.Normalise normalise) {
+                                   SceneModel.Size size) {
         if (raw == null) return null;
-        SceneModel model = SceneModel.bake(raw, kind, normalise);
+        SceneModel model = SceneModel.bake(raw, kind, size);
         if (model == null) warn(where, "nothing in it this renderer can draw");
         return model;
     }

@@ -161,7 +161,8 @@ public final class RangerModel {
     public static boolean imported() { return model() != null; }
 
     private static SceneModel model() {
-        return SceneModels.of(MODEL, ModelRig.Kind.HUMANOID, SceneModel.Normalise.HEIGHT);
+        // One unit tall, and drawn at HEIGHT metres per unit below.
+        return SceneModels.of(MODEL, ModelRig.Kind.HUMANOID, SceneModel.Size.height(1));
     }
 
     /**
