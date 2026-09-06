@@ -1,7 +1,10 @@
 package com.larsons.engine.watch.render;
 
+import com.larsons.engine.watch.Cosmetics;
 import com.larsons.engine.watch.world.WatchMaterial;
 import com.larsons.engine.watch.world.WatchMaterials;
+
+import java.util.List;
 
 /**
  * A person, as boxes — <b>the same figure whether you are looking at yourself
@@ -29,6 +32,13 @@ import com.larsons.engine.watch.world.WatchMaterials;
  *       oars}, which is a different animal from a standing figure and is
  *       therefore a different method.</li>
  * </ul>
+ *
+ * <p>And all four of them can be <b>dressed</b>. Whatever a player bought off a
+ * keeper's clothes rail is hung on this figure <em>after</em> it is drawn —
+ * see {@link CosmeticModel}, and {@link com.larsons.engine.watch.Cosmetics} for
+ * why that is the specification rather than a description. Nothing in the pose
+ * below knows or cares: each method takes a list of keys it passes straight on,
+ * and with the list empty every one of them emits the mesh it always did.
  *
  * <h2>The gait</h2>
  *
@@ -120,6 +130,27 @@ public final class WalkerModel {
      */
     private static final double AIR_ARM_RISE = 2.55, AIR_ARM_FALL = 1.15;
 
+    /**
+     * Where the neck is, as a share of the height.
+     *
+     * <p>Between the top of the chest box (0.86) and the underside of the head
+     * (0.94 less its own half-width), which is the gap a collar goes in. Named
+     * because {@link CosmeticModel} writes every neck piece against it: put a
+     * scarf at the middle of the chest instead and it is a scarf inside
+     * somebody, since the chest is 0.22 m deep and a collar is not.
+     */
+    private static final double NECK = 0.875;
+
+    /**
+     * What somebody with nothing on is wearing.
+     *
+     * <p>Named rather than written as an empty list at each call site, because
+     * the whole promise of {@link CosmeticModel} is that this is the ordinary
+     * case and that it costs nothing — and a promise is easier to keep when it
+     * has a name to grep for.
+     */
+    public static final List<String> WEARING_NOTHING = List.of();
+
     private WalkerModel() {}
 
     /**
@@ -185,6 +216,24 @@ public final class WalkerModel {
     public static void walker(Mesh.Builder mesh, double x, double y, double z,
                               double yaw, boolean crouching, double phase, double speed,
                               Leap leap, int tint) {
+        walker(mesh, x, y, z, yaw, crouching, phase, speed, leap, tint, WEARING_NOTHING);
+    }
+
+    /**
+     * The same walker, dressed.
+     *
+     * <p><b>Over the top, never instead of.</b> Every box below is drawn
+     * exactly as it was before any of this existed and the clothes are hung on
+     * the joints afterwards, which is why an empty {@code worn} produces the
+     * identical mesh — {@code CosmeticsTest.anUndressedWalkerIsTheWalkerItAlwaysWas}
+     * holds that to the triangle. See {@link com.larsons.engine.watch.Cosmetics}.
+     *
+     * @param worn what they have on, as {@code Outfit.wornKeys} — slot order,
+     *             at most one piece per slot
+     */
+    public static void walker(Mesh.Builder mesh, double x, double y, double z,
+                              double yaw, boolean crouching, double phase, double speed,
+                              Leap leap, int tint, List<String> worn) {
         float[] uv = new float[4];
         WatchMaterials.uv(WatchMaterial.PLANK, uv);
 
@@ -287,6 +336,12 @@ public final class WalkerModel {
             Shapes.box(mesh, ax + fx * 0.03, ay + fy * 0.03,
                     base + lift + ankleUp[i] - BOOT_DROP, 0.085, 0.115, BOOT_SOLE,
                     yaw, uv, boot);
+            // …and whatever is buckled over it. On the boot rather than on the
+            // shin, so a gaiter follows the foot through the stride instead of
+            // hanging off the leg above it.
+            CosmeticModel.wear(mesh, worn, Cosmetics.Slot.FEET,
+                    CosmeticModel.Fit.upright(ax + fx * 0.03, ay + fy * 0.03,
+                            base + lift + ankleUp[i] - BOOT_DROP, yaw, 0.085), coat);
         }
 
         double shoulderZ = base + lift + height * 0.80;
@@ -335,14 +390,27 @@ public final class WalkerModel {
                     0.055, 0.055, sx, sy, 0, uv, coat);
             Shapes.box(mesh, shX + fx * wx, shY + fy * wx, shoulderZ + wu - 0.02,
                     0.055, 0.055, 0.055, yaw, uv, skin);
+            CosmeticModel.wear(mesh, worn, Cosmetics.Slot.HANDS,
+                    CosmeticModel.Fit.upright(shX + fx * wx, shY + fy * wx,
+                            shoulderZ + wu - 0.02, yaw, 0.055), coat);
         }
 
         head(mesh, x + fx * headAlong, y + fy * headAlong, base + lift, height, yaw,
-                uv, skin);
+                uv, skin, worn, coat);
         // A pack, because everybody in this game is carrying a satchel.
         Shapes.box(mesh, x + fx * (chestAlong - 0.20), y + fy * (chestAlong - 0.20),
                 base + lift + height * 0.70, 0.12, 0.09, 0.14, yaw, uv,
                 WatchMaterials.shade(WatchMaterial.BARK));
+        // What is over the pack, and what is round the throat. Both are hung
+        // off the leaning upper body rather than off the world, so a cape
+        // leaning into a sprint leans with the back it is buckled to.
+        CosmeticModel.wear(mesh, worn, Cosmetics.Slot.BACK,
+                CosmeticModel.Fit.upright(x + fx * (chestAlong - 0.20),
+                        y + fy * (chestAlong - 0.20), base + lift + height * 0.70,
+                        yaw, 0.115), coat);
+        CosmeticModel.wear(mesh, worn, Cosmetics.Slot.NECK,
+                CosmeticModel.Fit.upright(x + fx * shoulderAlong, y + fy * shoulderAlong,
+                        base + lift + height * NECK, yaw, 0.115), coat);
     }
 
     /**
@@ -352,8 +420,9 @@ public final class WalkerModel {
      * <p>Upright, from the height of the feet under it.
      */
     private static void head(Mesh.Builder mesh, double x, double y, double base,
-                             double height, double yaw, float[] uv, int skin) {
-        head(mesh, x, y, base + height * 0.94, 0, 0, 1, height, yaw, uv, skin);
+                             double height, double yaw, float[] uv, int skin,
+                             List<String> worn, int coat) {
+        head(mesh, x, y, base + height * 0.94, 0, 0, 1, height, yaw, uv, skin, worn, coat);
     }
 
     /**
@@ -365,11 +434,26 @@ public final class WalkerModel {
      * swimmer's hat floats off the side of their head and follows them across
      * the lake like a small yellow raft.
      *
+     * <p><b>Every pose's clothes go through here</b>, which is the point of
+     * hanging the head and face slots on this method rather than on
+     * {@link #walker}: a walker, a rower and a swimmer all finish by drawing
+     * their head with this one call, so a hat bought at a counter is on the
+     * figure whether it is standing on a trail, sitting in a boat or half under
+     * a lake — and what keeps a swimmer's veil hanging down their face rather
+     * than off the side of it is the {@code up} this already takes.
+     *
+     * <p>The rest of an outfit is on the {@linkplain #walker standing figure}
+     * only, and that is a decision rather than an oversight: a scarf and a cape
+     * are cut for a body that is upright, a rower's is folded onto a thwart and
+     * a swimmer's is mostly under water, and hanging a full-length oilskin off
+     * either would be three pieces of geometry through a hull.
+     *
      * @param upX the way the top of the head points; a unit vector
      */
     private static void head(Mesh.Builder mesh, double cx, double cy, double cz,
                              double upX, double upY, double upZ,
-                             double height, double yaw, float[] uv, int skin) {
+                             double height, double yaw, float[] uv, int skin,
+                             List<String> worn, int coat) {
         int hat = WatchMaterials.shade(WatchMaterial.DRY_GRASS);
         double brim = height * (1.02 - 0.94), crown = height * (1.05 - 0.94);
         Shapes.box(mesh, cx, cy, cz, 0.115, 0.115, 0.115, yaw, uv, skin);
@@ -377,6 +461,16 @@ public final class WalkerModel {
                 0.27, 0.27, 0.022, yaw, uv, hat);
         Shapes.box(mesh, cx + upX * crown, cy + upY * crown, cz + upZ * crown,
                 0.135, 0.135, 0.05, yaw, uv, hat);
+        // On the face at the middle of the head, and on the head at the top of
+        // the crown the figure already has — `top` is read off the box just
+        // drawn rather than written out again, so a beanie sits on the hat
+        // instead of inside it however the hat is later retimed.
+        CosmeticModel.wear(mesh, worn, Cosmetics.Slot.FACE,
+                new CosmeticModel.Fit(cx, cy, cz, upX, upY, upZ, yaw, 0.115), coat);
+        double top = crown + 0.05;
+        CosmeticModel.wear(mesh, worn, Cosmetics.Slot.HEAD,
+                new CosmeticModel.Fit(cx + upX * top, cy + upY * top, cz + upZ * top,
+                        upX, upY, upZ, yaw, 0.115), coat);
     }
 
     /**
@@ -400,6 +494,13 @@ public final class WalkerModel {
      */
     public static void rower(Mesh.Builder mesh, double x, double y, double waterZ,
                              double yaw, double bob, double stroke, int tint) {
+        rower(mesh, x, y, waterZ, yaw, bob, stroke, tint, WEARING_NOTHING);
+    }
+
+    /** The same rower, in whatever hat and spectacles they bought. See {@link #head}. */
+    public static void rower(Mesh.Builder mesh, double x, double y, double waterZ,
+                             double yaw, double bob, double stroke, int tint,
+                             List<String> worn) {
         float[] uv = new float[4];
         WatchMaterials.uv(WatchMaterial.PLANK, uv);
         int coat = tint;
@@ -484,7 +585,7 @@ public final class WalkerModel {
         // offset is the standing figure's own: 0.94 of the height for the head
         // against 0.86 for the top of the chest.
         head(mesh, x + fx * neckAlong, y + fy * neckAlong,
-                neckZ - HEIGHT * 0.86, HEIGHT, yaw, uv, skin);
+                neckZ - HEIGHT * 0.86, HEIGHT, yaw, uv, skin, worn, coat);
     }
 
     // --- swimming ---------------------------------------------------------------------
@@ -585,6 +686,14 @@ public final class WalkerModel {
     public static void swimmer(Mesh.Builder mesh, double x, double y, double z,
                                double yaw, double bodyPitch, double drive, double phase,
                                boolean surfaced, int tint) {
+        swimmer(mesh, x, y, z, yaw, bodyPitch, drive, phase, surfaced, tint,
+                WEARING_NOTHING);
+    }
+
+    /** The same swimmer, in whatever hat and spectacles they bought. See {@link #head}. */
+    public static void swimmer(Mesh.Builder mesh, double x, double y, double z,
+                               double yaw, double bodyPitch, double drive, double phase,
+                               boolean surfaced, int tint, List<String> worn) {
         float[] uv = new float[4];
         WatchMaterials.uv(WatchMaterial.PLANK, uv);
         int coat = tint;
@@ -721,7 +830,7 @@ public final class WalkerModel {
         double crown = height * (0.94 - 0.86);
         double headF = neckF + alongF * crown;
         head(mesh, x + fx * headF, y + fy * headF, neckZ + alongZ * crown,
-                fx * alongF, fy * alongF, alongZ, height, yaw, uv, skin);
+                fx * alongF, fy * alongF, alongZ, height, yaw, uv, skin, worn, coat);
     }
 
     /** Between two numbers, by a fraction already known to be in range. */

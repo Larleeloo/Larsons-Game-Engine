@@ -177,6 +177,16 @@ public final class WatchPlayer {
     private boolean lampLit;
 
     private final Satchel satchel = new Satchel();
+
+    /**
+     * What they own to wear, and what they have on.
+     *
+     * <p>Beside the satchel rather than in it, and that is the whole of the
+     * design: see {@link Outfit}. A cosmetic is bought out of the party's purse
+     * and kept by the person, is never a count of anything, and cannot be
+     * dropped — which is three reasons it is not an item.
+     */
+    private final Outfit outfit = new Outfit();
     private final Fishing rod;
 
     public WatchPlayer(int id, String name, double x, double y, double z) {
@@ -428,6 +438,9 @@ public final class WatchPlayer {
 
     public Satchel satchel() { return satchel; }
 
+    /** Their wardrobe, and what is on. */
+    public Outfit outfit() { return outfit; }
+
     /** Their rod, and whatever it is doing. */
     public Fishing rod() { return rod; }
 
@@ -548,6 +561,10 @@ public final class WatchPlayer {
         // satchel is bottomless or its build and cooking screens would grey out
         // everything the host would happily let it make.
         if (debug) m.put("dbg", true);
+        // What they have on, for everybody's renderer — one short string, and
+        // only when they are wearing anything at all. See Outfit.wornLine for
+        // why the wardrobe behind it deliberately stays private.
+        if (!outfit.bare()) m.put("w", outfit.wornLine());
         return m;
     }
 
@@ -555,6 +572,11 @@ public final class WatchPlayer {
     public Map<String, Object> toMap() {
         Map<String, Object> m = toSnapshot();
         m.put("bag", satchel.toMap());
+        // The wardrobe as well as the outfit. Only in the save and on this
+        // player's own `bag` message: what somebody owns and is not wearing is
+        // of no use to anybody else's screen, and a snapshot twenty times a
+        // second is the wrong place for a list that changes once an evening.
+        m.put("fit", outfit.toMap());
         // What is in the hand and how much is left in it. Only in the save:
         // nobody else's renderer needs the number, and a snapshot twenty times
         // a second is the wrong place for a figure that changes by a
@@ -599,6 +621,11 @@ public final class WatchPlayer {
         lampFuel = WatchJson.num(m, "ltf", 0);
         lampLit = lamp != null && WatchJson.str(m, "lt", null) != null;
         satchel.load(WatchJson.map(m, "bag"));
+        // A walk reopened is a walk in the same coat: what was on when you
+        // stopped playing is on when you come back, which is the opposite call
+        // from the spyglass above and the same one as the lantern. Nobody puts
+        // their hat away for the night.
+        outfit.load(WatchJson.map(m, "fit"));
         // …but debug mode does survive: a walk played with everything unlimited
         // is that walk when it is reopened, and the code turns it off as easily
         // as it turned it on.

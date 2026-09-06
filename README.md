@@ -3507,6 +3507,23 @@ Walk up to a counter and <kbd>E</kbd> opens the shop:
   their own markup, so two posts a valley apart are worth comparing. Nobody
   sells a **spyglass**: the two-step grind at a bench is still the only way to
   get one.
+- **Buy something to wear.** A second heading over the same list (←/→, or click
+  it) turns the shelf into the keeper's **clothes rail**
+  ([`Cosmetics`](src/main/java/com/larsons/engine/watch/Cosmetics.java)):
+  mittens, a knitted beanie, gaiters, a scarf, a bedroll, spectacles, a
+  feathered hatband, a glass lanyard, leather gloves, a straw boater, snow
+  goggles, an oilskin hood, river waders, a moth veil, a fur collar, an oilskin
+  cape, an antler circlet, a heron cloak — eighteen pieces across six slots
+  (head, face, neck, back, hands, feet), from 16 points to 340, and each post
+  carries three to five of them chosen the way its shelf is. All of it is
+  **cosmetic in the strict sense**: worn *over the top* of the ordinary walker,
+  one piece to a slot, touching nothing the walk reads. A piece you own shows
+  *Owned* instead of a price, and clicking it puts it on or takes it off,
+  anywhere, for nothing. What you are wearing goes out on your player row so the
+  rest of the party sees it; what is in your wardrobe stays yours. The hood and
+  the cape are drawn in your own coat colour rather than their own, so six
+  people in matching oilskins are still six people you can tell apart across a
+  valley.
 - **Have a fresh page stamped.** The tally empties, the old page is filed as a
   numbered volume with its date and the keeper's name on it, and **every animal
   you have ever seen is worth its rarity again** — while every one of them stays
@@ -3664,6 +3681,18 @@ including you in third person, sitting lower in the water and lower again on a
 thwart. In **first person** the same model supplies **hands**, built in the
 camera's own basis so they follow the view exactly, with a reach gesture when
 you pick something and whatever you are carrying in the right one.
+
+You can also **dress that person up**
+([`CosmeticModel`](src/main/java/com/larsons/engine/watch/render/CosmeticModel.java)).
+Whatever you bought off a keeper's rail is hung on the figure *after* it is
+drawn, on the joint it belongs to — a hat on the crown of the one already there,
+spectacles on the face, a scarf at the throat, a cape over the satchel, mittens
+on the hands, gaiters over the boots. Nothing is replaced, so a walker wearing
+nothing is the walker this game has always drawn, vertex for vertex. Each piece
+is measured in the body part it hangs on rather than in metres, and the head and
+face slots go on through the same call that already puts the ordinary hat on —
+which is why your boater is still on your head when you are swimming face-down
+across a lake.
 
 Everything you can pick up has a **model** too
 ([`ItemModel`](src/main/java/com/larsons/engine/watch/render/ItemModel.java)) —

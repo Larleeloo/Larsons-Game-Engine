@@ -143,6 +143,14 @@ public final class WatchClient implements AutoCloseable {
     /** Buy a line off the shelf of the post we are standing at. */
     public void sendBuy(long shopId, String item) { send(WatchProto.buy(shopId, item)); }
 
+    /** Buy a piece off the post's clothes rail. */
+    public void sendBuyWorn(long shopId, String key) {
+        send(WatchProto.buyWorn(shopId, key));
+    }
+
+    /** Put something on, or take it off. */
+    public void sendWear(String key) { send(WatchProto.wear(key)); }
+
     /** Ask the keeper we are standing at to stamp a fresh page. */
     public void sendStamp(long shopId) { send(WatchProto.stamp(shopId)); }
 
@@ -270,7 +278,10 @@ public final class WatchClient implements AutoCloseable {
                     view.guide().credit(light.species(), light.points());
                 }
             }
-            case "bag" -> view.satchel().load(WatchJson.map(message, "items"));
+            case "bag" -> {
+                view.satchel().load(WatchJson.map(message, "items"));
+                view.outfit().load(WatchJson.map(message, "fit"));
+            }
             case "guide" -> view.guide().load(message);
             case "world" -> {
                 view.grove().load(WatchJson.map(message, "grove"));

@@ -14,6 +14,7 @@ import com.larsons.engine.watch.Boats;
 import com.larsons.engine.watch.Bounty;
 import com.larsons.engine.watch.Cartography;
 import com.larsons.engine.watch.Chart;
+import com.larsons.engine.watch.Cosmetics;
 import com.larsons.engine.watch.Cultivation;
 import com.larsons.engine.watch.Debug;
 import com.larsons.engine.watch.FieldGuide;
@@ -681,6 +682,20 @@ public class WatchScene extends AbstractScene {
     private long shopId;
 
     private int shopIndex;
+
+    /**
+     * Which of a post's two lists the shop panel is showing: the shelf of
+     * materials, or the clothes rail.
+     *
+     * <p>Two lists in one column rather than a third column, and that is a
+     * decision about the panel rather than about the clothes. The right-hand
+     * half of this screen is the keeper and the stamp, which is the half a
+     * player has to be <em>told</em> about — see {@link #drawShop} — and
+     * squeezing it to make room for hats would trade the explanation for the
+     * shopping. Two headings over one list costs a keypress and keeps the
+     * screen the shape it was.
+     */
+    private boolean shopRail;
 
     /**
      * Where the cursor is on the Eye Spy board's list of things to ask for.
@@ -2901,6 +2916,10 @@ public class WatchScene extends AbstractScene {
         panel = Panel.SHOP;
         shopId = shop.id();
         shopIndex = 0;
+        // Always on the shelf. What a player walked to a post for is nine times
+        // in ten a plank, and a screen that opened on whichever list was up last
+        // time would be a screen that sometimes opens on the wrong one.
+        shopRail = false;
         dragBar = 0;
         keeperLine = shop.keeper().greeting();
         keeperFor = KEEPER_SECONDS;
@@ -2930,18 +2949,37 @@ public class WatchScene extends AbstractScene {
             return;
         }
         List<Trading.Offer> stock = shop.stock();
+        List<Cosmetics.Piece> rail = shop.rail();
         SatchelBox box = shopBox();
 
+        // Which list is up, before anything else reads a row off it: the two
+        // headings are buttons and the two menu keys are the same button, and
+        // a swap has to land before the cursor is clamped to the new length.
+        boolean swap = KeyBinds.pressed(input, GameAction.MENU_LEFT)
+                || KeyBinds.pressed(input, GameAction.MENU_RIGHT);
+        if (input.isMouseJustPressed()) {
+            // A heading picks its own list outright rather than toggling:
+            // clicking the one already up must do nothing, not swap away from it.
+            if (overTab(box, false) && shopRail) swap = true;
+            if (overTab(box, true) && !shopRail) swap = true;
+        }
+        if (swap) {
+            shopRail = !shopRail;
+            shopIndex = 0;
+            return;
+        }
+
+        int rows = shopRail ? rail.size() : stock.size();
         int step = 0;
         if (KeyBinds.pressed(input, GameAction.MENU_DOWN)) step = 1;
         if (KeyBinds.pressed(input, GameAction.MENU_UP)) step = -1;
-        if (step != 0 && !stock.isEmpty()) {
-            shopIndex = Math.floorMod(shopIndex + step, stock.size());
+        if (step != 0 && rows > 0) {
+            shopIndex = Math.floorMod(shopIndex + step, rows);
         }
 
         boolean moved = pointerMoved(input);
         int row = box.columnAt(pointerX, pointerY) == 0 ? box.rowAt(pointerY) : -1;
-        if (row >= stock.size()) row = -1;
+        if (row >= rows) row = -1;
         if (row >= 0 && moved) shopIndex = row;
 
         boolean take = KeyBinds.pressed(input, GameAction.MENU_SELECT);
@@ -2965,10 +3003,56 @@ public class WatchScene extends AbstractScene {
             stampPage(shop);
             return;
         }
-        if (take && !stock.isEmpty()) {
-            buy(shop, stock.get(Math.min(shopIndex, stock.size() - 1)));
+        if (take && rows > 0) {
+            int at = Math.min(shopIndex, rows - 1);
+            if (shopRail) {
+                tryOn(shop, rail.get(at));
+            } else {
+                buy(shop, stock.get(at));
+            }
         }
         if (KeyBinds.pressed(input, GameAction.WATCH_PICK)) panel = Panel.NONE;
+    }
+
+    /**
+     * A row on the rail, clicked.
+     *
+     * <p><b>One gesture for three things</b> — buy it, put it on, take it off —
+     * because from the player's side there is only one: they clicked the coat.
+     * Which of the three it means is decided by what they already own, and it
+     * is decided <em>here</em> rather than by the host so that the second click
+     * on a piece bought a moment ago does not have to wait for a wardrobe to
+     * come back over the wire before it knows it is a "wear" and not a second
+     * purchase. Getting it wrong costs nothing: the host checks both again, and
+     * refuses a purchase of something already owned.
+     */
+    private void tryOn(Shops.Shop shop, Cosmetics.Piece piece) {
+        if (!view().outfit().owns(piece.key())) {
+            buyWorn(shop, piece);
+            return;
+        }
+        WatchGame local = session.local();
+        if (local != null) {
+            keeperSays(local.wear(session.selfId(), piece.key()));
+        } else {
+            session.client().sendWear(piece.key());
+        }
+    }
+
+    /** Hand over the points for one thing off the rail. */
+    private void buyWorn(Shops.Shop shop, Cosmetics.Piece piece) {
+        WatchGame local = session.local();
+        if (local != null) {
+            String line = local.buyWorn(session.selfId(), shop.id(), piece.key());
+            keeperSays(line != null ? line
+                    : "Not enough points for the " + piece.name());
+        } else {
+            session.client().sendBuyWorn(shop.id(), piece.key());
+            // Nothing assumed, for buy()'s reason: the wardrobe and the ledger
+            // both come back on the host's own message, and a coat drawn
+            // optimistically and then refused would be a coat that flickered.
+            keeperSays("…");
+        }
     }
 
     /** Hand over the points for one line, on whichever path this session is. */
@@ -4372,6 +4456,11 @@ public class WatchScene extends AbstractScene {
         if (step == null) return;
         double x = step.x() - ox, y = step.y() - oy;
         int coat = WalkerModel.coatFor(walker.id());
+        // Whatever they bought at a counter, over the top of the figure — see
+        // com.larsons.engine.watch.Cosmetics. Off their snapshot row rather than
+        // out of any local state, so somebody who put a hat on two valleys away
+        // is wearing it here on the next tick.
+        List<String> worn = walker.wornKeys();
 
         // Where the eye of the figure just drawn is, so a raised glass can be
         // put at it. A rower's is over the thwart they are sitting on, which is
@@ -4387,7 +4476,8 @@ public class WatchScene extends AbstractScene {
                 // either of them having to find the other.
                 double waterZ = step.z() + Boats.DECK;
                 double bob = bobOf(walker.boatId());
-                WalkerModel.rower(mesh, x, y, waterZ, step.yaw(), bob, step.phase(), coat);
+                WalkerModel.rower(mesh, x, y, waterZ, step.yaw(), bob, step.phase(),
+                        coat, worn);
                 eyeAlong += BoatModel.SEAT_ALONG;
                 eyeZ = BoatModel.thwartZ(waterZ, bob) + WalkerModel.ROWER_EYE;
             }
@@ -4396,7 +4486,7 @@ public class WatchScene extends AbstractScene {
                         walker.submerged());
                 WalkerModel.swimmer(mesh, x, y, step.z(), step.yaw(), bodyPitch,
                         WalkerModel.swimDrive(step.speed()), step.phase(),
-                        !walker.submerged(), coat);
+                        !walker.submerged(), coat, worn);
                 double[] eye = new double[2];
                 WalkerModel.swimEye(bodyPitch, eye);
                 eyeAlong += eye[0];
@@ -4404,7 +4494,7 @@ public class WatchScene extends AbstractScene {
             }
             default -> {
                 WalkerModel.walker(mesh, x, y, step.z(), step.yaw(), walker.crouching(),
-                        step.phase(), step.speed(), step.leap(), coat);
+                        step.phase(), step.speed(), step.leap(), coat, worn);
                 eyeZ = step.z() + (walker.crouching() ? 1.10 : 1.68);
             }
         }
@@ -4438,14 +4528,17 @@ public class WatchScene extends AbstractScene {
     /** This player, before the first snapshot has told us where we are. */
     private void drawSelf(Mesh.Builder mesh, double ox, double oy) {
         int coat = WalkerModel.coatFor(session.selfId());
+        // Out of our own wardrobe rather than off a row, because there is no
+        // row yet — that is what this method is for.
+        List<String> worn = view().outfit().wornKeys();
         switch (cycleNow()) {
             case STROKE -> WalkerModel.rower(mesh, px - ox, py - oy, pz + Boats.DECK,
-                    yaw, bobOf(boatId), rowPhase, coat);
+                    yaw, bobOf(boatId), rowPhase, coat, worn);
             case SWIM -> WalkerModel.swimmer(mesh, px - ox, py - oy, pz, yaw,
                     WalkerModel.swimPitch(animSpeed, pitch, submerged),
-                    WalkerModel.swimDrive(animSpeed), swimPhase, !submerged, coat);
+                    WalkerModel.swimDrive(animSpeed), swimPhase, !submerged, coat, worn);
             case STRIDE -> WalkerModel.walker(mesh, px - ox, py - oy, pz, yaw,
-                    crouching, gait, animSpeed, leap(), coat);
+                    crouching, gait, animSpeed, leap(), coat, worn);
         }
     }
 
@@ -5925,7 +6018,42 @@ public class WatchScene extends AbstractScene {
     }
 
     private boolean overStamp(SatchelBox box) {
-        int[] b = stampButton(box);
+        return over(stampButton(box));
+    }
+
+    /**
+     * One of the two headings over the left-hand list: {@code x, y, w, h}.
+     *
+     * <p>Fixed widths rather than measured ones, and this is the one place in
+     * the panel where that is right: a hit box is worked out by
+     * {@link #updateShop}, which has no {@link DrawTarget} to measure text with,
+     * and a heading whose clickable area came from a different arithmetic than
+     * its drawing is the exact bug {@link SatchelBox} exists to prevent. So both
+     * halves read these numbers.
+     */
+    private int[] tabButton(SatchelBox box, boolean rail) {
+        int top = box.y() + 62;
+        return rail ? new int[]{box.leftX() + 118, top, 96, 26}
+                : new int[]{box.leftX() - 8, top, 118, 26};
+    }
+
+    private boolean overTab(SatchelBox box, boolean rail) {
+        return over(tabButton(box, rail));
+    }
+
+    /** One of the two headings, lit when its list is the one showing. */
+    private void drawTab(DrawTarget target, SatchelBox box, boolean rail, String label) {
+        int[] b = tabButton(box, rail);
+        boolean on = rail == shopRail;
+        if (on) {
+            target.fillRect(b[0], b[1], b[2], b[3], new Color(44, 78, 54, 170));
+        }
+        target.drawText(label, b[0] + 8, b[1] + 18, HUD_BOLD,
+                on ? HUD_ACCENT : new Color(120, 132, 122));
+    }
+
+    /** Whether the pointer is inside an {@code x, y, w, h}. */
+    private boolean over(int[] b) {
         return pointerX >= b[0] && pointerX < b[0] + b[2]
                 && pointerY >= b[1] && pointerY < b[1] + b[3];
     }
@@ -5939,6 +6067,13 @@ public class WatchScene extends AbstractScene {
      * piece of furniture even though it is one button, because turning the page
      * is the part a player has to be told about — buying things off a list needs
      * no explanation and a mechanic that hands you back a thousand animals does.
+     *
+     * <p>The keeper's {@linkplain com.larsons.engine.watch.Cosmetics clothes
+     * rail} is a second heading over that same left-hand list rather than a
+     * third column, for the reason {@link #shopRail} gives: the explanation is
+     * worth more panel than the shopping is. A row on it says what clicking it
+     * would do — a price, or {@code Owned}, or {@code Worn} — because it is the
+     * one list in the game where the same click means three different things.
      */
     private void drawShop(DrawTarget target) {
         Shops.Shop shop = shopInReach();
@@ -5957,28 +6092,45 @@ public class WatchScene extends AbstractScene {
         target.drawText(balance, x + w - target.textWidth(balance, HUD_BOLD) - 46, y + 54,
                 HUD_BOLD, HUD_ACCENT);
 
-        // --- the shelf ------------------------------------------------------
+        // --- the shelf, or the rail -----------------------------------------
         List<Trading.Offer> stock = shop.stock();
-        target.drawText("On the shelf", box.leftX(), y + 80, HUD_BOLD, HUD_ACCENT);
-        for (int i = 0; i < stock.size() && i < box.rows(); i++) {
-            Trading.Offer offer = stock.get(i);
-            boolean can = guide.affords(offer.price());
+        List<Cosmetics.Piece> rail = shop.rail();
+        drawTab(target, box, false, "On the shelf");
+        drawTab(target, box, true, "On the rail");
+        int shown = shopRail ? rail.size() : stock.size();
+        for (int i = 0; i < shown && i < box.rows(); i++) {
             int top = box.rowTop(i);
             int text = top + ROW_HEIGHT - 9;
             if (i == shopIndex) {
                 target.fillRect(box.leftX() - 8, top, box.colWidth(), ROW_HEIGHT - 2,
                         new Color(60, 110, 70, 160));
             }
+            // Everything the two lists share: a picture, a name on the left and
+            // a short right-hand answer to "what would clicking this do".
+            String key = shopRail ? rail.get(i).key() : stock.get(i).item();
+            String name = shopRail ? rail.get(i).name() : stock.get(i).label();
+            int price = shopRail ? rail.get(i).price() : stock.get(i).price();
+            // A piece already owned costs nothing and says so, which is also
+            // how a player finds out that clicking it is now a "wear".
+            boolean owned = shopRail && view().outfit().owns(key);
+            boolean can = owned || guide.affords(price);
+            String right = !owned ? (shopRail ? rail.get(i).priceLine()
+                            : stock.get(i).priceLine())
+                    : view().outfit().wearing(key) ? "Worn" : "Owned";
             // The same picture the satchel draws, because it is the same thing:
-            // a player should recognise on the shelf what they will be carrying.
-            target.drawImage(ItemPortrait.of(offer.item(), ICON, ICON_BACKDROP),
+            // a player should recognise on the shelf what they will be carrying
+            // — and on the rail what they will be wearing. See ItemPortrait.
+            target.drawImage(ItemPortrait.of(key, ICON, ICON_BACKDROP),
                     box.leftX(), top + 3, ICON, ICON);
-            target.drawText(offer.label(), box.leftX() + ICON + 10, text, HUD_FONT,
+            target.drawText(name, box.leftX() + ICON + 10, text, HUD_FONT,
                     can ? HUD_INK : new Color(130, 140, 132));
-            String price = offer.priceLine();
-            target.drawText(price,
-                    box.leftX() + box.colWidth() - target.textWidth(price, HUD_FONT) - 12,
-                    text, HUD_FONT, can ? HUD_ACCENT : HUD_WARN);
+            target.drawText(right,
+                    box.leftX() + box.colWidth() - target.textWidth(right, HUD_FONT) - 12,
+                    text, HUD_FONT, owned ? HUD_DIM : can ? HUD_ACCENT : HUD_WARN);
+        }
+        if (shopRail && rail.isEmpty()) {
+            target.drawText("Nothing hanging up today.", box.leftX(),
+                    box.listTop() + 18, HUD_SMALL, HUD_DIM);
         }
 
         // --- the keeper -----------------------------------------------------
@@ -5992,11 +6144,25 @@ public class WatchScene extends AbstractScene {
             line += 20;
         }
         line += 12;
-        Trading.Offer chosen = stock.isEmpty() ? null
-                : stock.get(Math.min(shopIndex, stock.size() - 1));
-        if (chosen != null) {
-            target.drawText(fitted(target, chosen.note(), width), rx, line, HUD_SMALL,
-                    HUD_DIM);
+        String note = null;
+        String under = null;
+        if (shopRail && !rail.isEmpty()) {
+            Cosmetics.Piece chosen = rail.get(Math.min(shopIndex, rail.size() - 1));
+            note = chosen.note();
+            // What it is and where it goes, which is the one thing a picture of
+            // a hat in a twenty-two pixel row cannot say.
+            under = chosen.slot().label() + " — " + chosen.slot().where()
+                    + (view().outfit().owns(chosen.key())
+                            ? "  ·  click to wear or take off" : "");
+        } else if (!shopRail && !stock.isEmpty()) {
+            note = stock.get(Math.min(shopIndex, stock.size() - 1)).note();
+        }
+        if (note != null) {
+            target.drawText(fitted(target, note, width), rx, line, HUD_SMALL, HUD_DIM);
+        }
+        if (under != null) {
+            target.drawText(fitted(target, under, width), rx, line + 20, HUD_SMALL,
+                    HUD_ACCENT);
         }
 
         // The page, which is the other half of what this counter does.
@@ -6026,7 +6192,7 @@ public class WatchScene extends AbstractScene {
                 button[0] + (button[2] - target.textWidth(stamp, HUD_BOLD)) / 2,
                 button[1] + 28, HUD_BOLD, can ? HUD_INK : new Color(120, 132, 122));
 
-        String keys = "Click to buy · ↑↓ · Enter · C stamp · E close";
+        String keys = "Click to buy · ↑↓ · ←→ shelf/rail · Enter · C stamp · E close";
         target.drawText(keys, x + w - target.textWidth(keys, HUD_SMALL) - 46, y + 32,
                 HUD_SMALL, HUD_DIM);
     }
@@ -6223,8 +6389,15 @@ public class WatchScene extends AbstractScene {
         if (panel == Panel.BOUNTY) return bountyCursor();
         if (panel == Panel.SHOP) {
             Shops.Shop shop = shopInReach();
-            if (shop == null || shop.stock().isEmpty()) return null;
-            return shop.stock().get(Math.min(shopIndex, shop.stock().size() - 1)).item();
+            if (shop == null) return null;
+            // Whichever list is up. Both answer a key out of their own
+            // catalogue, and the two catalogues share no keys, so a test can
+            // tell a hat from a plank without being told which tab it is on.
+            List<?> rows = shopRail ? shop.rail() : shop.stock();
+            if (rows.isEmpty()) return null;
+            Object row = rows.get(Math.min(shopIndex, rows.size() - 1));
+            return row instanceof Cosmetics.Piece piece ? piece.key()
+                    : ((Trading.Offer) row).item();
         }
         if (recipeColumn) {
             List<Recipes.Recipe> recipes = Recipes.all();

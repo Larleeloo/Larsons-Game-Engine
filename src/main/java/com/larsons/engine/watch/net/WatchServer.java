@@ -238,7 +238,8 @@ public final class WatchServer implements WatchGame.Sink {
             conn.send(Protocol.encode(WatchProto.welcome(id, game.config().seed(),
                     game.config().worldName(), WatchProto.TICK_RATE,
                     game.config().maxPlayers())));
-            conn.send(Protocol.encode(WatchProto.bag(player.satchel().toMap())));
+            conn.send(Protocol.encode(WatchProto.bag(player.satchel().toMap(),
+                    player.outfit().toMap())));
             conn.send(Protocol.encode(WatchProto.guide(game.guide().toMap())));
             sendWorld();
             toAll(WatchProto.party(hostId(), game.players()));
@@ -619,6 +620,30 @@ public final class WatchServer implements WatchGame.Sink {
                 }
             }
 
+            case "buyfit" -> {
+                String line = game.buyWorn(id, WatchJson.big(message, "s", 0),
+                        WatchJson.str(message, "k", ""));
+                if (line != null) {
+                    // Through bagChanged for the wardrobe rather than for the
+                    // satchel: the two ride on one private message, so the one
+                    // call is what tells this client it owns the coat it just
+                    // bought. What everybody else needs — that it is now
+                    // being worn — is on the next snapshot and needs nothing
+                    // sent.
+                    bagChanged(id, line);
+                    sendLedger();
+                }
+            }
+
+            case "wear" -> {
+                // No ledger and no shop: putting a hat on costs nothing and can
+                // be done anywhere. See WatchGame.wear. The bag goes back
+                // because the wardrobe is on it and this client's own screen
+                // draws which row is ticked from that.
+                String line = game.wear(id, WatchJson.str(message, "k", ""));
+                if (line != null) bagChanged(id, line);
+            }
+
             case "stamp" -> {
                 String line = game.stamp(id, WatchJson.big(message, "s", 0));
                 if (line != null) {
@@ -770,7 +795,7 @@ public final class WatchServer implements WatchGame.Sink {
     private void bagChanged(int id, String line) {
         WatchPlayer player = game.player(id);
         if (player == null) return;
-        toPlayer(id, WatchProto.bag(player.satchel().toMap()));
+        toPlayer(id, WatchProto.bag(player.satchel().toMap(), player.outfit().toMap()));
         if (line != null) toPlayer(id, WatchProto.info(line));
     }
 

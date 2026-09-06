@@ -1608,6 +1608,88 @@ public final class WatchGame implements Animal.Surroundings {
     }
 
     /**
+     * Buy something off the clothes rail.
+     *
+     * <p>{@link #buy}'s twin, and deliberately its own verb rather than a
+     * branch inside it. What separates them is not the payment — both come out
+     * of the guide, because there is one purse — but where the goods land: a
+     * plank goes in a satchel as a count, and a coat goes in the buyer's
+     * {@link Outfit} as a thing they now own. Folding the two together would
+     * mean one method whose second half was an {@code if} about which of two
+     * unrelated collections to touch.
+     *
+     * <p>Two refusals of its own, and neither takes anything:
+     *
+     * <ul>
+     *   <li><b>this keeper does not have it.</b> A rail is a handful of the
+     *       catalogue chosen by the post's own hash, and a client naming
+     *       something off a different rail is a client that walked to the wrong
+     *       shop;</li>
+     *   <li><b>you already own it.</b> There is nothing to gain by a second
+     *       one — a piece is not a count — so buying it twice would be a
+     *       keeper taking your points for a hat you are already wearing.</li>
+     * </ul>
+     *
+     * <p>Bought, and then <em>put on</em>, which is the one place this game
+     * assumes what a player wanted. Somebody who has just spent two hundred
+     * points on an antler circlet at a counter did not want to own it. It is
+     * one click to take off again — see {@link #wear} — so the assumption
+     * costs nothing when it is wrong.
+     *
+     * @param shopId which post, as the client understood it; a request naming a
+     *               post the player is not standing at is refused outright
+     * @return a line for the HUD, or {@code null} when nothing was bought
+     */
+    public synchronized String buyWorn(int playerId, long shopId, String key) {
+        WatchPlayer player = players.get(playerId);
+        Shops.Shop shop = shopAt(playerId);
+        if (player == null || shop == null) return null;
+        if (shopId != 0 && shop.id() != shopId) return null;
+        Cosmetics.Piece piece = shop.worn(key);
+        if (piece == null) return null;
+        if (player.outfit().owns(key)) {
+            return "You already have the " + piece.name() + ".";
+        }
+        // Debug mode buys off a rail for the same reason it buys off a shelf,
+        // and through the same one line. See Debug.Power.POINTS.
+        if (!player.debugging() && !guide.spend(piece.price())) {
+            return "Not enough points — " + piece.priceLine() + ", and the book has "
+                    + guide.points();
+        }
+        player.outfit().acquire(key);
+        player.outfit().wear(key);
+        say(player.name() + " bought the " + piece.name() + " at " + shop.sign());
+        return "Bought the " + piece.name() + " for " + piece.priceLine();
+    }
+
+    /**
+     * Put something on, or take it off again.
+     *
+     * <p><b>No counter, and no cost.</b> Every other verb on this page is
+     * gated on standing at a shop because every other verb changes what the
+     * party has; this one changes what one person looks like, out of things
+     * they have already paid for. Gating it here would mean the rule could
+     * never be relaxed without the host changing its mind about what a hat is.
+     *
+     * <p>The screen is a different question, and today's answer is narrower
+     * than this: {@code WatchScene}'s only way to work a wardrobe is the shop
+     * panel's clothes rail, so in practice a player changes at a counter. That
+     * is a decision about where the rows are drawn and not about what is
+     * allowed — a wardrobe on the satchel screen would need nothing here.
+     *
+     * <p>The one thing the host does insist on is ownership, and that is the
+     * whole of why this is a host verb at all rather than a client toggle: what
+     * somebody is wearing goes out on their snapshot row to everybody, so a
+     * client that could dress itself could wear a cloak it never bought.
+     *
+     * @return a line for the HUD, or {@code null} when nothing changed
+     */
+    public synchronized String wear(int playerId, String key) {
+        WatchPlayer player = players.get(playerId);
+        return player == null ? null : player.outfit().toggle(key);
+    }
+
+    /**
      * Have a keeper stamp a fresh page: everything already seen counts again.
      *
      * <p>The other half of what a trading post is for, and the half the shelves

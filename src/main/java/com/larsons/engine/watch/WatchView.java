@@ -59,12 +59,18 @@ public final class WatchView {
      *              knowledge of the light catalogue: what a full lantern holds
      *              is {@code LightKind}'s business, and the screen has that
      *              class to hand
+     * @param worn what they have on, as {@code Outfit.wornLine} — at most six
+     *              {@link Cosmetics} keys, comma-separated, and {@code ""} for
+     *              somebody dressed the way this game has always drawn people.
+     *              On everybody's row because a hat is worn to be seen; what is
+     *              in the wardrobe behind it is nobody else's business and does
+     *              not travel
      */
     public record Walker(int id, String name, double x, double y, double z,
                          double yaw, double pitch, double stillness, boolean crouching,
                          boolean submerged, double breath, long boatId, double glass,
                          boolean debug, double health, int respawns, String light,
-                         double lightHours) {
+                         double lightHours, String worn) {
 
         /** Whether they have something lit in their hand. */
         public boolean carryingLight() { return light != null && !light.isBlank(); }
@@ -74,6 +80,22 @@ public final class WatchView {
 
         /** Whether they have a glass to their eye. */
         public boolean glassing() { return glass > 1.02; }
+
+        /**
+         * What they have on, as the renderer wants it.
+         *
+         * <p>Split here rather than by whoever is drawing, so that a walker
+         * arriving off the wire and a walker copied out of a local game cannot
+         * disagree about what an empty outfit looks like.
+         */
+        public List<String> wornKeys() {
+            if (worn == null || worn.isBlank()) return List.of();
+            List<String> out = new ArrayList<>();
+            for (String key : worn.split(",")) {
+                if (Cosmetics.isWorn(key)) out.add(key);
+            }
+            return out;
+        }
 
         /** Whether they are hurt at all. */
         public boolean hurt() { return health < 0.999; }
@@ -114,6 +136,17 @@ public final class WatchView {
     private String worldName = "";
     private double timeOfDay;
     private final Satchel satchel = new Satchel();
+
+    /**
+     * This player's own wardrobe, and what of it is on.
+     *
+     * <p>Separate from the {@link Walker#worn} on their row, and both are
+     * needed: the row is what everybody's renderer draws, and this is what the
+     * shop screen greys the "Owned" out of. It arrives on the private
+     * {@code bag} message rather than in a snapshot, for the reason
+     * {@link Outfit#wornLine} gives.
+     */
+    private final Outfit outfit = new Outfit();
     private final FieldGuide guide = new FieldGuide();
     private final Grove grove = new Grove();
     private final Cultivation crops = new Cultivation();
@@ -234,6 +267,9 @@ public final class WatchView {
 
     /** This player's own satchel. */
     public Satchel satchel() { return satchel; }
+
+    /** …and their own wardrobe. */
+    public Outfit outfit() { return outfit; }
 
     /** The party's shared book. */
     public FieldGuide guide() { return guide; }
@@ -361,7 +397,7 @@ public final class WatchView {
                     player.crouching(), player.submerged(), player.breath(),
                     player.boatId(), player.glassPower(), player.debugging(),
                     player.health(), player.respawns(), player.carriedLight(),
-                    player.lampFuel()));
+                    player.lampFuel(), player.outfit().wornLine()));
         }
         creatures.clear();
         for (Animal animal : game.animals()) {
@@ -383,6 +419,7 @@ public final class WatchView {
         WatchPlayer me = game.player(selfId);
         if (me != null) {
             satchel.load(me.satchel().toMap());
+            outfit.load(me.outfit().toMap());
             // The lens is not in the contents — see Satchel.load — so it is
             // copied across here, on the same line of thinking that copies
             // everything else the screen needs from the thing that owns it.
@@ -428,7 +465,7 @@ public final class WatchView {
                     WatchJson.big(row, "boat", 0), WatchJson.num(row, "gl", 1),
                     WatchJson.bool(row, "dbg", false), WatchJson.num(row, "hp", 1),
                     WatchJson.integer(row, "rs", 0), WatchJson.str(row, "lt", null),
-                    WatchJson.num(row, "lh", 0)));
+                    WatchJson.num(row, "lh", 0), WatchJson.str(row, "w", "")));
         }
         Walker me = self();
         satchel.setBottomless(me != null && me.debug());
