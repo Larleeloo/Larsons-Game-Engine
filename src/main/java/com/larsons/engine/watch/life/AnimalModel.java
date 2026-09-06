@@ -162,7 +162,15 @@ public final class AnimalModel {
             return new Pose(pitch, turn, roll, dx, dy, dz, 1);
         }
 
-        static final Pose REST = new Pose(0, 0, 0);
+        /**
+         * A joint left where the model put it.
+         *
+         * <p>Public because {@code watch.model}'s rigs answer with it too: an
+         * imported humanoid has the same "this joint does nothing in this
+         * state" case, and two constants for one pose would be two things to
+         * keep equal.
+         */
+        public static final Pose REST = new Pose(0, 0, 0);
 
         /**
          * A folded wing.

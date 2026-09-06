@@ -62,6 +62,7 @@ import com.larsons.engine.watch.render.ItemPortrait;
 import com.larsons.engine.watch.render.KeeperModel;
 import com.larsons.engine.watch.render.LightModel;
 import com.larsons.engine.watch.render.Mesh;
+import com.larsons.engine.watch.render.RangerModel;
 import com.larsons.engine.watch.render.RowStroke;
 import com.larsons.engine.watch.render.Shapes;
 import com.larsons.engine.watch.render.ShopModel;
@@ -3831,9 +3832,8 @@ public class WatchScene extends AbstractScene {
 
         for (WatchView.Creature creature : view.creatures()) {
             AnimalModels.Loaded model = AnimalModels.of(creature.def());
-            model.geometry().mesh(mesh, creature.def(), creature.x() - ox,
-                    creature.y() - oy, creature.z(), creature.yaw(),
-                    creature.state(), creature.phase(), 1, model.poses());
+            model.draw(mesh, creature.def(), creature.x() - ox, creature.y() - oy,
+                    creature.z(), creature.yaw(), creature.state(), creature.phase(), 1);
         }
 
         // Where everybody is this frame, worked out before anything is drawn:
@@ -4054,6 +4054,25 @@ public class WatchScene extends AbstractScene {
                     shop.z() + ShopModel.DECK, shop.yaw(),
                     away < NOTICE_RANGE ? look : shop.yaw(), drawClock,
                     Math.floorMod(shop.id(), 97) * 0.11);
+
+            // The ranger, out in front of the post and off to one side, facing
+            // the wood rather than the counter. Two figures at one building
+            // read as two people only if they are not both framed by it, which
+            // is what puts this one out in the clearing — and it is the only
+            // character in the game that can be replaced wholesale by a file
+            // dropped in the models folder. See RangerModel.
+            double rx = shop.x() + Math.sin(shop.yaw()) * RangerModel.OUT
+                    + Math.cos(shop.yaw()) * RangerModel.BESIDE;
+            double ry = shop.y() - Math.cos(shop.yaw()) * RangerModel.OUT
+                    + Math.sin(shop.yaw()) * RangerModel.BESIDE;
+            // On the ground the chunk actually shows, for Litter's reason: the
+            // post's own z is the generator's, and a ranger a few centimetres
+            // into the turf is more noticeable than a dropped acorn is.
+            double rangerLook = Math.atan2(px - rx, -(py - ry));
+            RangerModel.ranger(mesh, RangerModel.of(shop.id()), rx - ox, ry - oy,
+                    streamer.groundAt(rx, ry), shop.yaw(),
+                    away < NOTICE_RANGE ? rangerLook : shop.yaw(), drawClock,
+                    Math.floorMod(shop.id(), 89) * 0.13);
         }
 
         for (Cultivation.Crop crop : view.crops().all()) {

@@ -438,8 +438,7 @@ public final class KeeperModel {
         // Idling on the spot, and turned a little off the keeper's own facing so
         // the pair of them do not look like a matched pair of statues. The phase
         // is the world clock, so it preens and settles like anything else alive.
-        model.geometry().mesh(mesh, def, cx, cy, top, yaw - 0.5, AnimState.IDLE,
-                t * 0.35, 1, model.poses());
+        model.draw(mesh, def, cx, cy, top, yaw - 0.5, AnimState.IDLE, t * 0.35, 1);
     }
 
     // --- plumbing --------------------------------------------------------------------
