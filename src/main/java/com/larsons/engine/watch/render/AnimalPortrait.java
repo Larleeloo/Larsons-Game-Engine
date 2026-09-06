@@ -145,8 +145,7 @@ public final class AnimalPortrait {
 
     private static Mesh build(AnimalModels.Loaded model, AnimalDef def, double scale) {
         Mesh.Builder mesh = Mesh.builder(0, 0, 0, false, 1);
-        model.geometry().mesh(mesh, def, 0, 0, 0, VIEW_YAW, AnimState.IDLE, 0.2, scale,
-                model.poses());
+        model.draw(mesh, def, 0, 0, 0, VIEW_YAW, AnimState.IDLE, 0.2, scale);
         return mesh.build();
     }
 }
