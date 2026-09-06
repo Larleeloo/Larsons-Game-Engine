@@ -1261,6 +1261,10 @@ lens — with a markup of its own on top. Three staples are always there
 (branches, rope, a feeder), because somebody who walked two kilometres should
 never arrive to find nothing they can use.
 
+There is a second list beside that one — the clothes rail, which is §7o — and it
+is a second list rather than more rows on this one because a plank goes in a
+satchel and a coat goes on a person.
+
 ### The building (`watch/render/ShopModel`)
 
 Everything else standing in this world is either something a player placed one
@@ -3299,6 +3303,277 @@ owns a handsome empty board.
 
 ---
 
+## 7o. Clothes on the rail, and the figure they go over
+
+> Asked for: optional cosmetic items for the player character, sold in shops —
+> worn items over the top of the default character.
+
+### "Over the top" is the specification, not a description
+
+Everybody in this world is one figure: `WalkerModel`'s coat, head, four limbs,
+hat, boots and satchel, tinted from the player id so that eight people spread
+across a valley can tell each other apart. The tempting way to build cosmetics is
+to make that figure *configurable* — a hat field, a coat field, a boot field, and
+a default for each. It is also the way that quietly deletes the figure: within a
+release the "default character" is a set of enum values nobody has read in
+months, every pose has to be checked against every combination, and the walk
+cycle is being maintained by somebody reading a catalogue of hatbands.
+
+So a piece is **additive geometry and nothing else**. The body is drawn exactly as
+it was before any of this existed and the clothes are hung on the joints
+afterwards, which buys three things outright:
+
+* a walker wearing nothing is the walker this game has always drawn, *vertex for
+  vertex* — `CosmeticsTest.anUndressedWalkerIsTheWalkerItAlwaysWas` is that
+  sentence as an assertion, and it is the strongest form of "optional" available;
+* wearing something can only add. The second test in `CosmeticsTest` looks for
+  every vertex of the bare figure in each dressed one, piece by piece across the
+  whole catalogue, so a hat that swapped the head out fails even when the totals
+  agree;
+* and nothing in the file can touch the walk, because nothing in the file is read
+  by it. There is no stat on a piece and there is not going to be one: the moment
+  waders make you faster in water, "optional" is a lie and the wardrobe is a
+  progression system.
+
+### Six slots (`watch/Cosmetics`)
+
+Head, face, neck, back, hands, feet — one piece to a slot, which is the only rule
+in the model and the reason the renderer never has to resolve two hats. Eighteen
+pieces across them, cheapest first, because that is also the order a rail is
+picked in:
+
+| | Slot | Price | |
+|---|---|---|---|
+| Wool Mittens | hands | 16 | Knitted on somebody's porch |
+| Knitted Beanie | head | 18 | Pulled down over the brim |
+| Canvas Gaiters | feet | 20 | Buckled up the shin |
+| Wool Scarf | neck | 22 | One end left long |
+| Rolled Bedroll | back | 26 | Strapped across the satchel |
+| Wire Spectacles | face | 28 | Thin gold wire |
+| Feathered Band | head | 34 | One moulted primary |
+| Glass Lanyard | neck | 38 | Brass ring, for a glass you keep dropping |
+| Leather Gloves | hands | 42 | Cut close, stitched at the seam |
+| Straw Boater | head | 48 | Flat brim, blue ribbon |
+| Snow Goggles | face | 62 | Smoked glass on a strap |
+| Oilskin Hood | head | 74 | Waxed, and up |
+| River Waders | feet | 78 | To the knee, and they squeak |
+| Moth Veil | face | 96 | Fine net off the brim |
+| Fur Collar | neck | 130 | Shed rather than taken |
+| Oilskin Cape | back | 155 | A yoke and a panel to the knee |
+| Antler Circlet | head | 195 | Cast antler on a birch hoop |
+| Heron Cloak | back | 340 | Courses of grey feather |
+
+Read against `Rarity.points()` — a common bird is 1, a legendary 100 — the ladder
+says: mittens are an afternoon, a boater is a good morning's walking, and the
+heron cloak is a thing somebody wears because they went and found something. The
+wide end is deliberate. A cosmetic is a thing to *want*, and a want with no
+expensive end to it is a shopping list.
+
+### The party still has to read at two hundred metres
+
+The coat tint is how eight people in one wood tell each other apart, and it is
+also the first thing a cosmetic system breaks: put six players in the same cloak
+and you have six identical silhouettes. Most pieces are small enough not to
+matter. The two that are not — the hood and the cape — are drawn **in the
+wearer's own coat colour**, darkened, rather than in a colour of their own, so a
+party in matching oilskins is still a party of six different people.
+`theOnlyPiecesThatHideAWalkerAreDrawnInTheirOwnColour` holds both halves of that:
+the tinted pieces change colour with the coat under them, and *every other piece
+does not* — which is what makes the picture in the shop row true.
+
+### One description, worn and drawn alone (`watch/render/CosmeticModel`)
+
+A piece is described once, in a frame the wearer hands it: a **fit** — an origin,
+a way up, a yaw and the half-width of the body part it hangs on. Every offset and
+every half-extent in the file is written in that size rather than in metres, so a
+mitten is 1.3 hands across and stays on the hand whatever anybody does to
+`WalkerModel.HEIGHT` later.
+
+Two things fall out of that one decision:
+
+* **the hat is on a swimmer's head.** `WalkerModel`'s head already takes an
+  up-vector, because a brim laid out along the world's vertical floats off the
+  side of a prone swimmer's head and follows them across the lake — that bug is
+  §7d's. Hanging the head and face slots on *that* method rather than on `walker`
+  means a walker, a rower and a swimmer are all dressed by one call, and a piece
+  stacks along the spine wherever the spine is pointing. The rest of an outfit is
+  on the standing figure only, and that is a decision rather than an oversight: a
+  full-length oilskin on a seated rower is three pieces of geometry through a
+  hull;
+* **the picture in the shop is drawn by the code that puts it on you.**
+  `CosmeticModel.alone` is the same description with the body left out, and
+  `ItemPortrait` — which already frames every item in the game by measuring its
+  own mesh — takes a cosmetic key through the same door. So a row on the rail
+  shows the actual coat, at the same apparent size as a plank, out of one
+  catalogue. A picture drawn from a second description would eventually be a
+  picture of a hat nobody owns.
+
+### A wardrobe is not a satchel (`watch/Outfit`)
+
+Two collections and they are two on purpose: what has been bought, and which of
+it is on. That split is what makes taking a hat off free — a game where
+undressing loses you the hat is a game nobody undresses in — and it is also the
+answer to "why is a cosmetic not just an item":
+
+* a satchel can be **dropped**. `Spill` puts your bag on the ground where you
+  died, and the one thing in this world you cannot get back by walking somewhere
+  is the wrong thing to leave lying in a wood;
+* a satchel is **counted**, and a second boater is not worth anything;
+* and a debug satchel is bottomless, which would hand the whole wardrobe to
+  anybody who typed the code — where what debug mode should do here is exactly
+  what it does everywhere else: pay for it. `Debug.Power.POINTS` is one `if` in
+  `buyWorn`, the same line as in `buy`.
+
+The wardrobe is **per player** while the points that buy it are the party's, and
+that asymmetry is the one the satchel already makes: the book is shared because
+finding a bird is something you do for everybody, and a coat is not.
+
+### What travels, and what does not
+
+What somebody is *wearing* goes out on their player row as one string —
+`"knitted_beanie,wool_scarf"`, at most six keys — because a hat is worn to be seen
+and every client has to draw it. What somebody *owns* does not: it changes about
+once an evening, nobody else's screen has any use for it, and sending eight
+wardrobes to eight people twenty times a second to draw six hats would be the one
+extravagance in a protocol whose whole argument is that a trading post costs
+nothing to send. It rides on the private `bag` message instead, with the satchel,
+to its owner only.
+
+Which rail a post has is a function of the post's own hash, like its shelf and
+its keeper and the price of its rope — so nothing about the clothes for sale
+travels either. Two clients that have never exchanged a byte find the same coat
+hanging in the same shop.
+
+### Rare rather than impossible
+
+`Trading.shelf` picks off the front third of its pool and stops, which is right
+for a shelf: it is short and every line on it is something somebody needs. It is
+wrong for a rail, because the entire argument for a 340-point cloak is that it is
+a thing to go looking for, and a rule that can never reach the back of the pool
+puts it in the game and in nobody's shop. So a rail picks on a curve instead of
+behind a cut-off — the local and the cheap usually win, and about one rail in ten
+has the last piece on it. `theWholeCatalogueTurnsUpSomewhere` is that assertion,
+and it failed on the first version, which is why the curve exists.
+
+### Two headings, not three columns
+
+The shop screen is two halves, and the right-hand half — the keeper, the balance
+and the stamp — is deliberately the larger piece of furniture even though it is
+one button, because turning the page is the part a player has to be *told* about
+(§7f). Squeezing that to make room for hats would trade the explanation for the
+shopping. So the rail is a second list under a second heading in the same column:
+one keypress (←/→) or one click, and the panel keeps the shape it had.
+
+A row on the rail is one gesture doing three jobs — buy it, put it on, take it off
+— because from the player's side there is only one: they clicked the coat. Which
+it means is decided by what they already own, and it is decided on the client so
+that the second click does not have to wait for a wardrobe to come back over the
+wire. Getting it wrong costs nothing; the host checks both again and refuses a
+purchase of something already owned.
+
+And a piece bought at a counter goes straight **on**. Somebody who has just spent
+two hundred points on an antler circlet did not want to own it. It is one click to
+take off again, so the assumption costs nothing when it is wrong.
+
+The rail is currently the *only* screen that works a wardrobe, so in practice a
+player changes at a counter. That is where the rows are drawn and not what the
+rules allow: `WatchGame.wear` is deliberately ungated and costs nothing, so a
+wardrobe on the satchel screen would be a panel and no host change at all.
+
+### Every one of them can be modelled instead (`cosmetics/<key>.glb`)
+
+Eighteen piles of boxes is a starting position, not an art style, and this game
+already had the answer to that before the wardrobe existed: §7i's mutants and the
+ranger are both `.glb` files dropped into `watch/models/`, and 1323 animals are
+waiting for theirs. The clothes join them. Drop
+`watch/models/cosmetics/heron_cloak.glb` beside the jar or on the classpath and
+it is worn instead of the boxes — same loader, same search order, same
+fail-soft: a file that is missing, truncated or empty leaves the boxes and prints
+one line.
+
+**A worn model is a rigged figure, not a box on an anchor**, and that is the
+whole of the design. The boxes are written against a `Fit` — one point on one
+body part — because that is the cheapest way to place a box. A garment is the
+other thing: it is authored *in place* on a reference walker standing at the
+origin, rigged to the same bone names a character uses, and drawn at that
+walker's feet in that walker's pose. Three things fall out of it, and they are
+the three the anchor could not do:
+
+* **it follows the joint it is hung on**, because `ModelRig` binds `spine`,
+  `head`, `hand_l` and the rest exactly as it does for the ranger;
+* **it can span two joints** — a cape off the shoulders and down to the knee is
+  one mesh over one bone, which no single anchor point describes;
+* **it can be animated.** Name a Blender action `walk` and it plays when the
+  wearer walks, on the wearer's own gait clock, so a cloak's swing is in step
+  with the legs under it by construction. A piece with no clip at all still
+  moves, posed by `ModelRig`'s humanoid table — the same reason a half-finished
+  ranger is worth committing.
+
+The one thing that had to change in the importer is a **placement** rule.
+Everything else in that folder stands on the ground, so it is measured and
+dropped to it. A hat is the opposite: it is authored at head height and the
+height it was authored at *is* the answer, and grounding one puts it on the floor
+because the lowest point of a hat is the underside of its brim. Hence
+`SceneModel.Size.AS_PLACED` — the file's own units and the file's own height off
+the floor — which is one boolean on a record and one line in `bake`.
+
+### The bug this found, which was older than the wardrobe
+
+Wiring the first modelled cape on produced a cape hanging off somebody's left
+shoulder — and it was not the export. **This game has two facing conventions,
+ninety degrees apart, and nobody had noticed because no imported *person* had
+ever been drawn.** An animal's boxes point along `+x` at a yaw of zero, and
+`SceneModel` was written to match them, so an imported wren faces the way its
+placeholder did. A person is the other way round: `WalkerModel`, `KeeperModel`
+and `RangerModel` all take forward as `(sin yaw, −cos yaw)`, which at zero is
+`−y`.
+
+`SceneModel.PERSON_TURN` is the correction, and `RangerModel` needed it too —
+the ranger has had this latent since §7f, waiting for the first `.glb` to be
+committed against `BLENDER_BRIEF.md`, at which point the figure outside every
+trading post would have stood square to the counter it is supposed to be facing.
+`ModelImportTest.anImportedPersonFacesTheWayTheBoxesFace` pins it at three yaws,
+and its sibling pins that a *creature* still adds nothing, because that half was
+already right and is the half that would break silently if somebody "fixed" this
+in the importer instead.
+
+Two limits, both stated in the folder README rather than hidden:
+
+* **a swimmer and a rower keep the boxes.** `SceneModel.mesh` takes a yaw and no
+  more, and neither of those poses is a yaw — one is a spine laid along the way
+  somebody is diving and the other is a body folded onto a thwart. Falling back
+  means your hat changes shape when you dive, which is visible and odd; the
+  alternative is a full-length oilskin standing bolt upright in a lake, which is
+  worse. `CosmeticModel.boxesOnly` is the filter, and it is a filter rather than
+  a branch inside `wear` because the two are drawn at different *times* — one per
+  joint, one per figure;
+* **your own hands in first person keep them too**, for the same reason: the view
+  model is built in the camera's frame and an imported piece is in the world's.
+
+And the shop row draws whatever was modelled, through `ItemPortrait` unchanged —
+which is the argument the row already made, now paying for itself: one catalogue,
+one picture, whatever the geometry turns out to be.
+
+**The reference figure is a tested document.** §16 of the models README is a
+table of landmarks — soles at 0.00, hip at 0.87, shoulder at 1.45, head centre at
+1.70, top of the hat at 1.95 — and somebody modelling a cape puts it at the Z that
+table says the shoulders are at, exports, and never runs any of this. So
+`CosmeticsTest.theReferenceFigureIsTheOneThisFolderDescribes` asserts every row of
+it against the mesh the game emits. A change to `WalkerModel`'s proportions now
+fails a test rather than quietly moving somebody's art six inches off their back.
+
+Better than a table, though, is not having to read one: `tools/blender/`
+carries a script that **builds the reference walker and its armature in
+Blender**, so an artist imports a body, fits the garment to it, and deletes it.
+Its constants are read back out of the file by a second test, because a
+reference figure that has drifted is worse than none — it is confidently wrong,
+in every piece anybody makes against it, for ever. And a third pins the one
+convention nobody could derive: `_l` bones go on `+x`, not for anatomy (the
+engine's two halves disagree about which side that is) but because it is what
+keeps a modelled gaiter swinging with the boot inside it.
+
+---
+
 ## 8. Tests
 
 `src/test/java/com/larsons/engine/watch/`
@@ -3742,6 +4017,45 @@ owns a handsome empty board.
   where the point is what does *not* travel — no message names a shop's
   position, its keeper or its shelf, and a buy and a stamp still move both
   players' satchels and both players' books.
+* `CosmeticsTest` — four claims, and the first is the one the feature has to keep
+  or it has no business existing. **They are optional**: a walker wearing nothing
+  is the walker this game has always drawn *vertex for vertex*, a walker wearing
+  something is that walker with triangles added and none taken away (checked per
+  piece, by position, because a hat interleaves with the head it goes on), a full
+  outfit is six pieces at once and still only adds, and getting dressed changes
+  no field on a player row but the one that says what is worn. Plus the two the
+  drawing can quietly get wrong: every piece in the catalogue draws more than one
+  box and is about the size of the body part it hangs on — which is what catches
+  a row added to the catalogue and not to the model — and a hat stays within a
+  head's reach of a swimmer's head at four body pitches and on a rower too,
+  which is §7d's brim bug asked again. **The party still reads**: exactly the
+  pieces big enough to hide a walker take the wearer's coat colour and every
+  other piece is its own colour whoever wears it. **They are bought**: points buy
+  a coat off *this* keeper's rail and it goes straight on, and the whole thing is
+  refused without taking anything to somebody in the next valley, somebody naming
+  another post, somebody asking for a piece off a different rail, somebody short
+  of the price and somebody who already owns it — while debug mode dresses for
+  free and still only from that rail, and putting a hat on costs nothing and
+  needs no counter. **They are kept, and seen**: one piece to a slot with the
+  first still owned, nothing worn that is not owned, a wardrobe and an outfit
+  through a save, and a key deleted from the catalogue dropped rather than kept.
+  Every post has a rail, no two posts within two kilometres have the same one,
+  two clients on one seed see the same coats at the same marked-up prices, and
+  the whole catalogue turns up somewhere over four hundred rails — the assertion
+  that failed on the first version and is why the picking curve exists. Then over
+  a socket, where the point is again what does *not* travel: a client buys, the
+  friend across the valley sees the coat on them and taking it off reach them,
+  and the friend's screen never learns what else is in that wardrobe. Finally
+  through the real `WatchScene`: the panel opens on the shelf, an arrow key turns
+  it to the rail, a click buys and wears, the same click again undresses without
+  charging, and the other arrow goes back to the shelf. **And modelled instead of
+  boxed**: a file in `cosmetics/` replaces its piece on a walker and nothing else
+  on the figure moves, it arrives at the height it was modelled at rather than on
+  the floor, a swimmer and a rower fall back to the boxes, and the shop row draws
+  the model. Plus the one test that is really on a *document* —
+  `theReferenceFigureIsTheOneThisFolderDescribes` holds every landmark in §16 of
+  the models README against the real mesh, because that table is what somebody
+  models a cape against and nothing else would notice it drifting.
 * `TrackFieldTest` — three claims, in order. **It is made by walking**: standing
   in one place for a minute writes one print and draws nothing, sixty metres of
   walking comes out as prints a stride apart, and the path is under the line

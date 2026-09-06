@@ -30,7 +30,8 @@ import java.util.concurrent.ConcurrentHashMap;
  * Where it is, who keeps it, and what is on its shelves are all derived, so no
  * message ever mentions a shop and no save ever holds one. The only things that
  * change hands are the points and the goods, and both of those already live on
- * the guide and in a satchel.
+ * the guide and in a satchel — or, for something off the {@linkplain Cosmetics
+ * clothes rail}, in the buyer's own {@link Outfit}.
  *
  * <h2>Where one goes</h2>
  *
@@ -206,13 +207,20 @@ public final class Shops {
      * @param markup what this keeper adds to the list price
      * @param stock  what is on the shelves. Not a quantity: see the class note —
      *               a post does not run out, because running out would be state
+     * @param rail   what is hanging on the clothes rail beside the shelves —
+     *               the {@link Cosmetics} this keeper happens to carry, at the
+     *               same markup. A second list rather than more rows on the
+     *               first because it is a second kind of thing: a plank goes in
+     *               a satchel and a hat goes on a person, and the two are
+     *               bought with different verbs and kept in different places
      */
     public record Shop(long id, String sign, double x, double y, double z, double yaw,
                        Keeper keeper, double markup, List<Trading.Offer> stock,
-                       String biome) {
+                       List<Cosmetics.Piece> rail, String biome) {
 
         public Shop {
             stock = List.copyOf(stock);
+            rail = List.copyOf(rail);
         }
 
         /** Where the counter is — the point "in reach" is measured to. */
@@ -234,6 +242,14 @@ public final class Shops {
         public Trading.Offer offer(String item) {
             for (Trading.Offer offer : stock) {
                 if (offer.item().equals(item)) return offer;
+            }
+            return null;
+        }
+
+        /** The piece on this rail with a key, or {@code null} if it is not hanging here. */
+        public Cosmetics.Piece worn(String key) {
+            for (Cosmetics.Piece piece : rail) {
+                if (piece.key().equals(key)) return piece;
             }
             return null;
         }
@@ -418,7 +434,8 @@ public final class Shops {
         Keeper keeper = keeperFor(biome, rng);
         String sign = pick(rng, SIGN_FIRST) + " " + pick(rng, SIGN_SECOND);
         return new Shop(id, sign, x, y, z, yaw, keeper, markup,
-                Trading.shelf(biome, markup, rng), biome.key());
+                Trading.shelf(biome, markup, rng), Cosmetics.rail(biome, markup, rng),
+                biome.key());
     }
 
     // --- the people ------------------------------------------------------------------

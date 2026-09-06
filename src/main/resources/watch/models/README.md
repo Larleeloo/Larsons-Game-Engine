@@ -322,6 +322,7 @@ folder **next to the jar** first, then `watch/models/` **on the classpath**.
 | `<species key>.glb` | that one species (see §1 for keys) |
 | `<family key>.glb` | all 49 species of that family |
 | `characters/ranger.glb` | **the forest ranger** who stands outside every trading post |
+| `cosmetics/<piece key>.glb` | **one thing to wear** — a hat, a cape, a pair of boots. See §16 |
 
 A `.bbmodel` under the same name **wins** over a `.glb`. That is on purpose:
 adding a mesh beside an existing box model should be a deliberate act — delete
@@ -528,7 +529,8 @@ like a faceted one from six metres away.
 9. Save it into this folder under the name from §8.
 
 **To check it loaded:** the ranger is at any trading post — walk up to one. For
-an animal, open the Field Guide (`G`) and turn to the species.
+an animal, open the Field Guide (`G`) and turn to the species. For a cosmetic,
+buy it off the rail at any post and look at yourself in third person (`F5`).
 
 **If it did not load,** the reason was printed to stderr when the game tried:
 
@@ -540,3 +542,160 @@ The usual causes, in the order they actually happen: the file was exported with
 no mesh selected; it is a `.gltf` whose `.bin` was not committed alongside it;
 the name does not match §8; or the folder is not the one the game is reading —
 remember the jar's neighbour wins over the classpath.
+
+---
+
+## 16. Cosmetics — clothes for the player
+
+Everything the player can buy off a trading post's clothes rail is a pile of
+boxes today, exactly like the animals and the ranger, and exactly as replaceable.
+Drop a file in and it is worn instead:
+
+```
+watch/models/cosmetics/<piece key>.glb
+```
+
+The keys are the ones in `Cosmetics.java`, and there are eighteen of them:
+
+```
+wool_mittens      knitted_beanie   canvas_gaiters   wool_scarf
+rolled_bedroll    wire_spectacles  feathered_band   glass_lanyard
+leather_gloves    straw_boater     snow_goggles     oilskin_hood
+river_waders      moth_veil        fur_collar       oilskin_cape
+antler_circlet    heron_cloak
+```
+
+One file replaces one piece. Everything else on the rail keeps its boxes, so you
+can do these one at a time — and the game will happily draw a modelled hat over
+a boxed scarf.
+
+**There is a walkthrough with the clicks in it**, plus a Blender script that
+builds the reference figure and its armature for you, in `tools/blender/` at the
+root of this repository. This section is the contract; that is the tutorial.
+
+### A cosmetic is a rigged figure, not a prop
+
+**This is the difference from everything else in this folder, and the only thing
+here worth reading twice.** A ranger is a person. An animal is an animal. A
+cosmetic is *the clothes off a person with the person deleted* — so you model it
+the way you would model a coat: on a body, in place, rigged to that body's
+skeleton.
+
+1. **Stand a reference figure at the origin** — feet on `Z = 0`, facing **−Y**
+   (Blender's Front view), 1.95 m to the top of its hat. Run
+   `tools/blender/cosmetic_reference.py` and you have one, armature included;
+   the table below is what it builds, landmark by landmark. §9's axes apply unchanged, and they are what
+   tells a cape from a bib: **−Y is the front**, so a cape goes at **+Y**, behind
+   the chest's back face (0.22 m from its middle).
+2. **Model your piece where it sits on them.** A hat goes at head height. A cape
+   hangs off the shoulders and down the back. Boots go round the ankles.
+3. **Rig it to bones with the §10 names** — `head`, `spine`, `arm_l`, `arm_r`,
+   `leg_l`, `leg_r`. A cape is on `spine`; mittens are on `hand_l` and `hand_r`;
+   a hat is on `head`.
+4. **Delete the reference figure** and export just your piece.
+
+That is what makes a piece follow the joint it is worn on, and it is why a cape
+can hang off the shoulders *and* reach the knees — a single anchor point could
+not describe that.
+
+### Where the reference figure's parts are
+
+These are the walker's own numbers (`WalkerModel`), in metres, for a standing
+figure with their feet on `Z = 0` and their arms at rest.
+`CosmeticsTest.theReferenceFigureIsTheOneThisFolderDescribes` holds every row of
+this table against the real mesh, so it cannot drift away from the game without
+a test going red.
+
+| Landmark | Z |
+|---|---|
+| sole of boot | 0.00 |
+| boot centre | 0.05 |
+| knee | 0.45 |
+| hand centre (arms at rest) | 0.80 |
+| hip | 0.87 |
+| chest centre | 1.24 |
+| pack (satchel) centre | 1.28 |
+| shoulder | 1.45 |
+| neck / collar | 1.59 |
+| head centre | 1.70 |
+| top of the head | 1.82 |
+| brim of the default hat | 1.85 |
+| **top of the default hat** | **1.95** |
+
+**`WalkerModel.HEIGHT` is 1.78 and the figure is 1.95 m tall.** Those are not in
+conflict: 1.78 is the nominal height every proportion above is a fraction of, and
+the hat stands above it. Build against 1.95 — it is what you would measure.
+
+- Shoulders are **±0.20** either side of centre, hips **±0.09**, boots **±0.09**.
+- The head is a **0.23 m cube** and a hand is an **0.11 m cube**.
+- The default hat's brim is **0.54 m across** — wider than the shoulders, and the
+  widest thing on the figure.
+- The chest is **0.29 wide and 0.44 deep**. Deeper than it looks, which is why a
+  scarf tail written "just in front of the neck" ends up inside somebody.
+
+Model at **1.0 = 1 metre**. Unlike everything else in this folder a cosmetic is
+**not measured and rescaled**: the size you model at and the height you put it at
+are both answers rather than accidents, so a hat modelled at 1.85 m arrives at
+1.85 m. (It does scale with the wearer — a crouching walker's cape crouches — but
+not with your file.)
+
+### Animation
+
+**This is the part worth doing.** Name your Blender actions after the states in
+§4 and they play when the wearer does that thing:
+
+| Action | Plays when |
+|---|---|
+| `idle` | standing still |
+| `walk` | walking |
+| `run` | sprinting |
+
+Three, because three is what a person's legs do. Everything else falls back to
+the procedural humanoid pose, so a cloak with **no animation at all still moves**
+— it swings with the spine it is rigged to. Ship `walk` first if you ship one:
+that is the state a cloak most wants an authored clip for.
+
+The clip is driven by the **wearer's gait clock**, so a cloak's `walk` is in step
+with the legs underneath it by construction. Everything in §13 applies unchanged:
+bake to keyframes on the bones, no IK, no shape keys, `LINEAR` or `STEP`.
+
+### Budget, and the two limits
+
+| | Triangles |
+|---|---|
+| A boxed piece | 8–60 |
+| A sensible ceiling for one piece | ~250 |
+| …for a whole wardrobe on one walker | ~800 |
+
+Six of these can be on one person at once and eight people can be in one wood, so
+a 900-triangle cape is 43,000 triangles of coat in a clearing. Keep them small.
+
+Three things a modelled piece does **not** do, all on purpose:
+
+- **A swimmer and a rower keep the boxes.** Those two are posed by numbers no
+  glTF clip knows — a spine laid along the way somebody is diving, a body folded
+  onto a thwart — so a modelled piece falls back rather than standing bolt
+  upright in the middle of a lake. Your hat changes shape when you dive. That is
+  the honest version of the alternatives.
+- **Your own hands in first person keep the boxes too**, for the same reason: the
+  view model is built in the camera's frame rather than the world's.
+- **It is not recoloured.** An animal's boxes are painted from its species' skin
+  sheet so that one file can dress forty-nine; a cosmetic is one thing and wears
+  the colours you gave its materials. The two pieces the game tints to the
+  wearer's own coat — the oilskin hood and the cape — stop being tinted the
+  moment they are modelled, so if you want a cape that still reads as *that
+  player's* across a valley, leave some of the coat showing.
+
+### Checklist
+
+1. Reference figure at the origin, facing **−Y**, feet on `Z = 0`, hat at 1.95.
+2. Model the piece **in place** on it, in metres.
+3. Rig to §10 bone names. Cape → `spine`; hat → `head`; mittens →
+   `hand_l`/`hand_r`.
+4. Materials, not textures (§12). Flat colours.
+5. `Ctrl+A → All Transforms`. Triangulate.
+6. Animate `walk` if you animate anything.
+7. Export **glTF Binary (.glb)**, *+Y Up*, *Apply Modifiers*, *Animation* on.
+8. Save to `watch/models/cosmetics/<piece key>.glb`.
+
+---

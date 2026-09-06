@@ -75,7 +75,7 @@ public final class SceneModels {
      */
     public static synchronized SceneModel of(String name, ModelRig.Kind kind,
                                              SceneModel.Size size) {
-        String key = name + "|" + kind + "|" + size.height();
+        String key = name + "|" + kind + "|" + size.height() + "|" + size.grounded();
         SceneModel cached = CACHE.get(key);
         if (cached != null) return cached;
         if (CACHE.containsKey(key)) return null;

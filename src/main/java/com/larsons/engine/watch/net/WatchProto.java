@@ -47,6 +47,8 @@ import java.util.Map;
  *   client → server   {"t":"debug","c":"7799"}       (the host's walk only)
  *   client → server   {"t":"summon","sp":"wendigo_wendigo_hollow"}   (debug only)
  *   client → server   {"t":"buy","s":shopId,"k":"plank"}   {"t":"stamp","s":shopId}
+ *   client → server   {"t":"buyfit","s":shopId,"k":"wool_scarf"}   (off the rail)
+ *   client → server   {"t":"wear","k":"wool_scarf"}   (on if off, off if on)
  *
  *   client → server   {"t":"chart","r":512}           (a map of what I can see)
  *   client → server   {"t":"rename","c":mapId,"n":"North Wood"}
@@ -62,7 +64,7 @@ import java.util.Map;
  *   client → server   {"t":"squirt"}                  (the water gun, while it)
  *   client → server   {"t":"bounty","sp":"otter_river_banded"}
  *
- *   server → client   {"t":"bag","items":{…}}          (private, after any change)
+ *   server → client   {"t":"bag","items":{…},"fit":{…}}  (private, after any change)
  *   server → all      {"t":"world","grove":{…},"crops":{…},"homes":{…},"maps":{…},
  *                      "spills":{…},"bounties":{…}}
  *   server → all      {"t":"guide","entries":[…],"pets":[…],"earned":…,"tally":[…]}
@@ -72,9 +74,19 @@ import java.util.Map;
  * <p><b>Nothing about a trading post travels.</b> Where one stands, who keeps
  * it, what is on its shelves and what they charge are all functions of the seed
  * — see {@link com.larsons.engine.watch.Shops} — so a client works all of that
- * out for itself the way it works out the trails and the boats. The two verbs
- * above carry an <em>intention</em>, and the answer comes back as the two things
- * that genuinely changed: a satchel and a ledger.
+ * out for itself the way it works out the trails and the boats. The verbs
+ * above carry an <em>intention</em>, and the answer comes back as the things
+ * that genuinely changed: a satchel, a wardrobe and a ledger. That holds for
+ * the clothes rail too: which coats a keeper has hanging is as much a function
+ * of the post's own hash as the price of their rope.
+ *
+ * <p><b>What somebody is wearing rides on their player row; what they own does
+ * not.</b> A snapshot's {@code "w"} is at most six
+ * {@link com.larsons.engine.watch.Cosmetics} keys, because a hat is worn to be
+ * seen and every client has to draw it. A wardrobe is a private list that
+ * changes about once an evening, so it goes out on the {@code bag} message with
+ * the satchel, to its owner only. See
+ * {@link com.larsons.engine.watch.Outfit#wornLine}.
  *
  * <p><b>And no map is ever a picture.</b> The same argument reaches further for
  * maps than for anything else here: a map's paper is a square of ground, the
@@ -411,6 +423,27 @@ public final class WatchProto {
         return m;
     }
 
+    /** Buy a piece off a post's clothes rail. */
+    public static Map<String, Object> buyWorn(long shopId, String key) {
+        Map<String, Object> m = msg("buyfit");
+        m.put("s", shopId);
+        m.put("k", key);
+        return m;
+    }
+
+    /**
+     * Put a piece on, or take it off if it is already on.
+     *
+     * <p>One verb for both, because there is one gesture — a player clicks the
+     * row — and because two would need the client to have an opinion about what
+     * is currently worn. See {@link com.larsons.engine.watch.Outfit#toggle}.
+     */
+    public static Map<String, Object> wear(String key) {
+        Map<String, Object> m = msg("wear");
+        m.put("k", key);
+        return m;
+    }
+
     /** Ask the keeper to stamp a fresh page in the guide. */
     public static Map<String, Object> stamp(long shopId) {
         Map<String, Object> m = msg("stamp");
@@ -561,9 +594,21 @@ public final class WatchProto {
 
     // --- pushed state ------------------------------------------------------------
 
-    public static Map<String, Object> bag(Map<String, Object> items) {
+    /**
+     * Everything private about what one player has: the satchel, and the
+     * wardrobe.
+     *
+     * <p>One message rather than two because they change together — a purchase
+     * touches one or the other — and because the screen that reads them is one
+     * screen. A second message would be a second thing to forget to send.
+     *
+     * @param fit this player's {@link com.larsons.engine.watch.Outfit#toMap}
+     */
+    public static Map<String, Object> bag(Map<String, Object> items,
+                                          Map<String, Object> fit) {
         Map<String, Object> m = msg("bag");
         m.put("items", items);
+        m.put("fit", fit);
         return m;
     }
 

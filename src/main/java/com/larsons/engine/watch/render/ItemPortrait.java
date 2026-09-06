@@ -3,6 +3,7 @@ package com.larsons.engine.watch.render;
 import com.larsons.engine.graphics.EyeCamera;
 import com.larsons.engine.graphics.Offscreen;
 import com.larsons.engine.graphics.draw.DrawTarget;
+import com.larsons.engine.watch.Cosmetics;
 import com.larsons.engine.watch.WatchClock;
 
 import java.awt.image.BufferedImage;
@@ -81,7 +82,8 @@ public final class ItemPortrait {
     /**
      * A square picture of an item, {@code size} pixels on a side.
      *
-     * @param key        the {@link com.larsons.engine.watch.Forage} key
+     * @param key        a {@link com.larsons.engine.watch.Forage} key, or a
+     *                   {@link Cosmetics} one — see {@link #build}
      * @param background the colour behind it, {@code 0xRRGGBB}
      */
     public static synchronized BufferedImage of(String key, int size, int background) {
@@ -158,9 +160,35 @@ public final class ItemPortrait {
         renderer.flush(target);
     }
 
+    /**
+     * The solid for a key — an item's, or a piece of {@link Cosmetics}'.
+     *
+     * <p><b>One entry point for both</b>, because every screen that draws a row
+     * wants a picture of whatever is on it and none of them should have to know
+     * which catalogue the key came out of. A cosmetic has no {@link ItemModel}
+     * and never will: it is described where it is worn, by
+     * {@link CosmeticModel}, and {@code alone} is that same description with the
+     * body left out. So a hat in a shop row is drawn by the code that puts it on
+     * a head, which is the same promise the item rows already make.
+     *
+     * <p>Sized off the body part it hangs on rather than in metres — a mitten
+     * measured against a hand and a boater against a head — so the framing above
+     * gets an object of about the right proportions to look at and every piece
+     * arrives in its row at the same apparent size as everything else.
+     */
     private static Mesh build(String key, double x, double y, double z, double scale) {
         Mesh.Builder mesh = Mesh.builder(0, 0, 0, false, 1);
-        ItemModel.item(mesh, key, x, y, z, scale, VIEW_YAW);
+        Cosmetics.Piece piece = Cosmetics.byKey(key);
+        if (piece != null) {
+            // A fixed coat, so the two pieces drawn in the wearer's colour have
+            // one to be drawn in. Whose does not matter and must not: a picture
+            // that changed with the viewer would be a picture cached per player.
+            CosmeticModel.alone(mesh, key, x, y, z, VIEW_YAW,
+                    CosmeticModel.portraitSize(piece.slot()) * scale,
+                    WalkerModel.coatFor(0));
+        } else {
+            ItemModel.item(mesh, key, x, y, z, scale, VIEW_YAW);
+        }
         return mesh.build();
     }
 }
