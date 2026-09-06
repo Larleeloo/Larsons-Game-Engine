@@ -25,6 +25,7 @@ import java.util.Base64;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
+import static org.junit.jupiter.api.Assertions.assertNotEquals;
 import static org.junit.jupiter.api.Assertions.assertNotNull;
 import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertTrue;
@@ -152,11 +153,10 @@ class ModelImportTest {
         return out;
     }
 
-    private static SceneModel bake(byte[] bytes, ModelRig.Kind kind,
-                                   SceneModel.Normalise normalise) {
+    private static SceneModel bake(byte[] bytes, ModelRig.Kind kind, SceneModel.Size size) {
         RawModel raw = com.larsons.engine.watch.model.GltfReader.parse(bytes, "test", null);
         assertNotNull(raw, "the fixture did not parse");
-        return SceneModel.bake(raw, kind, normalise);
+        return SceneModel.bake(raw, kind, size);
     }
 
     /** What one draw of a model covers, so a test can measure it. */
@@ -165,6 +165,20 @@ class ModelImportTest {
         Mesh.Builder mesh = Mesh.builder(0, 0, 0, false, 1);
         float[] uv = {0, 0, 1, 1};
         model.mesh(mesh, 0, 0, 0, 0, state, phase, scale, uv, headTurn);
+        return mesh.build();
+    }
+
+    /**
+     * The model at rest — no clip, and every joint told to stay where it is.
+     *
+     * <p>What a test measuring a <em>size</em> wants. Drawing in a state the
+     * fixture does not animate poses it procedurally, and a breathing model is
+     * not the height of a standing one.
+     */
+    private static Mesh atRest(SceneModel model, double scale) {
+        Mesh.Builder mesh = Mesh.builder(0, 0, 0, false, 1);
+        model.mesh(mesh, 0, 0, 0, 0, AnimState.RUN, 0, scale, new float[]{0, 0, 1, 1}, 0,
+                (state, joint, phase) -> AnimalModel.Pose.REST);
         return mesh.build();
     }
 
@@ -313,7 +327,7 @@ class ModelImportTest {
     @Test
     void theFilesAxesBecomeThisGamesAxes() {
         SceneModel model = bake(gltfBytes(), ModelRig.Kind.HUMANOID,
-                SceneModel.Normalise.METRES);
+                SceneModel.Size.AS_MODELLED);
         assertNotNull(model);
         Mesh drawn = draw(model, AnimState.STRIKE, 0, 1, 0);
 
@@ -328,23 +342,37 @@ class ModelImportTest {
     @Test
     void aPersonIsNormalisedToTheirHeightAndStandsOnTheGround() {
         SceneModel model = bake(gltfBytes(), ModelRig.Kind.HUMANOID,
-                SceneModel.Normalise.HEIGHT);
+                SceneModel.Size.height(1));
         assertNotNull(model);
         assertEquals(1, model.height(), 1e-6, "height should normalise to one");
 
         // Drawn at 1.8 m, the thing should be 1.8 m tall with its feet at zero,
         // whatever size it was modelled at.
-        Mesh drawn = draw(model, AnimState.STRIKE, 0, 1.8, 0);
+        Mesh drawn = atRest(model, 1.8);
         assertEquals(0, drawn.minZ(), 1e-5, "the model did not stand on the ground");
         assertEquals(1.8, drawn.maxZ(), 1e-5);
     }
 
+    /**
+     * The rule that replaced "longest horizontal extent becomes one body
+     * length", which made the first real import — a wendigo — ten metres tall
+     * against a seven-metre placeholder. See {@link AnimalModel#height}.
+     */
     @Test
-    void aCreatureIsNormalisedToItsBodyLength() {
+    void aCreatureComesOutTheHeightOfItsPlaceholder() {
+        AnimalDef def = AnimalRegistry.all().get(11);
+        double want = AnimalModel.of(def).height();
+        assertTrue(want > 0, "the placeholder should have a height to match");
+
         SceneModel model = bake(gltfBytes(), ModelRig.Kind.CREATURE,
-                SceneModel.Normalise.BODY_LENGTH);
+                SceneModel.Size.height(want));
         assertNotNull(model);
-        assertEquals(1, model.length(), 1e-6, "body length should normalise to one");
+        assertEquals(want, model.height(), 1e-6);
+
+        // Drawn at the species' body length, it stands as tall as the boxes do.
+        Mesh drawn = atRest(model, def.bodyLength());
+        assertEquals(0, drawn.minZ(), 1e-5, "an animal stands on the ground");
+        assertEquals(want * def.bodyLength(), drawn.maxZ(), 1e-4);
     }
 
     /** Modelled at ten times the size, it still comes out the size it is drawn at. */
@@ -353,14 +381,13 @@ class ModelImportTest {
         String scaled = gltf("data:application/octet-stream;base64,"
                 + Base64.getEncoder().encodeToString(scaled(10)));
         SceneModel big = bake(scaled.getBytes(StandardCharsets.UTF_8),
-                ModelRig.Kind.HUMANOID, SceneModel.Normalise.HEIGHT);
+                ModelRig.Kind.HUMANOID, SceneModel.Size.height(1));
         SceneModel small = bake(gltfBytes(), ModelRig.Kind.HUMANOID,
-                SceneModel.Normalise.HEIGHT);
+                SceneModel.Size.height(1));
         assertNotNull(big);
         assertNotNull(small);
         assertEquals(small.height(), big.height(), 1e-6);
-        assertEquals(draw(small, AnimState.STRIKE, 0, 1.8, 0).maxZ(),
-                draw(big, AnimState.STRIKE, 0, 1.8, 0).maxZ(), 1e-4);
+        assertEquals(atRest(small, 1.8).maxZ(), atRest(big, 1.8).maxZ(), 1e-4);
     }
 
     /** The fixture's buffer with every position multiplied — the node lift too. */
@@ -376,7 +403,7 @@ class ModelImportTest {
     @Test
     void anAuthoredClipPlaysForItsState() {
         SceneModel model = bake(gltfBytes(), ModelRig.Kind.HUMANOID,
-                SceneModel.Normalise.METRES);
+                SceneModel.Size.AS_MODELLED);
         assertNotNull(model);
         assertTrue(model.animates(AnimState.WALK), "the clip named walk was not bound");
         assertFalse(model.animates(AnimState.RUN));
@@ -396,7 +423,7 @@ class ModelImportTest {
     @Test
     void aStateWithNoClipFallsBackToTheProceduralPose() {
         SceneModel model = bake(gltfBytes(), ModelRig.Kind.HUMANOID,
-                SceneModel.Normalise.METRES);
+                SceneModel.Size.AS_MODELLED);
         assertNotNull(model);
         assertFalse(model.animates(AnimState.RUN), "the fixture animates only walk");
 
@@ -409,7 +436,7 @@ class ModelImportTest {
     @Test
     void theHeadTurnsTowardWhoeverIsThere() {
         SceneModel model = bake(gltfBytes(), ModelRig.Kind.HUMANOID,
-                SceneModel.Normalise.METRES);
+                SceneModel.Size.AS_MODELLED);
         assertNotNull(model);
         Mesh ahead = draw(model, AnimState.WALK, 0, 1, 0);
         Mesh turned = draw(model, AnimState.WALK, 0, 1, 1.0);
@@ -451,6 +478,106 @@ class ModelImportTest {
         assertEquals(AnimalModel.Joint.TAIL, ModelRig.jointOf("tail", ModelRig.Kind.CREATURE));
         assertEquals(AnimalModel.Joint.LEG_BL,
                 ModelRig.jointOf("hind_leg_left", ModelRig.Kind.CREATURE));
+        assertEquals(AnimalModel.Joint.EAR, ModelRig.jointOf("left_ear", ModelRig.Kind.CREATURE));
+        assertEquals(AnimalModel.Joint.EAR, ModelRig.jointOf("earL", ModelRig.Kind.CREATURE));
+    }
+
+    /**
+     * The bone names the real wendigo export uses — a standard Blender rig,
+     * every one of which the matcher used to get wrong.
+     */
+    @Test
+    void aBlenderRigsBoneNamesBindCorrectly() {
+        ModelRig.Kind c = ModelRig.Kind.CREATURE;
+        // `forearm` contains `ear`, and used to become one — so both of a
+        // wendigo's forearms flicked like ears in every unanimated state.
+        assertEquals(AnimalModel.Joint.WING_L, ModelRig.jointOf("forearm.L", c));
+        assertEquals(AnimalModel.Joint.WING_R, ModelRig.jointOf("forearm.R", c));
+        assertEquals(AnimalModel.Joint.WING_L, ModelRig.jointOf("upperarm.L", c));
+        assertEquals(AnimalModel.Joint.WING_R, ModelRig.jointOf("hand.R", c));
+        assertEquals(AnimalModel.Joint.WING_L, ModelRig.jointOf("clavicle.L", c));
+        // Blender's .L/.R must pick a side; both used to fall to the left.
+        assertEquals(AnimalModel.Joint.LEG_FL, ModelRig.jointOf("thigh.L", c));
+        assertEquals(AnimalModel.Joint.LEG_FR, ModelRig.jointOf("thigh.R", c));
+        assertEquals(AnimalModel.Joint.LEG_FR, ModelRig.jointOf("shin.R", c));
+        assertEquals(AnimalModel.Joint.LEG_FR, ModelRig.jointOf("toe.R", c));
+        // Spine, hips and muzzle matched nothing at all.
+        assertEquals(AnimalModel.Joint.BODY, ModelRig.jointOf("spine_01", c));
+        assertEquals(AnimalModel.Joint.BODY, ModelRig.jointOf("hips", c));
+        assertEquals(AnimalModel.Joint.HEAD, ModelRig.jointOf("muzzle", c));
+        assertEquals(AnimalModel.Joint.HEAD, ModelRig.jointOf("neck_02", c));
+        assertEquals(AnimalModel.Joint.HORN, ModelRig.jointOf("antler.R", c));
+    }
+
+    /**
+     * A claw is on whatever limb it hangs off, so it names no joint of its own
+     * and takes its parent's. Matching `claw` as a leg put both of a wendigo's
+     * hands on its front left foot.
+     */
+    @Test
+    void clawsInheritTheLimbTheyHangOff() {
+        assertNull(ModelRig.jointOf("claw_0.L", ModelRig.Kind.CREATURE),
+                "a claw should inherit, not guess");
+        // A bird's talon is still a foot, because a talon only ever is one.
+        assertEquals(AnimalModel.Joint.LEG_FR,
+                ModelRig.jointOf("talon_r", ModelRig.Kind.CREATURE));
+    }
+
+    /** `bear` is one of this game's own family keys, and is not an ear. */
+    @Test
+    void aFamilyNamedBearIsNotAnEar() {
+        assertEquals(AnimalModel.Joint.BODY,
+                bindingOf("bear", ModelRig.Kind.CREATURE));
+    }
+
+    private static AnimalModel.Joint bindingOf(String bone, ModelRig.Kind kind) {
+        AnimalModel.Joint j = ModelRig.jointOf(bone, kind);
+        return j == null ? AnimalModel.Joint.BODY : j;
+    }
+
+    /**
+     * The states a model does not animate are posed by the table the caller
+     * chooses — {@code MutantGait} for a six-metre biped, the shared animal
+     * poses for a wren. Without this an imported wendigo idles like a wren.
+     */
+    @Test
+    void theFallbackAnimationCanBeSuppliedByTheCaller() {
+        SceneModel model = bake(gltfBytes(), ModelRig.Kind.CREATURE,
+                SceneModel.Size.height(1));
+        assertNotNull(model);
+        assertFalse(model.animates(AnimState.RUN), "the fixture animates only walk");
+
+        Mesh ownTable = draw(model, AnimState.RUN, 0.3, 1, 0);
+        Mesh.Builder b = Mesh.builder(0, 0, 0, false, 1);
+        model.mesh(b, 0, 0, 0, 0, AnimState.RUN, 0.3, 1, new float[]{0, 0, 1, 1}, 0,
+                (state, joint, phase) -> AnimalModel.Pose.full(0.9, 0, 0, 0, 0, 0));
+        assertTrue(different(ownTable, b.build()),
+                "a fallback passed in should replace the model's own");
+    }
+
+    /** And a mutant's really is the mutant one, all the way through the loader. */
+    @Test
+    void anImportedMutantKeepsTheMutantGait(@TempDir Path dir) throws IOException {
+        AnimalDef mutant = null;
+        for (AnimalDef d : AnimalRegistry.all()) {
+            if (d.family().key().equals("wendigo")) { mutant = d; break; }
+        }
+        assertNotNull(mutant, "the wendigo should be in the registry");
+        Files.write(dir.resolve(mutant.family().key() + ".glb"), glbBytes());
+
+        AnimalModels.setDirectory(dir);
+        try {
+            AnimalModels.Loaded loaded = AnimalModels.of(mutant);
+            assertTrue(loaded.freeform(), "the .glb should have been picked up");
+            AnimalModel.Pose gait = loaded.poses().poseOf(AnimState.IDLE,
+                    AnimalModel.Joint.BODY, 0.3);
+            AnimalModel.Pose generic = AnimalModel.pose(AnimState.IDLE,
+                    AnimalModel.Joint.BODY, 0.3);
+            assertNotEquals(generic, gait,
+                    "an imported mutant should still be posed by MutantGait");
+        } finally {
+            reset();
+        }
     }
 
     /** A bone that names nothing takes its parent's joint, so detail can nest. */
@@ -460,7 +587,7 @@ class ModelImportTest {
                 + Base64.getEncoder().encodeToString(buffer()))
                 .replace("\"name\": \"head\"", "\"name\": \"tuft\"");
         SceneModel model = bake(nested.getBytes(StandardCharsets.UTF_8),
-                ModelRig.Kind.HUMANOID, SceneModel.Normalise.METRES);
+                ModelRig.Kind.HUMANOID, SceneModel.Size.AS_MODELLED);
         assertNotNull(model, "a model whose bones name nothing should still load");
     }
 

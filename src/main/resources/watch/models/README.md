@@ -105,20 +105,31 @@ The first wins, so a local file overrides a bundled one.
 
 A box belongs to a joint because of **the name of the bone (group) it is
 inside**. That is the entire binding contract. Names are matched
-case-insensitively on substrings, after `-` and spaces are folded to `_`, so
-`left_wing`, `leftWing`, `wing_l`, `Wing Left`, and `wing-left` all mean the
-same thing.
+case-insensitively on substrings, after `-`, `.`, spaces **and camel-case humps**
+are all folded to `_` — so `left_wing`, `leftWing`, `wing_l`, `wing.L`,
+`Wing Left` and `wing-left` all mean the same thing.
 
 | Joint | Bone name contains | Notes |
 |---|---|---|
-| `HEAD` | `head`, `skull`, `neck`, `beak`, `bill`, `snout`, `jaw`, `eye` | |
-| `BODY` | `body`, `torso`, `chest`, `root` | also the default |
-| `WING_L` / `WING_R` | `wing`, `fin`, `flipper` | side from `left`/`right`, `_l`/`_r` |
-| `LEG_FL` / `LEG_FR` | `leg`, `foot`, `paw`, `talon`, `claw` + `front` or `fore` | |
+| `HEAD` | `head`, `skull`, `neck`, `beak`, `bill`, `snout`, `muzzle`, `jaw`, `eye` | |
+| `BODY` | `body`, `torso`, `chest`, `spine`, `hip`, `pelvis`, `abdomen`, `root` | also the default |
+| `WING_L` / `WING_R` | `wing`, `fin`, `flipper`; also `arm`, `hand`, `clavicle`, `shoulder`, `elbow`, `wrist` | the upper limb pair — a biped's arms live here |
+| `LEG_FL` / `LEG_FR` | `leg`, `foot`, `paw`, `talon`, `thigh`, `shin`, `knee`, `ankle`, `toe`, `hoof`, `hock` + `front` or `fore` | |
 | `LEG_BL` / `LEG_BR` | the same + `back`, `hind`, or `rear` | |
 | `TAIL` | `tail` | |
-| `EAR` | `ear`, `antenna` | |
+| `EAR` | `ear`, `antenna` | `ear` must be a whole word — see below |
 | `HORN` | `horn`, `antler`, `crest` | |
+
+Two words behave slightly differently from the rest, and both for the same
+reason — a short substring catches too much:
+
+- **`ear` is matched as a whole word**, delimited by `_` or an end. Without
+  that, `forearm` is an ear (and so is `rear`, and so is `bear`, which is one of
+  this game's own family keys). `left_ear`, `earL` and `ear_r` all still work.
+- **`claw` matches nothing at all.** A claw is on whatever limb it hangs off —
+  a talon is a foot, a wendigo's claws are on its hands — and it is always
+  parented under that limb, so the inheritance rule below gets it right where a
+  keyword cannot.
 
 Two rules make this less fussy than it looks:
 
@@ -156,11 +167,11 @@ So: **model your animal facing +Z in Blockbench** (Blockbench's "front"), standi
 on the ground plane, and it comes into the world facing the way it walks.
 
 **Units.** Blockbench works in pixels, 16 to a Minecraft block. You do not have
-to model at any particular size: on import the model is scaled so its **longest
-horizontal extent becomes one body length**, and the registry then scales that
-to the species' real size in metres — 0.09 m for a Bee Hummingbird, 2.4 m for a
-Great Elk, from the same file. Model at whatever size is comfortable and let the
-proportions carry the meaning.
+to model at any particular size: on import the model is scaled so it stands
+**exactly as tall as the placeholder it replaces**, and the registry then scales
+that to the species' real size in metres — 0.09 m for a Bee Hummingbird, 2.4 m
+for a Great Elk, from the same file. Model at whatever size is comfortable and
+let the proportions carry the meaning.
 
 **Ground level.** The lowest point of the model becomes the animal's feet. Model
 standing on Y=0 if you like, or don't — the importer finds the floor either way.
@@ -340,14 +351,17 @@ OBJ) and it lands facing the way it walks. Getting this wrong gives you a
 model that walks sideways, which is obvious the moment you look at it.
 
 **Units.** Model at whatever size is comfortable. On import the model is measured
-and scaled so that one extent is exactly 1, and the game then draws it at the
+and scaled by its **height**, floor to crown, and the game then draws it at the
 size the thing actually is:
 
-- **a creature** is scaled by its **longest horizontal extent** — because that
-  is what `bodyLength` means, so one file serves a 0.09 m hummingbird and a
-  2.4 m elk;
-- **a character** is scaled by its **height**, crown to sole, because that is
-  what a person's size is.
+- **a creature** comes out exactly as tall as the placeholder it replaces, so
+  one file serves a 0.09 m hummingbird and a 2.4 m elk;
+- **a character** comes out its own height in metres — 1.78 m for the ranger.
+
+Height, and not the longest horizontal extent. Measuring nose to tail is a fair
+description of a heron and a nonsense for anything that stands up: the first
+wendigo to arrive was normalised on its antler spread and came out ten metres
+tall against a seven-metre placeholder, and two and a half times as wide.
 
 **The floor.** The model's lowest point becomes ground level. Stand it on Z=0 in
 Blender if you like, or don't — the importer finds the floor either way.

@@ -41,10 +41,12 @@ import java.util.Map;
  * regions for a skin sheet to map onto.
  *
  * <p>That is a real trade and it is worth stating plainly: boxes get the
- * colour system, triangles get the shape. Nothing else differs — both are posed
- * by the same ten {@link AnimState}s, both fall back to the procedural
- * animation for a clip that is not there, and {@link Loaded#draw} is what every
- * caller uses so that none of them has to know which arrived.
+ * colour system, triangles get the shape. Nothing else differs — both come out
+ * the size of the placeholder they replace, both are posed by the same ten
+ * {@link AnimState}s, both fall back to the same procedural animation for a
+ * clip that is not there (including {@link MutantGait} for the three that need
+ * it), and {@link Loaded#draw} is what every caller uses so that none of them
+ * has to know which arrived.
  *
  * <p><b>Nothing here can stop the game starting.</b> A file that is missing,
  * malformed, or built out of things this renderer cannot draw leaves the
@@ -95,9 +97,17 @@ public final class AnimalModels {
             }
             float[] uv = new float[4];
             WatchMaterials.uv(WatchMaterial.PELT, uv);
-            // A scene model is normalised to one body length, so the metres per
-            // unit it wants is exactly what the box path multiplies by.
-            scene.mesh(mesh, x, y, z, yaw, state, phase, def.bodyLength() * scale, uv);
+            // The model was normalised to the placeholder's height in body
+            // lengths, so metres per unit is exactly what the box path
+            // multiplies by — and the two come out the same size.
+            //
+            // `poses` is handed over as the fallback so that the states the
+            // artist has not animated are posed by the right table: MutantGait
+            // for the three that are six-metre bipeds, the shared animal poses
+            // for the other thirteen hundred. Without it an imported wendigo
+            // idles like a wren.
+            scene.mesh(mesh, x, y, z, yaw, state, phase, def.bodyLength() * scale, uv,
+                    0, poses);
         }
     }
 
@@ -152,11 +162,13 @@ public final class AnimalModels {
         if (boxes != null) {
             return new Loaded(boxes.geometry(), boxes, true, boxes.name(), null);
         }
+        // Sized to the placeholder it is replacing, floor to crown. See
+        // AnimalModel.height for why that and not the longest horizontal extent.
+        AnimalModel placeholder = AnimalModel.of(def);
         SceneModel scene = SceneModels.of(name, ModelRig.Kind.CREATURE,
-                SceneModel.Normalise.BODY_LENGTH);
+                SceneModel.Size.height(placeholder.height()));
         if (scene != null) {
-            return new Loaded(AnimalModel.of(def), posesFor(def), true, scene.name(),
-                    scene);
+            return new Loaded(placeholder, posesFor(def), true, scene.name(), scene);
         }
         return null;
     }

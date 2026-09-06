@@ -38,23 +38,38 @@ import java.util.Set;
  *
  * <h2>Normalising</h2>
  *
- * <p>A model is measured on import and scaled so that one chosen extent is
- * exactly {@code 1}, with its lowest point on the ground. Which extent is
- * {@link Normalise}: a creature is measured nose to tail because that is what
- * {@code AnimalDef.bodyLength} means, and a person is measured head to foot
- * because that is what a person's size is. The consequence is the one that
- * matters to whoever is modelling: <b>work at any size you like.</b>
+ * <p>A model is measured on import and scaled so that its <b>height</b> is a
+ * number the caller chose, with its lowest point on the ground. The consequence
+ * that matters to whoever is modelling is: <b>work at any size you like.</b>
+ *
+ * <p><b>Height, and not the longest horizontal extent.</b> An earlier version
+ * measured a creature nose to tail, on the reasoning that this is what
+ * {@code AnimalDef.bodyLength} means. That is a fair description of a heron and
+ * a nonsense for a wendigo, whose widest horizontal measurement is its antler
+ * spread — the first real import to arrive came out ten metres tall against its
+ * placeholder's seven, and two and a half times as wide. Height is the
+ * measurement a quadruped and a biped both have, and matching the placeholder's
+ * makes an import exactly the size of the thing it replaces. See
+ * {@link AnimalModel#height}.
  */
 public final class SceneModel {
 
-    /** Which extent becomes {@code 1} on import. */
-    public enum Normalise {
-        /** Longest horizontal extent — what a creature's body length means. */
-        BODY_LENGTH,
-        /** Floor to crown — what a person's height means. */
-        HEIGHT,
-        /** Nothing: the file's own units are taken to be metres. */
-        METRES
+    /**
+     * How big a model should come out.
+     *
+     * @param height floor to crown, in whatever units the caller then draws at
+     *               — one body length for a creature, one person for a person —
+     *               or {@code 0} to keep the file's own units
+     */
+    public record Size(double height) {
+
+        /** The file's own units, taken to be metres. What a prop wants. */
+        public static final Size AS_MODELLED = new Size(0);
+
+        /** Scale so the model stands exactly this many units tall. */
+        public static Size height(double units) {
+            return new Size(Math.max(1e-6, units));
+        }
     }
 
     /** One node, baked: where it rests, what moves it, and what it is called. */
@@ -66,7 +81,7 @@ public final class SceneModel {
     private record Take(double length, List<RawModel.Track> tracks) {}
 
     private final String name;
-    private final ModelRig.Kind kind;
+    private final AnimalModel.PoseSource ownPoses;
     private final Bone[] bones;
     private final List<RawModel.Piece> pieces;
     private final Map<AnimState, Take> clips;
@@ -82,7 +97,7 @@ public final class SceneModel {
                        double[][] rest, double unit, double floor,
                        double height, double length, int triangles) {
         this.name = name;
-        this.kind = kind;
+        this.ownPoses = (state, joint, phase) -> ModelRig.poseOf(kind, state, joint, phase);
         this.bones = bones;
         this.pieces = pieces;
         this.clips = clips;
@@ -100,7 +115,7 @@ public final class SceneModel {
      * @return the model, or {@code null} when there is nothing in it to draw —
      *         which every caller treats as "keep the fallback"
      */
-    public static SceneModel bake(RawModel raw, ModelRig.Kind kind, Normalise normalise) {
+    public static SceneModel bake(RawModel raw, ModelRig.Kind kind, Size size) {
         if (raw == null || raw.empty()) return null;
         double[][] rest = raw.restGlobals();
         List<RawModel.Node> nodes = raw.nodes();
@@ -128,11 +143,7 @@ public final class SceneModel {
         if (minU > maxU) return null;
 
         double spanF = maxF - minF, spanR = maxR - minR, spanU = maxU - minU;
-        double unit = switch (normalise) {
-            case BODY_LENGTH -> 1 / Math.max(1e-6, Math.max(spanF, spanR));
-            case HEIGHT -> 1 / Math.max(1e-6, spanU);
-            case METRES -> 1;
-        };
+        double unit = size.height() > 0 ? size.height() / Math.max(1e-6, spanU) : 1;
         double floor = minU * unit;
 
         Bone[] bones = new Bone[nodes.size()];
@@ -199,7 +210,7 @@ public final class SceneModel {
      */
     public void mesh(Mesh.Builder mesh, double x, double y, double z, double yaw,
                      AnimState state, double phase, double scale, float[] uv) {
-        mesh(mesh, x, y, z, yaw, state, phase, scale, uv, 0);
+        mesh(mesh, x, y, z, yaw, state, phase, scale, uv, 0, null);
     }
 
     /**
@@ -221,6 +232,31 @@ public final class SceneModel {
     public void mesh(Mesh.Builder mesh, double x, double y, double z, double yaw,
                      AnimState state, double phase, double scale, float[] uv,
                      double headTurn) {
+        mesh(mesh, x, y, z, yaw, state, phase, scale, uv, headTurn, null);
+    }
+
+    /**
+     * {@link #mesh} with the fallback animation supplied from outside.
+     *
+     * <p><b>Which table poses the states this model did not animate.</b> Left
+     * to itself a creature falls back to the shared animal poses, which is
+     * right for the thirteen hundred and wrong for the three mutants: that
+     * table is a good <em>animal</em> walk, and running it on a ten-metre biped
+     * produces a ten-metre biped going for a pleasant walk. {@code MutantGait}
+     * exists because of that, and this is how an imported wendigo gets it —
+     * a model that ships {@code walk} and {@code attack} still has eight states
+     * to be posed in, and they should be posed as the thing it is.
+     *
+     * <p>Passed at draw time rather than baked in, so the geometry stays
+     * cacheable on the file alone.
+     *
+     * @param fallback where a missing state's pose comes from, or {@code null}
+     *                 for this model's own kind of rig
+     */
+    public void mesh(Mesh.Builder mesh, double x, double y, double z, double yaw,
+                     AnimState state, double phase, double scale, float[] uv,
+                     double headTurn, AnimalModel.PoseSource fallback) {
+        AnimalModel.PoseSource poses = fallback == null ? ownPoses : fallback;
         Take take = clips.get(state);
         double[][] globals = take == null ? rest : sample(take, phase);
         double cos = Math.cos(yaw), sin = Math.sin(yaw);
@@ -233,7 +269,7 @@ public final class SceneModel {
             // does not is drawn at rest and posed by the procedural table, per
             // joint. That is what makes a two-clip model worth committing.
             AnimalModel.Pose pose = take == null
-                    ? ModelRig.poseOf(kind, state, bone.joint(), phase) : null;
+                    ? poses.poseOf(state, bone.joint(), phase) : null;
             double[] global = globals[piece.node()];
             float[] positions = piece.positions();
             int[] colours = piece.colours();
