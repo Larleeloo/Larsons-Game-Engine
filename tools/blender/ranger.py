@@ -5,18 +5,23 @@ Run it from Blender's Scripting tab (Open, then Run Script) or with
 
     blender --python tools/blender/ranger.py
 
-It makes one collection called RANGER holding ten mesh objects — one per
-bone — an armature called `ranger_rig`, and four actions: `idle`, `walk`,
-`run` and `alert`. Nothing is exported; see EXPORT at the foot of this file
-for the settings that matter and for which of the two names to save under.
+It makes one collection called RANGER holding fourteen mesh objects — one
+per bone — an armature called `ranger_rig`, and six actions: `idle`, `walk`,
+`run`, `swim`, `row` and `alert`. Nothing is exported; see EXPORT at the foot
+of this file for the settings that matter and for which name to save under.
 
 **This figure is the player.** Filed as `characters/walker.glb` it replaces
 the walker — you in third person, and everybody else in the clearing — which
-is why it carries a `run` clip and a pack: `run` because a state with no clip
-is posed by a table that comes apart at a run's angles, and the pack because
-the back is the side of yourself you spend the game looking at. Filed as
-`characters/ranger.glb` instead it is the figure outside the trading post.
-Do not file it as both, or every ranger in the world is the player's twin.
+is why it carries the clips it does and a pack on its back. The five besides
+`alert` are every state a walker is ever drawn in, and that is the point: a
+state with no clip is posed by a procedural table that works per piece about
+each bone's own pivot, which comes apart at a run's angles and comes apart
+completely at a swimmer's. The pack is there because the back is the side of
+yourself you spend the game looking at.
+
+Filed as `characters/ranger.glb` instead it is the figure outside the trading
+post, which needs only `idle`. Do not file it as both, or every ranger in the
+world is the player's twin.
 
 The contract is `src/main/resources/watch/models/README.md` §8-§15, and the
 ranger's own numbers are `BLENDER_BRIEF.md` §2. Where this file and those
@@ -123,6 +128,13 @@ ELBOW_Z = 0.90
 WRIST = Vector((SHOULDER_X, -0.055, 0.645))   # the arm hangs a little forward
 
 HEIGHT = CROWN_Z - SOLE                        # 1.78, and RangerModel.HEIGHT
+
+# Where a rower's hips sit above the floorboards they brace their feet on.
+# `BoatModel.DEPTH * 0.76` is the thwart above the floor, and a seated hip
+# joint is about 110 mm above the plank — the same two numbers WalkerModel's
+# boxed rower is built from, so the two figures sit at the same height in the
+# same boat. See the `row` clip.
+SEAT_Z = 0.46
 
 
 # --- colour ----------------------------------------------------------------
@@ -459,21 +471,31 @@ def spine_part():
 
 
 def arm_part(side):
-    """Upper arm, elbow, forearm and a rolled cuff — all on the one bone.
-
-    The elbow does not bend: there is no forearm bone in the contract, so
-    the bend is modelled in instead, as a permanent slight forward set. A
-    ranger standing about has their hands a little in front of them anyway.
-    """
+    """Upper arm and the elbow it bends at, with the service patch on it."""
     p = Part()
     x = side * SHOULDER_X
     p.box((x, 0, 1.04), (0.14, 0.14, 0.28), "coat")
     p.box((x, -0.012, 0.898), (0.148, 0.15, 0.075), "coat_dark")
-    p.strut((x, -0.010, ELBOW_Z), (x, WRIST.y, WRIST.z), 0.12, 0.12, "coat")
-    p.box((x, WRIST.y + 0.005, WRIST.z + 0.03), (0.13, 0.13, 0.05), "coat_light")
     # A service patch on the upper sleeve, in the ranger's own trim — wider
     # than the sleeve it sits on, so it is a patch and not a stain.
     p.box((x, -0.02, 1.09), (0.15, 0.09, 0.055), "trim")
+    return p
+
+
+def forearm_part(side):
+    """Forearm and rolled cuff, on a bone of their own.
+
+    **The elbow used to be modelled in rather than rigged**, as a permanent
+    forward set, because the ranger's contract had no bone between the
+    shoulder and the wrist and a figure standing outside a shop does not
+    need one. A breaststroke and a pull on a pair of oars both do: the arms
+    sweep and fold, and an arm that cannot fold does the whole stroke as one
+    rigid oar of its own.
+    """
+    p = Part()
+    x = side * SHOULDER_X
+    p.strut((x, -0.010, ELBOW_Z), (x, WRIST.y, WRIST.z), 0.12, 0.12, "coat")
+    p.box((x, WRIST.y + 0.005, WRIST.z + 0.03), (0.13, 0.13, 0.05), "coat_light")
     return p
 
 
@@ -487,14 +509,29 @@ def hand_part(side):
 
 
 def leg_part(side):
+    """Thigh, knee and the cargo pocket on it."""
     p = Part()
     x = side * HIP_X
     p.box((x, 0, 0.525), (0.18, 0.18, 0.33), "trouser")
     p.box((x, -0.006, KNEE_Z), (0.165, 0.175, 0.06), "trouser_knee")
-    p.box((x, 0, 0.22), (0.15, 0.15, 0.30), "trouser_shin")
     # A cargo pocket on the thigh, and a flap over it.
     p.box((x, -0.055, 0.50), (0.19, 0.09, 0.16), "trouser_knee")
     p.box((x, -0.058, 0.585), (0.195, 0.095, 0.035), "trouser")
+    return p
+
+
+def shin_part(side):
+    """Below the knee.
+
+    Split off for the two poses that fold a leg in half — a rower's, with
+    their thighs along the thwart and their shins dropped to the
+    floorboards, and a breaststroke's frog kick. A walk gets it for nothing:
+    the swinging leg now folds at the knee instead of scything through as
+    one rigid plank.
+    """
+    p = Part()
+    x = side * HIP_X
+    p.box((x, 0, 0.22), (0.15, 0.15, 0.30), "trouser_shin")
     return p
 
 
@@ -524,8 +561,10 @@ def parts():
         "spine": spine_part(),
         "head": head_part(),
         "arm_l": arm_part(1), "arm_r": arm_part(-1),
+        "forearm_l": forearm_part(1), "forearm_r": forearm_part(-1),
         "hand_l": hand_part(1), "hand_r": hand_part(-1),
         "leg_l": leg_part(1), "leg_r": leg_part(-1),
+        "shin_l": shin_part(1), "shin_r": shin_part(-1),
         "foot_l": foot_part(1), "foot_r": foot_part(-1),
     }
     return {bone: part.bury() for bone, part in made.items()}
@@ -542,19 +581,36 @@ def parts():
 # the boot inside it, since the boxes swing the +X leg on sin(phase) and the
 # importer's fallback swings `left` on sin(phase) too.
 
+#
+# **Four more bones than the ranger's contract asks for**, and every one of
+# them still binds where §10 says: `forearm_*` matches on `arm`, `shin_*` on
+# `shin`, and the `_l`/`_r` ending puts each on its own side. They are here
+# because a rower folds at the knee and a breaststroke folds at both — a leg
+# that cannot bend rows with its ankles on the thwart.
+#
+# The cost of an extra bone is the procedural fallback, which poses each
+# piece about its own pivot rather than down the chain: in a state this file
+# ships no clip for, a shin would rotate about the knee it is still standing
+# at. That is why the clip list below covers every state a walker is drawn
+# in. See `run` for the long version.
+
 BONES = [
-    # name,    head,                              tail,                             parent
-    ("root",   (0, 0, 0.0),                       (0, 0, WAIST_Z),                  None),
-    ("spine",  (0, 0, WAIST_Z),                   (0, 0, NECK_Z),                   "root"),
-    ("head",   (0, 0, NECK_Z),                    (0, 0, 1.62),                     "spine"),
-    ("arm_l",  (SHOULDER_X, 0, SHOULDER_Z),       tuple(WRIST),                     "spine"),
-    ("hand_l", tuple(WRIST),                      (SHOULDER_X, -0.07, 0.53),        "arm_l"),
-    ("arm_r",  (-SHOULDER_X, 0, SHOULDER_Z),      (-WRIST.x, WRIST.y, WRIST.z),     "spine"),
-    ("hand_r", (-WRIST.x, WRIST.y, WRIST.z),      (-SHOULDER_X, -0.07, 0.53),       "arm_r"),
-    ("leg_l",  (HIP_X, 0, HIP_Z),                 (HIP_X, 0, ANKLE_Z),              "spine"),
-    ("foot_l", (HIP_X, 0, ANKLE_Z),               (HIP_X, -0.16, 0.045),            "leg_l"),
-    ("leg_r",  (-HIP_X, 0, HIP_Z),                (-HIP_X, 0, ANKLE_Z),             "spine"),
-    ("foot_r", (-HIP_X, 0, ANKLE_Z),              (-HIP_X, -0.16, 0.045),           "leg_r"),
+    # name,       head,                            tail,                             parent
+    ("root",      (0, 0, 0.0),                     (0, 0, WAIST_Z),                  None),
+    ("spine",     (0, 0, WAIST_Z),                 (0, 0, NECK_Z),                   "root"),
+    ("head",      (0, 0, NECK_Z),                  (0, 0, 1.62),                     "spine"),
+    ("arm_l",     (SHOULDER_X, 0, SHOULDER_Z),     (SHOULDER_X, -0.01, ELBOW_Z),     "spine"),
+    ("forearm_l", (SHOULDER_X, -0.01, ELBOW_Z),    tuple(WRIST),                     "arm_l"),
+    ("hand_l",    tuple(WRIST),                    (SHOULDER_X, -0.07, 0.53),        "forearm_l"),
+    ("arm_r",     (-SHOULDER_X, 0, SHOULDER_Z),    (-SHOULDER_X, -0.01, ELBOW_Z),    "spine"),
+    ("forearm_r", (-SHOULDER_X, -0.01, ELBOW_Z),   (-WRIST.x, WRIST.y, WRIST.z),     "arm_r"),
+    ("hand_r",    (-WRIST.x, WRIST.y, WRIST.z),    (-SHOULDER_X, -0.07, 0.53),       "forearm_r"),
+    ("leg_l",     (HIP_X, 0, HIP_Z),               (HIP_X, 0, KNEE_Z),               "spine"),
+    ("shin_l",    (HIP_X, 0, KNEE_Z),              (HIP_X, 0, ANKLE_Z),              "leg_l"),
+    ("foot_l",    (HIP_X, 0, ANKLE_Z),             (HIP_X, -0.16, 0.045),            "shin_l"),
+    ("leg_r",     (-HIP_X, 0, HIP_Z),              (-HIP_X, 0, KNEE_Z),              "spine"),
+    ("shin_r",    (-HIP_X, 0, KNEE_Z),             (-HIP_X, 0, ANKLE_Z),             "leg_r"),
+    ("foot_r",    (-HIP_X, 0, ANKLE_Z),            (-HIP_X, -0.16, 0.045),           "shin_r"),
 ]
 
 
@@ -663,9 +719,17 @@ def bind(obj, rig, bone):
 # way in, so that "swing the leg forward" is a number about global X here
 # and not a guess about which way a bone's roll happens to point.
 #
-#   about +X, negative  ->  forward, the way the ranger faces
-#   about +Y, positive  ->  lean onto the +X side
+#   about +X, negative  ->  swings a limb forward, the way the ranger faces
+#   about +Y, positive  ->  swings a limb toward -X
 #   about +Z, positive  ->  turn toward +X
+#
+# **The first two are written for a limb, and a limb hangs below its pivot.**
+# Anything that stands *above* its pivot — the spine on the waist, the head
+# on the neck — goes the other way, because the sign follows which side of
+# the joint the geometry is on and not which bone it is. So a positive pitch
+# leans a chest forward and swings a leg back, and both of those are the same
+# rotation. It reads as a trap and it is one: the ranger ran for a while with
+# a 0.085 rad backward lean that nobody could see and everybody could feel.
 #
 # No IK, no constraints, no shape keys: none of them are read, and the
 # exporter bakes what is here to keyframes on the bones anyway.
@@ -723,7 +787,7 @@ def _rest(rig):
 
 
 def _torso(rig, frame, pitch=0.0, roll=0.0, yaw=0.0, shift=(0, 0, 0),
-           swing=0.0, lift=(0.0, 0.0)):
+           swing=0.0, knee=(0.0, 0.0)):
     """The spine, and the legs that have to undo it.
 
     **The one thing worth understanding about animating this rig.** The legs
@@ -739,19 +803,22 @@ def _torso(rig, frame, pitch=0.0, roll=0.0, yaw=0.0, shift=(0, 0, 0),
     the angles here the error is under a millimetre, and
     `floor_over` in the checks below is what says so.
 
-    `swing` is the hip swing, positive for the +X leg forward. `lift` is a
-    world-space rise for each boot, for clearance on the swing.
+    `swing` is the hip swing, positive for the +X leg forward. `knee` is how
+    far each knee folds — positive draws the heel up behind, which is the
+    only way it bends.
     """
     _pose(rig, "spine", frame, pitch=pitch, roll=roll, yaw=yaw, shift=shift)
     back = (-shift[0], -shift[1], -shift[2])
-    for bone, side, up in (("leg_l", 1, lift[0]), ("leg_r", -1, lift[1])):
-        _pose(rig, bone, frame, pitch=-pitch - side * swing, roll=-roll, yaw=-yaw,
-              shift=(back[0], back[1], back[2] + up))
-    # The ankles undo the hips, which keeps each boot flat to the ground
-    # through the whole stride. A rigid leg has no knee to absorb a heel
-    # strike, so a boot that tips instead drives its heel through the floor.
-    for bone, side in (("foot_l", 1), ("foot_r", -1)):
-        _pose(rig, bone, frame, pitch=side * swing)
+    for leg, shin, foot, side, bend in (("leg_l", "shin_l", "foot_l", 1, knee[0]),
+                                        ("leg_r", "shin_r", "foot_r", -1, knee[1])):
+        _pose(rig, leg, frame, pitch=-pitch - side * swing, roll=-roll, yaw=-yaw,
+              shift=back)
+        _pose(rig, shin, frame, pitch=bend)
+        # The ankle undoes everything above it, which keeps the boot flat
+        # through the whole stride. A boot that tips instead drives its heel
+        # through the floor at the extremes, and there is no knee left over
+        # to absorb it — the knee is busy lifting the other foot.
+        _pose(rig, foot, frame, pitch=side * swing - bend)
 
 
 def idle(rig, seconds=5.0):
@@ -781,21 +848,23 @@ def idle(rig, seconds=5.0):
         _pose(rig, "hand_r", frame, pitch=-0.030 * breath)
 
 
-def walk(rig, seconds=1.0, reach=0.40, clear=0.035, lean=-0.030, name="walk"):
+def walk(rig, seconds=1.0, reach=0.40, fold=0.55, lean=0.030, name="walk"):
     """One stride, opposite arm to opposite leg.
 
-    **The body drops to meet the legs**, which is the whole trick to a walk
-    on rigid legs. There is no knee here to fold, so a leg swung `reach` rad
+    **The body drops to meet the legs.** A straight leg swung `reach` rad
     either way lifts its own boot `LEG * (1 - cos reach)` clear of the turf —
-    49 mm at 0.40 rad — and the ranger would walk the cycle on stilts and
-    land flat-footed in the middle of it. Dropping the root by exactly that
-    much puts both soles back on the floor at every frame of the stride, and
-    the rise and fall it produces on the way through is the bob a walk has
+    49 mm at 0.40 rad — so the ranger would walk the cycle on stilts and land
+    flat-footed in the middle of it. Dropping the root by exactly that much
+    puts both soles back on the floor at every frame of the stride, and the
+    rise and fall it produces on the way through is the bob a walk has
     anyway.
 
-    On top of that the swinging boot lifts for clearance, and it lifts when
-    the legs pass each other rather than at full spread — `cos`, not `sin`,
-    which is the quarter-cycle that catches people out.
+    **The knee does the clearance**, and does it where a knee does: the
+    swinging leg folds as it passes under the body and is straight again at
+    both ends of the stride. That timing is `cos`, not `sin` — the
+    quarter-cycle that catches people out — and it is also what keeps the
+    drop above exact, because at full spread, where the drop is doing its
+    work, both knees are straight.
     """
     frames = int(seconds * FPS)
     _action(rig, name)
@@ -810,10 +879,14 @@ def walk(rig, seconds=1.0, reach=0.40, clear=0.035, lean=-0.030, name="walk"):
         _pose(rig, "root", frame, shift=(0, 0, -drop))
         _torso(rig, frame, pitch=lean, roll=0.030 * pass_by, yaw=0.055 * wave,
                swing=reach * wave,
-               lift=(clear * max(0.0, pass_by), clear * max(0.0, -pass_by)))
+               knee=(fold * max(0.0, pass_by), fold * max(0.0, -pass_by)))
         _pose(rig, "head", frame, yaw=-0.040 * wave, pitch=0.020 * stride - lean * 0.6)
         _pose(rig, "arm_l", frame, pitch=reach * 0.70 * wave)
         _pose(rig, "arm_r", frame, pitch=-reach * 0.70 * wave)
+        # The elbow folds on the forward swing and straightens on the back
+        # one, which is the asymmetry that stops an arm reading as a pendulum.
+        _pose(rig, "forearm_l", frame, pitch=-0.22 - reach * 0.45 * min(0.0, wave))
+        _pose(rig, "forearm_r", frame, pitch=-0.22 + reach * 0.45 * max(0.0, wave))
         _pose(rig, "hand_l", frame, pitch=reach * 0.25 * wave)
         _pose(rig, "hand_r", frame, pitch=-reach * 0.25 * wave)
 
@@ -831,7 +904,147 @@ def run(rig):
     So the three states the player is ever drawn in — `idle`, `walk`, `run` —
     all ship as clips, and the fallback never runs on this figure.
     """
-    walk(rig, seconds=0.7, reach=0.62, clear=0.055, lean=-0.085, name="run")
+    walk(rig, seconds=0.7, reach=0.62, fold=0.95, lean=0.085, name="run")
+
+
+def swim(rig, seconds=1.6):
+    """Breaststroke — <b>authored standing up.</b>
+
+    This is the clip that looks wrong in Blender and right in the game. A
+    swimmer's body angle runs continuously from upright, treading water,
+    through flat on the surface, to head-down in a dive, and which of those
+    it is depends on where the player is looking — so no keyframe can hold
+    it. The engine tips the whole figure at draw time instead
+    (`SceneModel.Lean`), about the hips, and this clip supplies only what the
+    arms and the legs are doing inside that tip.
+
+    So read every pose below as if the figure were already face-down: "arms
+    overhead" is the reach out in front, "knees to the chest" is the frog
+    kick drawing up, and the head lifting is the breath.
+
+    One cycle is one stroke: catch, sweep, recover, glide. The glide is the
+    long part — a breaststroke is mostly waiting, which is what makes it read
+    as swimming rather than as flailing.
+    """
+    frames = int(seconds * FPS)
+    _action(rig, "swim")
+    _rest(rig)
+    for f in range(frames + 1):
+        frame = f + 1
+        t = f / frames
+        # Arms: 0 is the full reach, 1 is hands pulled back to the chest.
+        # Front-loaded so the pull is quick and the glide is long.
+        pull = 0.5 - 0.5 * math.cos(min(1.0, t / 0.45) * math.tau) if t < 0.45 else 0.0
+        # Legs a beat behind the arms: a breaststroke kicks as the arms
+        # recover, which is the whole of why it moves anybody anywhere.
+        kt = (t - 0.35) / 0.45
+        kick = 0.5 - 0.5 * math.cos(min(1.0, max(0.0, kt)) * math.tau)
+        breath = pull
+
+        _pose(rig, "root", frame, shift=(0, 0, 0))
+        # A shallow undulation. Every limb angle below is *local* — measured
+        # against the chest rather than against the world — because a
+        # swimmer's arms belong to their body and not to the horizon. That is
+        # the opposite of `_torso`'s rule, which exists to keep boots planted
+        # on ground this figure is nowhere near, so it is not used here.
+        _pose(rig, "spine", frame, pitch=0.05 - 0.10 * pull)
+        for bone in ("shin_l", "shin_r"):
+            _pose(rig, bone, frame, pitch=1.75 * kick)
+        # Head down in the glide, up to breathe on the pull. Negative is up.
+        _pose(rig, "head", frame, pitch=0.30 - 0.62 * breath)
+
+        # The arms sweep from overhead to the chest. -2.55 rad is straight out
+        # in front once the body is tipped; -1.15 is hands under the sternum.
+        for bone, side in (("arm_l", 1), ("arm_r", -1)):
+            _pose(rig, bone, frame, pitch=-2.55 + 1.40 * pull,
+                  roll=-side * (0.10 + 0.55 * math.sin(math.pi * pull)))
+        # Elbows straight at the reach, folded hard at the finish.
+        for bone in ("forearm_l", "forearm_r"):
+            _pose(rig, bone, frame, pitch=-0.10 - 1.30 * pull)
+        for bone, side in (("hand_l", 1), ("hand_r", -1)):
+            _pose(rig, bone, frame, pitch=-0.25 * pull, roll=side * 0.30)
+
+        # The knees come up and out together — a frog kick, not a flutter —
+        # and the hips open with them.
+        for bone, side in (("leg_l", 1), ("leg_r", -1)):
+            _pose(rig, bone, frame, pitch=-0.95 * kick, roll=-side * 0.45 * kick)
+        for bone in ("foot_l", "foot_r"):
+            _pose(rig, bone, frame, pitch=-0.35 * kick)
+
+
+def row(rig, seconds=2.2):
+    """Sitting to a pair of oars.
+
+    <b>The one clip in this file measured against furniture.</b> A rower is
+    folded onto a thwart with their feet on the floorboards, and the gap
+    between those two is the boat's: `BoatModel.DEPTH * 0.76`, about 350 mm,
+    with the hips a further 110 mm above the seat. So the root drops by
+    {@code HIP_Z - 0.46} to put the hips on the thwart, the thighs come
+    forward far enough that a 300 mm shin can still reach the floor, and the
+    feet land 60 mm up where the floorboards are.
+
+    That geometry is why the legs had to be split at the knee. At 65 degrees
+    the thigh leaves the knee 265 mm above the floorboards, which a shin can
+    just reach down; any flatter and the feet hang in the bilge.
+
+    One cycle is one stroke: catch at the front, drive, finish leaning back,
+    recover forward.
+    """
+    frames = int(seconds * FPS)
+    # How far the hips sit below the bone the body swings about. **This is
+    # the number that keeps a rower on their seat.** The spine pivots at the
+    # waist, 260 mm above the hip joint, so leaning back swings the hips
+    # forward off the thwart and takes the legs — and the braced feet — with
+    # them: 160 mm of foot skating over the floorboards, once a stroke. The
+    # root undoes it, which pins the hips and lets the chest do the swinging
+    # a rower's chest actually does.
+    perch = WAIST_Z - HIP_Z
+    _action(rig, "row")
+    _rest(rig)
+    for f in range(frames + 1):
+        frame = f + 1
+        t = f / frames
+        # 0 at the catch (arms out, body forward), 1 at the finish.
+        drive = 0.5 - 0.5 * math.cos(t * math.tau)
+
+        # Forward at the catch, leaning back at the finish. A push stroke
+        # leans into the handles; half a radian either way would be somebody
+        # falling out of the boat.
+        swing_back = 0.34 - 0.62 * drive
+        _pose(rig, "root", frame,
+              shift=(0, -perch * math.sin(swing_back),
+                     (SEAT_Z - WAIST_Z) + perch * math.cos(swing_back)))
+        _pose(rig, "spine", frame, pitch=swing_back)
+        # **The legs are furniture and the chest is not.** A fixed-seat boat
+        # does not slide, so the thighs hold one angle *against the boat* for
+        # the whole stroke while the body swings over them — which means
+        # every angle here is a world angle with the spine's swing taken back
+        # out of it, and the ankle with the knee's fold out of it as well.
+        # Get that wrong and the feet paddle in the bilge in time with the
+        # stroke.
+        for bone in ("leg_l", "leg_r"):
+            _pose(rig, bone, frame, pitch=-1.13 - swing_back)
+        for bone in ("shin_l", "shin_r"):
+            _pose(rig, bone, frame, pitch=0.64)
+        for bone in ("foot_l", "foot_r"):
+            _pose(rig, bone, frame, pitch=0.49)
+
+        # Arms: straight out at the catch, drawn to the ribs at the finish.
+        #
+        # **The elbow has to come down, not just fold.** Left pointing forward
+        # while the forearm folds, the hand finishes up beside the ear —
+        # the arm curls rather than pulls, because a hand cannot get behind a
+        # shoulder the upper arm is still holding out in front of it. So the
+        # upper arm swings back through vertical over the stroke and the
+        # forearm folds against it, which puts the hands at the chest.
+        for bone, side in (("arm_l", 1), ("arm_r", -1)):
+            _pose(rig, bone, frame, pitch=-1.45 + 1.60 * drive,
+                  roll=-side * 0.22)
+        for bone in ("forearm_l", "forearm_r"):
+            _pose(rig, bone, frame, pitch=-0.05 - 1.50 * drive)
+        for bone, side in (("hand_l", 1), ("hand_r", -1)):
+            _pose(rig, bone, frame, pitch=0.20, roll=side * 0.15)
+        _pose(rig, "head", frame, pitch=0.10 - 0.16 * drive)
 
 
 def alert(rig, seconds=1.75):
@@ -881,6 +1094,8 @@ def build():
     idle(rig)
     walk(rig)
     run(rig)
+    swim(rig)
+    row(rig)
     alert(rig)
     rig.animation_data.action = bpy.data.actions["idle"]
     bpy.context.scene.frame_set(1)

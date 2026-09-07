@@ -20,7 +20,7 @@ public enum AnimState {
     IDLE("idle", "idle", "stand"),
 
     /** Moving at a normal pace. */
-    WALK("walk", "walk", "move", "swim"),
+    WALK("walk", "walk", "move"),
 
     /** Fleeing, or covering ground. */
     RUN("run", "run", "sprint", "flee"),
@@ -59,7 +59,35 @@ public enum AnimState {
      * <p>Nothing but a hostile species ever enters it, so every one of the
      * thirteen hundred ordinary animals is unaffected by its existence.
      */
-    STRIKE("strike", "strike", "attack", "bite", "lunge", "swipe");
+    STRIKE("strike", "strike", "attack", "bite", "lunge", "swipe"),
+
+    /**
+     * In the water under their own power — <b>and the reason {@code walk} no
+     * longer answers to {@code swim}.</b>
+     *
+     * <p>It was an alias on {@link #WALK} for as long as swimming was
+     * something only an animal did, and an otter crossing a river is fairly
+     * described as walking through it. A <em>person</em> swimming is not: the
+     * player has a walk cycle and a breaststroke, they are different clips,
+     * and one alias cannot name both. So this is a state of its own and
+     * {@code walk} keeps only the names that mean walking.
+     *
+     * <p>Nothing that was working stops: no animal model in this repository
+     * ships a {@code swim} clip, and an animal never enters this state, so the
+     * thirteen hundred are posed exactly as they were.
+     */
+    SWIM("swim", "swim", "stroke", "paddle"),
+
+    /**
+     * Sitting to a pair of oars.
+     *
+     * <p>The one state in this file that is a piece of <em>furniture</em> as
+     * much as a pose: a rower is folded onto a thwart, feet braced on the
+     * floorboards, and the distance between those two is a boat's rather than
+     * a body's. See {@code BoatModel}, and §17 of the models README for the
+     * heights a clip has to be authored against.
+     */
+    ROW("row", "row", "oar");
 
     private final String key;
     private final String[] clipNames;
@@ -95,6 +123,11 @@ public enum AnimState {
             // a run cycle on purpose — a mutant winding up is the moment the
             // player is meant to react to.
             case STRIKE -> 1.4;
+            // A stroke and a half a second for a breaststroke, and rather less
+            // for a pull on the oars — both slower than the legs they replace,
+            // which is what swimming and rowing feel like from the bank.
+            case SWIM -> 0.9;
+            case ROW -> 0.55;
         };
     }
 

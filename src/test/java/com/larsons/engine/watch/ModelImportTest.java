@@ -690,6 +690,114 @@ class ModelImportTest {
         }
     }
 
+    // --- the player, in and out of the water ------------------------------------------
+
+    /** One swimmer, from the file rather than from the boxes. */
+    private static Mesh swimming(double bodyPitch) {
+        Mesh.Builder mesh = Mesh.builder(0, 0, 0, false, 1);
+        WalkerModel.swimmer(mesh, 0, 0, 0, 0, bodyPitch, 1, 0, true, 0x4A6B33, List.of());
+        return mesh.build();
+    }
+
+    private static Mesh standing() {
+        Mesh.Builder mesh = Mesh.builder(0, 0, 0, false, 1);
+        WalkerModel.walker(mesh, 0, 0, 0, 0, false, 0, 0,
+                WalkerModel.Leap.GROUNDED, 0x4A6B33, List.of(), 0);
+        return mesh.build();
+    }
+
+    /**
+     * A swimmer and a rower are drawn from the file too.
+     *
+     * <p>They were the documented edge of this for as long as those two poses
+     * were numbers no clip knew — a spine laid along a dive, a body folded onto
+     * a thwart. Both are clips now, so a walker who wades into a lake stays the
+     * figure they were on the bank.
+     */
+    @Test
+    void aModelledWalkerSwimsAndRowsFromTheFileToo(@TempDir Path dir) throws IOException {
+        Files.createDirectories(dir.resolve("characters"));
+        Files.write(dir.resolve("characters/walker.glb"), glbBytes());
+
+        SceneModels.setDirectory(dir);
+        try {
+            assertTrue(WalkerModel.imported(), "the dropped-in walker was not found");
+            assertEquals(2, swimming(0).triangleCount(),
+                    "a swimmer fell back to the boxes");
+            Mesh.Builder mesh = Mesh.builder(0, 0, 0, false, 1);
+            WalkerModel.rower(mesh, 0, 0, 0, 0, 0, 0.25, 0x4A6B33, List.of());
+            assertEquals(2, mesh.build().triangleCount(),
+                    "a rower fell back to the boxes");
+        } finally {
+            reset();
+        }
+    }
+
+    /**
+     * <b>An upright swimmer is the standing figure, to the vertex.</b>
+     *
+     * <p>Which is what makes wading out of your depth a tip rather than a cut
+     * to a different model, and it is the one assertion that pins
+     * {@link SceneModel.Lean}'s sign <em>and</em> its pivot at once: get either
+     * wrong and a swimmer treading water is standing somewhere else.
+     */
+    @Test
+    void anUprightSwimmerIsTheStandingFigure(@TempDir Path dir) throws IOException {
+        Files.createDirectories(dir.resolve("characters"));
+        Files.write(dir.resolve("characters/walker.glb"), glbBytes());
+
+        SceneModels.setDirectory(dir);
+        try {
+            Mesh standing = standing();
+            Mesh treading = swimming(Math.PI / 2);
+            assertEquals(standing.vertexCount(), treading.vertexCount());
+            float[] a = standing.vertices(), b = treading.vertices();
+            for (int i = 0; i < a.length; i++) {
+                assertEquals(a[i], b[i], 1e-4f,
+                        "a swimmer holding station drifted off the standing figure");
+            }
+        } finally {
+            reset();
+        }
+    }
+
+    /** …and laying one down puts their head in front of them, not above them. */
+    @Test
+    void aProneSwimmerIsLaidOutForward(@TempDir Path dir) throws IOException {
+        Files.createDirectories(dir.resolve("characters"));
+        Files.write(dir.resolve("characters/walker.glb"), glbBytes());
+
+        SceneModels.setDirectory(dir);
+        try {
+            Mesh upright = swimming(Math.PI / 2);
+            Mesh prone = swimming(0);
+            assertTrue(prone.maxZ() < upright.maxZ() - 0.5,
+                    "a prone swimmer is still standing up");
+            assertTrue(prone.minY() < upright.minY() - 0.2,
+                    "a prone swimmer was laid out backwards, or not at all");
+        } finally {
+            reset();
+        }
+    }
+
+    /**
+     * {@code swim} names its own state, and {@code walk} no longer answers to
+     * it.
+     *
+     * <p>It was an alias on {@code WALK} while swimming was something only an
+     * animal did. A person has both a walk cycle and a breaststroke, and one
+     * alias cannot name two clips.
+     */
+    @Test
+    void swimAndRowAreStatesOfTheirOwn() {
+        assertEquals(AnimState.SWIM, AnimState.forClip("swim"));
+        assertEquals(AnimState.SWIM, AnimState.forClip("ranger_swim"));
+        assertEquals(AnimState.ROW, AnimState.forClip("row"));
+        assertEquals(AnimState.WALK, AnimState.forClip("walk"));
+        assertEquals(AnimState.WALK, AnimState.forClip("walk_cycle"));
+        assertNotEquals(AnimState.WALK, AnimState.forClip("swim"));
+    }
+
     // --- cosmetics ------------------------------------------------------------------
 
     /**

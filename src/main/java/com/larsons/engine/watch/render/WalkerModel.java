@@ -105,6 +105,15 @@ public final class WalkerModel {
     private static final double STILL = 0.15, RUNNING = 6.2;
 
     /**
+     * How far up a figure its hips are, as a share of its height.
+     *
+     * <p>The number the boxes below already lay a swimmer down about, given a
+     * name because an imported model has to be tipped about the same point or
+     * the two figures float at different depths. See {@link SceneModel.Lean}.
+     */
+    private static final double HIP_SHARE = 0.47;
+
+    /**
      * How far a thigh swings from vertical at a full walk, in radians.
      *
      * <p>Shorter than it looks: the hip rises and falls by the leg's length
@@ -639,6 +648,24 @@ public final class WalkerModel {
         double fx = sin, fy = -cos;
         double sx = cos, sy = sin;
 
+        SceneModel figure = model();
+        if (figure != null) {
+            // Drawn from the floorboards rather than from the water, because
+            // that is what the `row` clip is measured against: it folds the
+            // figure onto a thwart 350 mm up and puts the boots back down on
+            // the boards. Both of those ride the same bob, so the rower rises
+            // and falls with the hull for nothing.
+            //
+            // Along the boat by SEAT_ALONG, which is where the thwart is. The
+            // clip keeps the hips over its own origin and reaches the feet
+            // forward from there, so this one offset seats the whole figure.
+            figure.mesh(mesh, x + fx * BoatModel.SEAT_ALONG,
+                    y + fy * BoatModel.SEAT_ALONG, BoatModel.floorZ(waterZ, bob),
+                    yaw + SceneModel.PERSON_TURN, AnimState.ROW,
+                    RowStroke.wrap(stroke), HEIGHT, uv, 0);
+            return;
+        }
+
         double seat = BoatModel.thwartZ(waterZ, bob);
         double floor = BoatModel.floorZ(waterZ, bob);
         double hipsZ = seat + 0.11;
@@ -827,6 +854,29 @@ public final class WalkerModel {
         int coat = tint;
         int skin = WatchMaterials.shade(WatchMaterial.CLAY);
         int boot = WatchMaterials.shade(WatchMaterial.DARK_BARK);
+
+        SceneModel figure = model();
+        if (figure != null) {
+            // <b>The clip is authored standing up and tipped here.</b> A
+            // swimmer's body angle runs from upright, treading water, to
+            // head-down in a dive, and it is set by where the player is
+            // looking rather than by any keyframe — so the file supplies the
+            // stroke and SceneModel.Lean supplies the angle. At a bodyPitch of
+            // a right angle the tip is nothing and this draws the standing
+            // figure exactly, which is the same promise the boxes below make:
+            // somebody wading out of their depth tips into a swim rather than
+            // cutting to a different model.
+            //
+            // About the hips, and for the reason the boxes give at length: the
+            // game floats a swimmer with their feet FLOAT_DEPTH under, which is
+            // chest-deep for somebody upright, so a body laid down about its
+            // hips puts the head at the waterline without being told where the
+            // water is.
+            figure.mesh(mesh, x, y, z, yaw + SceneModel.PERSON_TURN, AnimState.SWIM,
+                    RowStroke.wrap(phase), HEIGHT, uv, 0, null,
+                    new SceneModel.Lean(UPRIGHT - bodyPitch, HIP_SHARE));
+            return;
+        }
 
         double stroke = RowStroke.wrap(phase);
         double effort = Math.min(1, Math.max(0, drive));
