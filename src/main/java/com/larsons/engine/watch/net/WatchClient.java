@@ -151,6 +151,9 @@ public final class WatchClient implements AutoCloseable {
     /** Put something on, or take it off. */
     public void sendWear(String key) { send(WatchProto.wear(key)); }
 
+    /** Ask to be drawn as a different figure. */
+    public void sendFigure(String key) { send(WatchProto.figure(key)); }
+
     /** Ask the keeper we are standing at to stamp a fresh page. */
     public void sendStamp(long shopId) { send(WatchProto.stamp(shopId)); }
 

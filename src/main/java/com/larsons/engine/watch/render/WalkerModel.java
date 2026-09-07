@@ -1,6 +1,7 @@
 package com.larsons.engine.watch.render;
 
 import com.larsons.engine.watch.Cosmetics;
+import com.larsons.engine.watch.Figure;
 import com.larsons.engine.watch.life.AnimState;
 import com.larsons.engine.watch.model.ModelRig;
 import com.larsons.engine.watch.model.SceneModel;
@@ -84,8 +85,13 @@ public final class WalkerModel {
      * <p><b>Deliberately not {@code characters/ranger}.</b> Filing both under
      * one name would make every trading-post ranger the player's twin, which
      * is the one thing the ranger's own silhouette was designed to avoid.
+     *
+     * <p>This is {@link Figure#WALKER}'s file. There is a second one — see
+     * {@link Figure} — and this constant is the first figure's name rather
+     * than "the player's", so that a player who has dropped their own
+     * {@code characters/walker.glb} into an installed game still gets it.
      */
-    public static final String MODEL = "characters/walker";
+    public static final String MODEL = Figure.WALKER.model();
 
     /** How tall a standing walker is, in metres. */
     public static final double HEIGHT = 1.78;
@@ -277,16 +283,20 @@ public final class WalkerModel {
         walker(mesh, x, y, z, yaw, crouching, phase, speed, leap, tint, worn, 0);
     }
 
-    /** Whether walkers are being drawn from an imported file. */
-    public static boolean imported() { return model() != null; }
+    /** Whether the first figure is being drawn from an imported file. */
+    public static boolean imported() { return imported(Figure.DEFAULT); }
 
-    private static SceneModel model() {
+    /** Whether this figure is being drawn from an imported file. */
+    public static boolean imported(Figure figure) { return model(figure) != null; }
+
+    private static SceneModel model(Figure figure) {
         // One unit tall, and drawn at `height` metres per unit below — which is
         // CROUCH_HEIGHT when they are crouching, exactly as the boxes are
         // scaled down rather than posed. A crude crouch, but the same crude
         // crouch, so dropping a file in does not change what crouching looks
         // like as well as what the player looks like.
-        return SceneModels.of(MODEL, ModelRig.Kind.HUMANOID, SceneModel.Size.height(1));
+        return SceneModels.of((figure == null ? Figure.DEFAULT : figure).model(),
+                ModelRig.Kind.HUMANOID, SceneModel.Size.height(1));
     }
 
     /**
@@ -307,17 +317,39 @@ public final class WalkerModel {
     public static void walker(Mesh.Builder mesh, double x, double y, double z,
                               double yaw, boolean crouching, double phase, double speed,
                               Leap leap, int tint, List<String> worn, double clock) {
+        walker(mesh, Figure.DEFAULT, x, y, z, yaw, crouching, phase, speed, leap,
+                tint, worn, clock);
+    }
+
+    /**
+     * The same walker again, as a particular {@link Figure}.
+     *
+     * <p><b>Which body, and therefore which wardrobe.</b> A figure picks two
+     * files and nothing else — {@code characters/<key>} for the person and
+     * {@code cosmetics/<key>/} for the clothes cut to them — and every other
+     * number in this class is shared, deliberately: both figures are
+     * {@link #HEIGHT} tall, walk at the same speed and reach the same
+     * distance. See {@link Figure} for why that is not going to change.
+     *
+     * <p>Every overload above is this one at {@link Figure#DEFAULT}, which is
+     * the figure this game drew before there was a choice, so a caller with no
+     * opinion draws exactly what it always drew.
+     */
+    public static void walker(Mesh.Builder mesh, Figure who, double x, double y,
+                              double z, double yaw, boolean crouching, double phase,
+                              double speed, Leap leap, int tint, List<String> worn,
+                              double clock) {
         float[] uv = new float[4];
         WatchMaterials.uv(WatchMaterial.PLANK, uv);
         // Anything somebody has modelled in Blender is a rigged figure of its
         // own rather than a box on a joint, so it is drawn once, whole, at the
         // end — and taken off the list the joints below are handed. See
         // CosmeticModel.overlay.
-        List<String> boxes = CosmeticModel.boxesOnly(worn);
+        List<String> boxes = CosmeticModel.boxesOnly(who, worn);
 
         double height = crouching ? CROUCH_HEIGHT : HEIGHT;
 
-        SceneModel figure = model();
+        SceneModel figure = model(who);
         if (figure != null) {
             // Turned, because the boxes below and an imported model do not
             // agree about which way a yaw of zero points — SceneModel.PERSON_TURN
@@ -331,7 +363,7 @@ public final class WalkerModel {
             // The clothes still go on over the top, at `z` for the same reason
             // the boxes put them at `base`: a piece authored on a reference
             // walker measured itself from the floor.
-            CosmeticModel.overlay(mesh, worn, x, y, z, yaw, height, speed, phase, uv);
+            CosmeticModel.overlay(mesh, who, worn, x, y, z, yaw, height, speed, phase, uv);
             return;
         }
 
@@ -512,7 +544,7 @@ public final class WalkerModel {
         // rather than at `base + lift`: the lift is what puts the lower boot on
         // the floor, and the floor is where a piece authored on a reference
         // walker measured itself from.
-        CosmeticModel.overlay(mesh, worn, x, y, base, yaw, height, speed, phase, uv);
+        CosmeticModel.overlay(mesh, who, worn, x, y, base, yaw, height, speed, phase, uv);
     }
 
     /**
@@ -638,6 +670,13 @@ public final class WalkerModel {
     public static void rower(Mesh.Builder mesh, double x, double y, double waterZ,
                              double yaw, double bob, double stroke, int tint,
                              List<String> worn) {
+        rower(mesh, Figure.DEFAULT, x, y, waterZ, yaw, bob, stroke, tint, worn);
+    }
+
+    /** …and as a particular {@link Figure}. Both of them row the same boat. */
+    public static void rower(Mesh.Builder mesh, Figure who, double x, double y,
+                             double waterZ, double yaw, double bob, double stroke,
+                             int tint, List<String> worn) {
         float[] uv = new float[4];
         WatchMaterials.uv(WatchMaterial.PLANK, uv);
         int coat = tint;
@@ -648,7 +687,7 @@ public final class WalkerModel {
         double fx = sin, fy = -cos;
         double sx = cos, sy = sin;
 
-        SceneModel figure = model();
+        SceneModel figure = model(who);
         if (figure != null) {
             // Drawn from the floorboards rather than from the water, because
             // that is what the `row` clip is measured against: it folds the
@@ -849,13 +888,22 @@ public final class WalkerModel {
     public static void swimmer(Mesh.Builder mesh, double x, double y, double z,
                                double yaw, double bodyPitch, double drive, double phase,
                                boolean surfaced, int tint, List<String> worn) {
+        swimmer(mesh, Figure.DEFAULT, x, y, z, yaw, bodyPitch, drive, phase, surfaced,
+                tint, worn);
+    }
+
+    /** …and as a particular {@link Figure}. Both of them swim the same lake. */
+    public static void swimmer(Mesh.Builder mesh, Figure who, double x, double y,
+                               double z, double yaw, double bodyPitch, double drive,
+                               double phase, boolean surfaced, int tint,
+                               List<String> worn) {
         float[] uv = new float[4];
         WatchMaterials.uv(WatchMaterial.PLANK, uv);
         int coat = tint;
         int skin = WatchMaterials.shade(WatchMaterial.CLAY);
         int boot = WatchMaterials.shade(WatchMaterial.DARK_BARK);
 
-        SceneModel figure = model();
+        SceneModel figure = model(who);
         if (figure != null) {
             // <b>The clip is authored standing up and tipped here.</b> A
             // swimmer's body angle runs from upright, treading water, to
@@ -1136,10 +1184,16 @@ public final class WalkerModel {
      * person, and a pair of gloves you can see on everybody else and not on
      * yourself is the version of this feature that feels broken.
      *
-     * <p>Only the {@linkplain Cosmetics.Slot#HANDS hand} slot, and only its
-     * boxes. Nothing else is in shot — a hat is behind the camera — and a
-     * {@linkplain CosmeticModel#importedFor modelled} piece is a whole figure
-     * in the world's frame, which is the one place this method is not.
+     * <p>Only the {@linkplain Cosmetics.Slot#HANDS hand} slot: nothing else is
+     * in shot, because a hat is behind the camera.
+     *
+     * <p><b>And always the boxes, even for a piece somebody has modelled.</b>
+     * A modelled piece is a whole rigged figure in the <em>world's</em> frame,
+     * and this method is the one place in the game that is not — the arms are
+     * built out of the camera's own basis so they hang in front of the view
+     * the way a held object does. Filtering the modelled pieces out here, which
+     * is what this used to do, was worse than either: your mittens were on
+     * everybody else's screen and your own hands were bare.
      */
     public static void hands(Mesh.Builder mesh, double eyeX, double eyeY, double eyeZ,
                              double dirX, double dirY, double dirZ,
@@ -1156,7 +1210,6 @@ public final class WalkerModel {
         double yaw = Math.atan2(dirX, -dirY);
         double bobUp = Math.sin(bob * Math.PI * 2) * 0.035 * sway;
         double bobSide = Math.sin(bob * Math.PI) * 0.028 * sway;
-        List<String> boxes = CosmeticModel.boxesOnly(worn);
 
         for (int side = -1; side <= 1; side += 2) {
             // The right hand reaches; the left stays where it is. One hand
@@ -1180,7 +1233,7 @@ public final class WalkerModel {
             // world's: in first person "up" is wherever you are looking, and a
             // cuff laid out along the world's would swing off the wrist the
             // moment you looked at your feet.
-            CosmeticModel.wear(mesh, boxes, Cosmetics.Slot.HANDS,
+            CosmeticModel.wear(mesh, worn, Cosmetics.Slot.HANDS,
                     new CosmeticModel.Fit(cx, cy, cz, upX, upY, upZ, yaw, 0.055), sleeve);
         }
     }

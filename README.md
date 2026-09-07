@@ -3682,6 +3682,19 @@ thwart. In **first person** the same model supplies **hands**, built in the
 camera's own basis so they follow the view exactly, with a reach gesture when
 you pick something and whatever you are carrying in the right one.
 
+**And there are two of them to be** ([`Figure`](src/main/java/com/larsons/engine/watch/Figure.java)):
+the walker this game has always drawn — square in the shoulder, campaign hat,
+field coat — and the **wayfarer**, slighter through the shoulder with a waist cut
+above the belt, a soft felt hat and a plait over one shoulder. Both are modelled
+in Blender, both carry the five clips a walker is ever drawn in, and both are
+1.78 m to the crown. You pick one on the New Walk screen before setting off and
+change it from the pause screen mid-walk (<kbd>Esc</kbd>, then ←/→); it is saved,
+and it rides everybody's snapshot row so a party spread across a valley sees each
+other correctly. **Nothing else about a walker changes with it** — not the
+height, not the reach, not the speed — for the same reason nothing on the clothes
+rail has a stat on it. Adding a third is a row in that file, a `.glb`, and one run
+of a script.
+
 You can also **dress that person up**
 ([`CosmeticModel`](src/main/java/com/larsons/engine/watch/render/CosmeticModel.java)).
 Whatever you bought off a keeper's rail is hung on the figure *after* it is
@@ -3694,21 +3707,32 @@ face slots go on through the same call that already puts the ordinary hat on —
 which is why your boater is still on your head when you are swimming face-down
 across a lake.
 
-**And every one of them can be modelled in Blender instead.** Drop
-`watch/models/cosmetics/<piece key>.glb` beside the jar or on the classpath and
-it is worn instead of the boxes — the same drop-in the ranger and the 1323
-animals already have, failing the same soft way if the file is broken. A worn
-model is a *rigged garment*: authored in place on a reference figure, bound to
-the same bone names a character uses, so it follows the joint it hangs on, spans
-two of them if it needs to, and **plays its own animation** — name a Blender
-action `walk` and it runs on the wearer's own gait clock, in step with the legs
-underneath it. A piece with no clip still moves. The contract is §16 of
-[`watch/models/README.md`](src/main/resources/watch/models/README.md), whose
-reference-figure table is itself held to the real mesh by a test — and
+**And every one of them is modelled in Blender** — twice, once per figure, which
+is thirty-six files. Drop `watch/models/cosmetics/<figure>/<piece key>.glb`
+beside the jar or on the classpath and it is worn instead of whatever was there,
+the same drop-in the ranger and the 1323 animals already have, failing the same
+soft way if the file is broken. A worn model is a *rigged garment*: authored in
+place on a body, bound to the same bone names a character uses, so it follows the
+joint it hangs on, spans two of them if it needs to, and can **play its own
+animation** — name a Blender action `walk` and it runs on the wearer's own gait
+clock, in step with the legs underneath it. A piece with no clip still moves,
+which is why the shipped wardrobe ships none.
+
+**Why twice.** A worn piece is the one model in this game that is never measured
+and never rescaled — the metre an artist puts a hat at is the metre it is worn at,
+which is what lets a cape hang off the shoulders *and* reach the knee. That makes
+a wardrobe something cut to a body: a collar cut for a 0.33 m chest stands 40 mm
+off a 0.28 m one, and a hat cut to cover a square crown 0.47 m across the corners
+swallows a round one. So the game looks in the wearer's own figure folder first
+and in the old figure-agnostic one second. Both wardrobes are generated from a
+single table of landmarks in [`tools/blender/figures.py`](tools/blender/figures.py),
+which is the only way thirty-six binaries that do not diff can be kept honest —
+and `PlayerFiguresTest` draws every one of them on every figure and checks it is
+worn where its slot says. The contract is §16 of
+[`watch/models/README.md`](src/main/resources/watch/models/README.md), and
 [`tools/blender/`](tools/blender/README.md) has the walkthrough with the clicks
-in it plus a script that builds the reference walker and its armature in
-Blender for you, so there is a body to fit the garment to and no numbers to
-retype.
+in it plus the scripts that build both figures and the whole wardrobe, so there
+is a body to fit a garment to and no numbers to retype.
 
 Wiring that up found a ninety-degree bug older than the wardrobe. This game has
 **two facing conventions** — an animal's boxes point along `+x` at a yaw of zero

@@ -49,6 +49,7 @@ import java.util.Map;
  *   client → server   {"t":"buy","s":shopId,"k":"plank"}   {"t":"stamp","s":shopId}
  *   client → server   {"t":"buyfit","s":shopId,"k":"wool_scarf"}   (off the rail)
  *   client → server   {"t":"wear","k":"wool_scarf"}   (on if off, off if on)
+ *   client → server   {"t":"figure","k":"wayfarer"}   (which body to be drawn as)
  *
  *   client → server   {"t":"chart","r":512}           (a map of what I can see)
  *   client → server   {"t":"rename","c":mapId,"n":"North Wood"}
@@ -440,6 +441,22 @@ public final class WatchProto {
      */
     public static Map<String, Object> wear(String key) {
         Map<String, Object> m = msg("wear");
+        m.put("k", key);
+        return m;
+    }
+
+    /**
+     * Be drawn as a different figure from now on.
+     *
+     * <p>A verb rather than a field on the join, because it can be changed in
+     * the middle of a walk — from the pause screen, without going anywhere —
+     * and because the lobby's choice is then the same message sent once on
+     * arrival rather than a second path that only the first frame uses. The
+     * key is a {@link com.larsons.engine.watch.Figure}'s; anything the host
+     * does not recognise is ignored and leaves them as they were.
+     */
+    public static Map<String, Object> figure(String key) {
+        Map<String, Object> m = msg("figure");
         m.put("k", key);
         return m;
     }

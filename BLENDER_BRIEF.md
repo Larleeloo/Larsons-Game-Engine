@@ -271,8 +271,10 @@ README:
 | File | Replaces |
 |---|---|
 | `characters/ranger.glb` | the ranger |
-| `characters/walker.glb` | **the player**, and every other walker — see the models README §17. Same brief as the ranger's, plus `run`, `swim` and `row` clips, and a knee and an elbow to bend them with |
-| `cosmetics/<piece key>.glb` | one thing the player wears — see part 4 |
+| `characters/walker.glb` | **the first player figure**, and every other walker drawn as it — see the models README §17. Same brief as the ranger's, plus `run`, `swim` and `row` clips, and a knee and an elbow to bend them with |
+| `characters/wayfarer.glb` | **the second one.** Same brief again; a row in `Figure.java` is what makes a third |
+| `cosmetics/<figure>/<piece key>.glb` | one thing a player wears, cut to one figure — see part 4 |
+| `cosmetics/<piece key>.glb` | the same, for a piece that fits anybody |
 | `<species key>.glb` | one of the 1323 animals |
 | `<family key>.glb` | all 49 animals of a family |
 | `<anything>.obj` | any of the above, static, no animation |
@@ -281,58 +283,78 @@ README:
 
 ## 4. Clothes for the player
 
-The eighteen things a trading post sells off its clothes rail are boxes too, and
-replaceable the same way — one `.glb` per piece, in `cosmetics/`. **This is the
-one kind of model in this game that is authored *on* something else**, so the
-brief below is shaped differently from the ranger's: you are making a garment,
-not a figure.
+The eighteen things a trading post sells off its clothes rail are modelled
+already — twice, once for each player figure — and replaceable the same way:
+one `.glb` per piece per figure, under `cosmetics/<figure>/`. **This is the one
+kind of model in this game that is authored *on* something else**, so the brief
+below is shaped differently from the ranger's: you are making a garment, not a
+figure.
+
+**A garment belongs to a body.** A worn piece is never measured and never
+rescaled — the metre you put a hat at is the metre it is worn at — so the
+eighteen under `cosmetics/walker/` are cut to the walker and the eighteen under
+`cosmetics/wayfarer/` are cut to the wayfarer, and neither set fits the other.
+Decide which you are making before you model anything.
+
+**Before you hand this to anybody, check whether you want the generator
+instead.** `tools/blender/cosmetics.py` builds all thirty-six pieces from one
+table of measurements in `tools/blender/figures.py`; changing a proportion there
+and re-running is a one-line change where re-modelling by hand is an evening.
+The brief below is for a *new* piece, or for replacing one where the generator's
+answer is not good enough.
 
 **Read `src/main/resources/watch/models/README.md` §16 first.** It is the
 contract; this is a summary of it. If you are doing the modelling yourself
 rather than handing it to a local session, go to
 [`tools/blender/README.md`](tools/blender/README.md) instead — it is the same
-thing with the clicks in it, and it comes with a script that builds the
-reference figure and its armature in one go.
+thing with the clicks in it.
 
 ### Paste this into the local session
 
 ---8<---
 
 You have Blender available over MCP. Build a **<the piece>** for the Field Guide
-game in this repository and export it as a `.glb`.
+game in this repository, cut to the **<walker | wayfarer>** figure, and export it
+as a `.glb`.
 
 **Read `src/main/resources/watch/models/README.md` §16, then §9–§14.** §16 is the
 contract for a worn piece specifically; the rest is the mesh pipeline it sits on.
 
-**Build the reference figure first** by running
-`tools/blender/cosmetic_reference.py` — it makes the walker as the boxes the game
-draws, plus an armature with the bone names the importer binds. That figure is
-what you fit the garment to and it is the only way to get the placement right.
-(If you would rather build it by hand, §16's landmark table is what the script
-writes: feet on `Z = 0`, facing `−Y`, 1.95 m to the top of the hat, shoulders at
-Z 1.45 and ±0.20 across, head a 0.23 m cube centred at Z 1.70.)
+**Build the figure first**, so you have a body to fit the garment to:
+
+```bash
+blender --python tools/blender/ranger.py       # the walker
+blender --python tools/blender/wayfarer.py     # the wayfarer
+```
+
+Either leaves the figure rigged, standing on `Z = 0`, facing `−Y`, 1.78 m to the
+crown, with the bone names the importer binds. §16's first table has every
+landmark of both of them, and `tools/blender/figures.py` is where those numbers
+actually live.
 
 Then:
 
 1. Model the piece **where it sits on that figure**, in metres, flat-shaded,
-   painted with materials rather than textures (§12). Match the density of the
-   existing boxed version — read it in
+   painted with materials rather than textures (§12). For the shape and the
+   density to aim at, read the boxed version in
    `src/main/java/com/larsons/engine/watch/render/CosmeticModel.java`, which
-   describes all eighteen pieces box by box, and take its colours from
-   `Cosmetics.java`.
+   describes all eighteen pieces box by box, and the generated version in
+   `tools/blender/cosmetics.py`. Take the colours from `Cosmetics.java`.
 2. **Rig it** to bones named per §10 — `spine` for anything on the body, `head`
    for anything on the head, `hand_l` / `hand_r`, `foot_l` / `foot_r`. A cape is
    `spine`; a hood is `head`; mittens are one piece per hand.
 3. Animate **`walk`** if you animate anything. It is driven by the wearer's own
    gait clock, so a cloak's swing lands in step with the legs under it. `idle`
    and `run` are the other two states. A piece with no animation still moves —
-   it follows the bone it is rigged to.
-4. **Delete the reference figure.** Export only your piece.
+   it follows the bone it is rigged to, which is why the shipped wardrobe has no
+   clips in it at all.
+4. **Delete the figure.** Export only your piece and the armature.
 5. `Ctrl+A → All Transforms`, triangulate, keep it under **250 triangles** — six
    of these can be on one person and eight people can be in one clearing.
 6. **File → Export → glTF 2.0**, **glTF Binary (.glb)**, *+Y Up*, *Apply
    Modifiers* on, *Animation* on.
-7. Save to `src/main/resources/watch/models/cosmetics/<piece key>.glb`.
+7. Save to
+   `src/main/resources/watch/models/cosmetics/<figure>/<piece key>.glb`.
 
 The keys are in `Cosmetics.java`:
 
@@ -347,12 +369,13 @@ antler_circlet    heron_cloak
 ### Checking it
 
 ```bash
-./gradlew :test --tests '*ModelImportTest*' --tests '*CosmeticsTest*'
-./gradlew run     # buy it at a trading post, then F5 for third person
+./gradlew :test --tests '*PlayerFiguresTest*' --tests '*CosmeticsTest*' --tests '*ModelImportTest*'
+./gradlew run     # Esc and ←/→ to be that figure, then buy it at a post and F5
 ```
 
-If it did not load, one line goes to stderr saying why and the boxes are drawn
-instead.
+`PlayerFiguresTest` is the one that says whether it fits: it draws every piece on
+every figure and checks each is worn where its slot says. If it did not load at
+all, one line goes to stderr saying why and the old version is drawn instead.
 
 ---8<---
 

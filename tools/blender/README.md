@@ -8,9 +8,34 @@ The **contract** is §16 of
 where this file and that one disagree, that one is right. This is the version
 with the clicks in it.
 
+## What is already in this folder
+
+Everything below is the hand-made route. Before you start it, know that the
+whole wardrobe is already generated from a table, and that adding to it may be a
+matter of editing one:
+
+| Script | Builds |
+|---|---|
+| `ranger.py` | the **walker** — the first player figure, and the ranger outside the trading post |
+| `wayfarer.py` | the **wayfarer** — the second player figure. Writes `characters/wayfarer.glb` |
+| `cosmetics.py` | **all eighteen pieces, for both figures.** Writes thirty-six files |
+| `figures.py` | the measurements the last two are built from — every landmark, once |
+| `kit.py` | the shapes they are built out of — boxes, drums, tapers, struts |
+| `cosmetic_reference.py` | the *boxed* reference figure, for the figure-agnostic folder |
+
+```bash
+blender --background --python tools/blender/wayfarer.py
+blender --background --python tools/blender/cosmetics.py
+blender --background --python tools/blender/cosmetics.py -- wayfarer heron_cloak
+```
+
+Redoing one piece by hand is completely legitimate — that is what the rest of
+this file is for. Changing a *proportion* is not: put it in `figures.py` and
+re-run, or the two figures and their two wardrobes will disagree.
+
 ---
 
-## 0. The three facts that matter
+## 0. The four facts that matter
 
 Everything else is detail.
 
@@ -26,59 +51,80 @@ Blender → glTF → importer chain composes to the identity, and a test pins it
 ```
 
 **2. You are making a garment, not a figure.** A cosmetic is authored *on* a
-body: you build the reference walker, fit the piece to it, rig the piece to the
-walker's bones, then delete the body and export the garment. That is what makes
-a cape follow the shoulders it hangs off.
+body: you build the figure, fit the piece to it, rig the piece to that figure's
+bones, then delete the body and export the garment. That is what makes a cape
+follow the shoulders it hangs off.
 
 **3. It is not measured or rescaled.** Every other model in this game is
 normalised to a height and stood on the floor. A cosmetic is not: the size you
 model at and the height you put it at are both kept exactly. Model in metres, at
 life size, where the thing actually sits.
 
+**4. Therefore a garment belongs to a body.** There are two figures you can walk
+as, they are different shapes, and a piece is filed under the one it was cut
+for:
+
+```
+src/main/resources/watch/models/cosmetics/walker/<key>.glb
+src/main/resources/watch/models/cosmetics/wayfarer/<key>.glb
+src/main/resources/watch/models/cosmetics/<key>.glb          ← fits anybody
+```
+
+The first two are used only while that figure's own body is the one being drawn.
+The third is the folder that existed before there were two figures, is used
+whatever is being drawn, and is cut to the **boxed** reference figure instead —
+which is 1.95 m to the top of its hat where the modelled ones are 1.78. Getting
+those two tables mixed up is the one mistake here that puts a hat 170 mm over
+somebody's head, so decide which folder you are filling before you model
+anything.
+
 ---
 
-## 1. Build the reference walker
+## 1. Build the figure you are cutting for
 
-From a clone of this repository:
+**For `cosmetics/walker/` or `cosmetics/wayfarer/`** — the modelled bodies:
+
+```bash
+blender --python tools/blender/ranger.py       # the walker
+blender --python tools/blender/wayfarer.py     # the wayfarer
+```
+
+Either leaves a collection with the figure in it, rigged, standing on `Z = 0`
+facing `−Y`, 1.78 m to the crown. That is the body you fit the garment to.
+
+**For `cosmetics/`** — the figure-agnostic folder:
 
 ```
 Blender → Scripting tab → Open → tools/blender/cosmetic_reference.py → Run Script
 ```
 
-or, to start from nothing:
+You get a collection called **REFERENCE** containing the walker as the *boxes*
+the game draws when there is no character model at all, and an armature whose
+bones are at the joints those boxes pivot about. The boxes are throwaway — you
+delete them at step 6. The armature ships with your piece if you rig to it.
 
-```bash
-blender --python tools/blender/cosmetic_reference.py
-```
-
-You get a collection called **REFERENCE** containing the walker as the boxes the
-game actually draws, and an armature whose bones are already at the joints those
-boxes pivot about. The boxes are throwaway — you delete them at step 6. The
-armature ships with your piece if you rig to it.
-
-If you would rather build it by hand, the landmark table is in §16. The script
-exists because typing thirteen numbers is thirteen chances to mistype one, and a
-reference figure that is two centimetres wrong is a wardrobe that is two
+If you would rather build a figure by hand, both landmark tables are in §16. The
+scripts exist because typing thirteen numbers is thirteen chances to mistype one,
+and a reference figure that is two centimetres wrong is a wardrobe that is two
 centimetres wrong for ever.
-
-> The reference is the *box* walker, which is what the game draws today. If a
-> modelled ranger or a different figure ever replaces it, the clothes still fit:
-> they are rigged to the bones, and the bones are where they are.
 
 ---
 
 ## 2. Model the piece, in place
 
-Turn on **Front orthographic** (numpad 1) and work against the body.
+Turn on **Front orthographic** (numpad 1) and work against the body. The numbers
+below are the **modelled walker's** — for the wayfarer, and for the boxed
+reference figure, read the other columns of §16's tables.
 
 * A **hat** sits on the crown of the one the figure is already wearing — that is
-  at Z 1.95, and anything on the head slot goes *over* it. Look at
-  `REF_hat_brim` and `REF_hat_crown`: those are the boxes you are covering.
-* A **cape** hangs off the shoulders (Z 1.45, ±0.20 across) and down the back.
-  The chest's back face is at **Y +0.22**, so a panel goes at about **Y +0.25**
-  — behind the body, not through it.
-* **Boots** go round `REF_boot_l` / `REF_boot_r`; a **scarf** at the neck,
-  Z 1.59; **mittens** over `REF_hand_l` / `REF_hand_r`, which are 0.11 m cubes.
+  at Z 1.59 for the brim and 1.78 for the top of the crown, and anything on the
+  head slot goes *over* it. A round piece needs a radius of **0.238** to cover
+  the walker's square crown, because that is where its corners are.
+* A **cape** hangs off the shoulders (Z 1.18, ±0.205 across) and down the back.
+  The pack's back face is at **Y +0.33**, so a panel goes at about **Y +0.37** —
+  behind the pack, not through it.
+* **Boots** go round the feet at Z 0–0.25; a **scarf** at the neck, Z 1.27;
+  **mittens** over the hands, which hang at (±0.205, −0.06, 0.59).
 
 Keep it in the house style: **flat-shaded, chunky, low-polygon**. Everything in
 this world is a slightly-rounded box. No subdivision, no smooth shading, no
@@ -125,11 +171,16 @@ corners and moves it rigidly, so weight painting is wasted effort here.
 Overlapping the parts at each joint is what stops daylight showing through when a
 limb bends.
 
-Then parent to the reference armature:
+Then parent to the figure's armature — `REFERENCE_rig`, `ranger_rig` or
+`wayfarer_rig`, whichever you built at step 1:
 
-1. select your piece(s), then shift-select `REFERENCE_rig`;
+1. select your piece(s), then shift-select the rig;
 2. **Ctrl+P → With Automatic Weights** (or **→ Bone**, having picked the bone in
    Pose mode). Either works: whatever the weights say, the dominant bone wins.
+
+All three rigs carry the same fifteen bones under the same names, which is on
+purpose: a garment rigged to one binds correctly against any of them, and only
+its *placement* is figure-specific.
 
 Which bone:
 
@@ -191,16 +242,16 @@ hand-set keys overshoots, which bends a limb backwards.
 
 ## 6. Export
 
-1. **Delete the reference body** — every object named `REF_*`. It is a stand-in
-   for the player and must not ship inside a hat.
+1. **Delete the body** — every object named `REF_*`, `ranger_*` or `wayfarer_*`.
+   It is a stand-in for the player and must not ship inside a hat.
 
-   **Keep `REFERENCE_rig` if you parented to it.** A skinned mesh needs its
-   armature in the file or the skinning is lost, and the spare bones cost
-   nothing: a bone with no geometry on it emits no triangles. Export the rig and
-   your piece together.
+   **Keep the rig if you parented to it.** A skinned mesh needs its armature in
+   the file or the skinning is lost, and the spare bones cost nothing: a bone
+   with no geometry on it emits no triangles. Export the rig and your piece
+   together.
 
    If you took the no-armature route (step 4's last paragraph, objects named for
-   their bone), delete the whole REFERENCE collection — there is nothing to keep.
+   their bone), delete the whole collection — there is nothing to keep.
 
 2. Select everything, **Object → Apply → All Transforms** (`Ctrl+A`). A mirrored
    object — one with a negative scale — exports inside-out, because a negative
@@ -224,8 +275,12 @@ hand-set keys overshoots, which bends a limb backwards.
 5. Save it as:
 
    ```
-   src/main/resources/watch/models/cosmetics/<piece key>.glb
+   src/main/resources/watch/models/cosmetics/<figure>/<piece key>.glb
    ```
+
+   `<figure>` is `walker` or `wayfarer` — whichever body you fitted it to. Drop
+   the folder only if you cut it to the boxed reference figure and mean it to be
+   worn by anybody; see fact 4.
 
    The eighteen keys:
 
@@ -242,27 +297,34 @@ hand-set keys overshoots, which bends a limb backwards.
 ## 7. Check it
 
 ```bash
-./gradlew :test --tests '*ModelImportTest*' --tests '*CosmeticsTest*'
+./gradlew :test --tests '*PlayerFiguresTest*' --tests '*CosmeticsTest*' --tests '*ModelImportTest*'
 ./gradlew run
 ```
 
-In the game: walk to a trading post, press <kbd>E</kbd>, press <kbd>←</kbd> for
+`PlayerFiguresTest` is the one that will tell you whether it fits: it draws every
+piece on every figure out of `src/main/resources` and checks each is worn where
+its slot says, on both bodies, inside the triangle budget.
+
+In the game: press <kbd>Esc</kbd> and <kbd>←</kbd>/<kbd>→</kbd> to be the figure
+you cut it for, walk to a trading post, press <kbd>E</kbd>, press <kbd>←</kbd> for
 the clothes rail, buy the piece, then <kbd>F5</kbd> for third person.
 
-**If it did not load**, one line went to stderr saying why and the boxes were
-drawn instead:
+**If it did not load**, one line went to stderr saying why and whatever was there
+before was drawn instead:
 
 ```
-watch: could not load model watch/models/cosmetics/heron_cloak.glb (no triangles in it) — keeping the fallback
+watch: could not load model watch/models/cosmetics/walker/heron_cloak.glb (no triangles in it) — keeping the fallback
 ```
 
 The causes, in the order they actually happen:
 
 | It looks like | It is |
 |---|---|
-| the boxes are still there, and stderr said nothing | the filename does not match a key, or the folder is not the one being read — a `watch/models` folder **next to the jar** wins over the classpath |
-| the boxes are still there, and stderr said why | a `.gltf` whose `.bin` was not beside it, a truncated file, or nothing selected on export. Use `.glb` |
-| it is lying at their feet | you modelled it at the world origin instead of **in place** on the reference figure. A cosmetic is never moved for you |
+| the old piece is still there, and stderr said nothing | the filename does not match a key, the figure folder is spelled wrong, or the folder is not the one being read — a `watch/models` folder **next to the jar** wins over the classpath |
+| the old piece is still there, and stderr said why | a `.gltf` whose `.bin` was not beside it, a truncated file, or nothing selected on export. Use `.glb` |
+| it is lying at their feet | you modelled it at the world origin instead of **in place** on the figure. A cosmetic is never moved for you |
+| it is 170 mm too high, or 250 mm off at the hands | you fitted it to the **boxed** reference figure and filed it under a figure folder, or the other way about. See fact 4 |
+| it fits one figure and not the other | that is the system working. Cut a second one and file it under the other key |
 | it is inside-out | a mirrored object — a negative scale, transforms not applied (`Ctrl+A`) |
 | it is worn back-to-front | you modelled it facing `+Y`. Blender's **Front** view, numpad 1, looks along `+Y` at a figure facing `−Y` |
 | it is worn at right angles | you modelled it facing `+X` or `−X` |
@@ -296,8 +358,8 @@ A `.glb` is binary and will not diff, so the commit message is the only record o
 what changed:
 
 ```bash
-git add src/main/resources/watch/models/cosmetics/heron_cloak.glb
-git commit -m "Heron cloak: modelled in Blender, walk clip"
+git add src/main/resources/watch/models/cosmetics/walker/heron_cloak.glb
+git commit -m "Heron cloak, walker: modelled in Blender, walk clip"
 git push -u origin <your-branch>
 ```
 

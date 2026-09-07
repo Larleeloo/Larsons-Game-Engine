@@ -18,6 +18,7 @@ import com.larsons.engine.watch.Cosmetics;
 import com.larsons.engine.watch.Cultivation;
 import com.larsons.engine.watch.Debug;
 import com.larsons.engine.watch.FieldGuide;
+import com.larsons.engine.watch.Figure;
 import com.larsons.engine.watch.Fishing;
 import com.larsons.engine.watch.Forage;
 import com.larsons.engine.watch.Litter;
@@ -825,6 +826,27 @@ public class WatchScene extends AbstractScene {
     private double pickedFlash;
     private String pickedName = "";
 
+    /**
+     * Which figure this screen has asked to be drawn as — the lobby's choice,
+     * or the pause screen's.
+     *
+     * <p>Not the answer: {@link #figure()} is, and it prefers the snapshot row.
+     * This is what to ask for on arrival and what to draw with in the frame or
+     * two before the first snapshot comes back.
+     */
+    private Figure chosen = Figure.DEFAULT;
+
+    /**
+     * What the lobby asked for on the way in, or {@code null} to take whatever
+     * the save says.
+     *
+     * <p>The distinction is the whole of why this is a separate field. A walk
+     * started from the New Walk screen has a figure on the form and it should
+     * win; a walk <em>continued</em> has one in the save and <em>that</em>
+     * should win, because the last thing that happened is somebody choosing it.
+     */
+    private Figure opening;
+
     public WatchScene(GameContext ctx) {
         this.ctx = ctx;
     }
@@ -836,9 +858,22 @@ public class WatchScene extends AbstractScene {
      * stand in rather than having to invent one.
      */
     public void adopt(WatchSession session, WatchStore store) {
+        adopt(session, store, null);
+    }
+
+    /**
+     * The same, with the figure the lobby's form asked for.
+     *
+     * @param opening which body to walk as, or {@code null} to take whatever
+     *                the save or the host already says — which is what
+     *                continuing a walk wants
+     */
+    public void adopt(WatchSession session, WatchStore store, Figure opening) {
         closeSession();
         this.session = session;
         this.store = store;
+        this.opening = opening;
+        if (opening != null) this.chosen = opening;
     }
 
     /** The session being played, for tests and the pause screen. */
@@ -897,6 +932,10 @@ public class WatchScene extends AbstractScene {
             }
         }
         session.update(0);
+        // What the lobby's form asked for, said once, now that there is
+        // somebody to say it to. Nothing is sent for a walk that was continued
+        // rather than started: see `opening`.
+        if (opening != null) pushFigure(opening);
 
         long seed = session.view().seed();
         if (session.local() != null) seed = session.local().config().seed();
@@ -3602,8 +3641,71 @@ public class WatchScene extends AbstractScene {
                 && pointerY >= b[1] && pointerY < b[1] + b[3];
     }
 
+    /**
+     * The pause screen, which is where you change who you are.
+     *
+     * <p>Left and right rather than a key of its own, for the reason every
+     * other panel in this scene reads left and right: the pause screen is a
+     * panel, the choice is a short list, and a binding that does nothing on
+     * nineteen screens out of twenty is a line in the controls menu somebody
+     * has to read past for ever. Which figure you walk as is a thing you set
+     * once and then leave alone for an evening — see {@link Figure}.
+     */
     private void updatePaused(InputManager input) {
-        if (KeyBinds.pressed(input, GameAction.WATCH_LEAVE)) leave();
+        if (KeyBinds.pressed(input, GameAction.WATCH_LEAVE)) {
+            leave();
+            return;
+        }
+        if (KeyBinds.pressed(input, GameAction.MENU_LEFT)
+                || KeyBinds.pressed(input, GameAction.MENU_RIGHT)) {
+            chooseFigure(figure().next());
+        }
+    }
+
+    /**
+     * Which figure the local player walks as.
+     *
+     * <p><b>Off the row when there is one.</b> The host owns this the way it
+     * owns everything else about a walker — it goes out on a snapshot to
+     * everybody, so a client that decided for itself would eventually disagree
+     * with what the rest of the valley could see. {@link #chosen} is only the
+     * answer before the first snapshot: what the lobby asked for, and what has
+     * just been asked for and not yet come back.
+     */
+    private Figure figure() {
+        WatchView.Walker me = session == null ? null : session.view().self();
+        return me != null ? me.figure() : chosen;
+    }
+
+    /**
+     * Ask to be drawn as somebody else, from here on.
+     *
+     * <p>Through the host in both shapes — {@code game.setFigure} solo, a
+     * {@code figure} message online — because the answer has to come back on
+     * the row that everybody else's screen is already reading. Nothing is
+     * drawn from {@link #chosen} once a snapshot has arrived.
+     */
+    private void chooseFigure(Figure to) {
+        if (to == null || to == figure()) return;
+        pushFigure(to);
+        say("Walking as the " + to.label() + ". " + to.note());
+    }
+
+    /**
+     * Tell whoever owns this walk which figure to draw us as.
+     *
+     * <p>No equality check, unlike {@link #chooseFigure}: on the way in there
+     * is no row yet to compare against, and the whole point of the lobby's
+     * answer is that it overrides whatever the host was going to say.
+     */
+    private void pushFigure(Figure to) {
+        chosen = to;
+        if (session == null) return;
+        if (session.local() != null) {
+            session.local().setFigure(session.selfId(), to.key());
+        } else if (session.client() != null) {
+            session.client().sendFigure(to.key());
+        }
     }
 
     private void openGuide() {
@@ -4476,16 +4578,16 @@ public class WatchScene extends AbstractScene {
                 // either of them having to find the other.
                 double waterZ = step.z() + Boats.DECK;
                 double bob = bobOf(walker.boatId());
-                WalkerModel.rower(mesh, x, y, waterZ, step.yaw(), bob, step.phase(),
-                        coat, worn);
+                WalkerModel.rower(mesh, walker.figure(), x, y, waterZ, step.yaw(),
+                        bob, step.phase(), coat, worn);
                 eyeAlong += BoatModel.SEAT_ALONG;
                 eyeZ = BoatModel.thwartZ(waterZ, bob) + WalkerModel.ROWER_EYE;
             }
             case SWIM -> {
                 double bodyPitch = WalkerModel.swimPitch(step.speed(), walker.pitch(),
                         walker.submerged());
-                WalkerModel.swimmer(mesh, x, y, step.z(), step.yaw(), bodyPitch,
-                        WalkerModel.swimDrive(step.speed()), step.phase(),
+                WalkerModel.swimmer(mesh, walker.figure(), x, y, step.z(), step.yaw(),
+                        bodyPitch, WalkerModel.swimDrive(step.speed()), step.phase(),
                         !walker.submerged(), coat, worn);
                 double[] eye = new double[2];
                 WalkerModel.swimEye(bodyPitch, eye);
@@ -4493,7 +4595,8 @@ public class WatchScene extends AbstractScene {
                 eyeZ = step.z() + eye[1];
             }
             default -> {
-                WalkerModel.walker(mesh, x, y, step.z(), step.yaw(), walker.crouching(),
+                WalkerModel.walker(mesh, walker.figure(), x, y, step.z(), step.yaw(),
+                        walker.crouching(),
                         step.phase(), step.speed(), step.leap(), coat, worn,
                         // Offset per walker, so two people standing in a
                         // clearing are not breathing in step. Folded into a
@@ -4535,15 +4638,18 @@ public class WatchScene extends AbstractScene {
     private void drawSelf(Mesh.Builder mesh, double ox, double oy) {
         int coat = WalkerModel.coatFor(session.selfId());
         // Out of our own wardrobe rather than off a row, because there is no
-        // row yet — that is what this method is for.
+        // row yet — that is what this method is for. Same for the figure: it
+        // is what this screen last asked for, which is the answer before any
+        // snapshot has confirmed it.
         List<String> worn = view().outfit().wornKeys();
+        Figure me = figure();
         switch (cycleNow()) {
-            case STROKE -> WalkerModel.rower(mesh, px - ox, py - oy, pz + Boats.DECK,
-                    yaw, bobOf(boatId), rowPhase, coat, worn);
-            case SWIM -> WalkerModel.swimmer(mesh, px - ox, py - oy, pz, yaw,
+            case STROKE -> WalkerModel.rower(mesh, me, px - ox, py - oy,
+                    pz + Boats.DECK, yaw, bobOf(boatId), rowPhase, coat, worn);
+            case SWIM -> WalkerModel.swimmer(mesh, me, px - ox, py - oy, pz, yaw,
                     WalkerModel.swimPitch(animSpeed, pitch, submerged),
                     WalkerModel.swimDrive(animSpeed), swimPhase, !submerged, coat, worn);
-            case STRIDE -> WalkerModel.walker(mesh, px - ox, py - oy, pz, yaw,
+            case STRIDE -> WalkerModel.walker(mesh, me, px - ox, py - oy, pz, yaw,
                     crouching, gait, animSpeed, leap(), coat, worn, drawClock);
         }
     }
@@ -6357,7 +6463,7 @@ public class WatchScene extends AbstractScene {
 
     private void drawPaused(DrawTarget target) {
         int w = Math.min(460, viewportWidth - 80);
-        int h = 220;
+        int h = 288;
         int x = (viewportWidth - w) / 2, y = (viewportHeight - h) / 2;
         target.fillRect(0, 0, viewportWidth, viewportHeight, new Color(0, 0, 0, 120));
         target.fillRect(x, y, w, h, HUD_PANEL);
@@ -6373,9 +6479,20 @@ public class WatchScene extends AbstractScene {
                                 + view.walkers().size() + " walking"
                         : "Walking alone",
                 x + 20, y + 110, HUD_FONT, HUD_DIM);
-        target.drawText("Esc — carry on", x + 20, y + 148, HUD_FONT, HUD_INK);
-        target.drawText("G — field guide", x + 20, y + 170, HUD_FONT, HUD_INK);
-        target.drawText("L — leave the walk", x + 20, y + 192, HUD_FONT, HUD_WARN);
+
+        // Who you are, and the way to change it. Above the three verbs rather
+        // than among them because it is the one row on this panel that is a
+        // setting rather than a door out of it.
+        Figure me = figure();
+        target.drawText("Walking as the " + me.label(), x + 20, y + 146,
+                HUD_FONT, HUD_INK);
+        target.drawText(me.note(), x + 20, y + 166, HUD_SMALL, HUD_DIM);
+        target.drawText("← → — walk as the " + me.next().label(),
+                x + 20, y + 190, HUD_FONT, HUD_ACCENT);
+
+        target.drawText("Esc — carry on", x + 20, y + 220, HUD_FONT, HUD_INK);
+        target.drawText("G — field guide", x + 20, y + 240, HUD_FONT, HUD_INK);
+        target.drawText("L — leave the walk", x + 20, y + 260, HUD_FONT, HUD_WARN);
     }
 
     /** Whatever the local player is looking at, for tests and the debug overlay. */

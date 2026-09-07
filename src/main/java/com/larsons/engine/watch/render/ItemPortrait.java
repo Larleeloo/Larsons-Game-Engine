@@ -183,6 +183,12 @@ public final class ItemPortrait {
             // A fixed coat, so the two pieces drawn in the wearer's colour have
             // one to be drawn in. Whose does not matter and must not: a picture
             // that changed with the viewer would be a picture cached per player.
+            //
+            // And a fixed figure, for the same reason — the row is a picture of
+            // the thing rather than of you in it. The two figures' wardrobes
+            // differ by a few tens of millimetres of fit and by nothing at all
+            // in what a piece *is*, so a picture that changed with whose body
+            // was looking at it would cost a cache key to say nothing.
             CosmeticModel.alone(mesh, key, x, y, z, VIEW_YAW,
                     CosmeticModel.portraitSize(piece.slot()) * scale,
                     WalkerModel.coatFor(0));
