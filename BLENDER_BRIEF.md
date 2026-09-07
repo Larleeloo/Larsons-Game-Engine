@@ -271,6 +271,7 @@ README:
 | File | Replaces |
 |---|---|
 | `characters/ranger.glb` | the ranger |
+| `characters/walker.glb` | **the player**, and every other walker — see the models README §17. Same brief as the ranger's, plus a `run` clip |
 | `cosmetics/<piece key>.glb` | one thing the player wears — see part 4 |
 | `<species key>.glb` | one of the 1323 animals |
 | `<family key>.glb` | all 49 animals of a family |

@@ -50,9 +50,49 @@ public final class SceneModels {
 
     private SceneModels() {}
 
+    /**
+     * Where the loader is allowed to read from — <b>and the seam a test of
+     * the boxes underneath a model has to have.</b>
+     *
+     * <p>{@link #setDirectory} was never enough on its own: it moves the
+     * folder searched <em>first</em>, and the classpath is searched after it
+     * regardless. That is exactly right for the game, where art committed to
+     * {@code src/main/resources} is meant to be found. It also means a test
+     * asserting on {@code WalkerModel}'s boxes passes for as long as nobody
+     * has modelled a walker and fails on the day somebody does — and a test
+     * that writes one file to a temp folder is still handed whatever else the
+     * classpath has, which is not the fixture it thought it had.
+     *
+     * <p>Neither test was wrong. They had no way to say which of the two
+     * figures they meant, so they said nothing and got whichever the
+     * repository happened to contain.
+     */
+    public enum Sources {
+        /** The folder, then the classpath. What the game runs on. */
+        FOLDER_AND_CLASSPATH,
+        /** Only {@link #setDirectory}'s folder — a test with its own fixture. */
+        FOLDER_ONLY,
+        /** Nothing at all — a test of the procedural figure underneath. */
+        NONE
+    }
+
+    private static Sources sources = Sources.FOLDER_AND_CLASSPATH;
+
     /** Point the loader at a different folder — what a test and a packaged build set. */
     public static synchronized void setDirectory(Path directory) {
         root = directory;
+        CACHE.clear();
+        WARNED.clear();
+    }
+
+    /**
+     * Narrow what may be loaded. See {@link Sources}.
+     *
+     * <p>Global state, and a test that narrows it must put it back — left at
+     * {@link Sources#NONE} it hides every import in whatever runs next.
+     */
+    public static synchronized void setSources(Sources allowed) {
+        sources = allowed;
         CACHE.clear();
         WARNED.clear();
     }
@@ -92,12 +132,14 @@ public final class SceneModels {
 
     private static SceneModel find(String name, ModelRig.Kind kind,
                                    SceneModel.Size size) {
+        if (sources == Sources.NONE) return null;
         for (String extension : EXTENSIONS) {
             Path file = root.resolve(name + extension);
             if (!Files.isReadable(file)) continue;
             SceneModel model = bake(read(file), file.toString(), kind, size);
             if (model != null) return model;
         }
+        if (sources == Sources.FOLDER_ONLY) return null;
         for (String extension : EXTENSIONS) {
             String resource = DIRECTORY + "/" + name + extension;
             SceneModel model = bake(readResource(resource), resource, kind, size);

@@ -21,6 +21,7 @@ import com.larsons.engine.watch.render.Mesh;
 import com.larsons.engine.watch.render.WalkerModel;
 import com.larsons.engine.watch.world.TerrainField;
 import org.junit.jupiter.api.AfterEach;
+import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.Timeout;
 import org.junit.jupiter.api.io.TempDir;
@@ -80,8 +81,28 @@ class CosmeticsTest {
     private WatchServer server;
     private final List<WatchClient> clients = new ArrayList<>();
 
+    /**
+     * <b>The walker under the clothes is the boxes, and says so.</b>
+     *
+     * <p>Every figure this class measures is the procedural one: the boxes a
+     * cosmetic is hung on, the boxes a modelled cosmetic replaces, the boxes
+     * a swimmer keeps. Left to the loader's own rules that is true only until
+     * somebody commits {@code characters/walker.glb}, at which point half of
+     * these compare a modelled body against a modelled body and the arithmetic
+     * they are doing quietly stops being about clothes at all.
+     *
+     * <p>The tests that supply a model of their own turn the folder back on
+     * for the length of themselves — and only the folder, so their fixture is
+     * the whole of what they are handed.
+     */
+    @BeforeEach
+    void boxesOnly() {
+        SceneModels.setSources(SceneModels.Sources.NONE);
+    }
+
     @AfterEach
     void tearDown() {
+        SceneModels.setSources(SceneModels.Sources.FOLDER_AND_CLASSPATH);
         for (WatchClient client : clients) client.close();
         clients.clear();
         if (server != null) server.stop();
@@ -322,6 +343,7 @@ class CosmeticsTest {
 
         writePiece(dir, key);
         SceneModels.setDirectory(dir);
+        SceneModels.setSources(SceneModels.Sources.FOLDER_ONLY);
         try {
             Mesh modelled = walker(List.of(key));
             assertEquals(bare.triangleCount() + 2, modelled.triangleCount(),
@@ -337,6 +359,7 @@ class CosmeticsTest {
                     "a worn model was dropped to the walker's feet");
         } finally {
             SceneModels.setDirectory(Path.of(SceneModels.DIRECTORY));
+            SceneModels.setSources(SceneModels.Sources.NONE);
         }
     }
 
@@ -353,6 +376,7 @@ class CosmeticsTest {
         String key = "straw_boater";
         writePiece(dir, key);
         SceneModels.setDirectory(dir);
+        SceneModels.setSources(SceneModels.Sources.FOLDER_ONLY);
         try {
             assertTrue(swimmer(0.2, List.of(key)).triangleCount()
                             > swimmer(0.2, WalkerModel.WEARING_NOTHING).triangleCount(),
@@ -362,6 +386,7 @@ class CosmeticsTest {
                     "a rower lost their hat entirely rather than falling back");
         } finally {
             SceneModels.setDirectory(Path.of(SceneModels.DIRECTORY));
+            SceneModels.setSources(SceneModels.Sources.NONE);
         }
     }
 
@@ -371,6 +396,7 @@ class CosmeticsTest {
         String key = "wool_scarf";
         writePiece(dir, key);
         SceneModels.setDirectory(dir);
+        SceneModels.setSources(SceneModels.Sources.FOLDER_ONLY);
         try {
             Mesh.Builder mesh = Mesh.builder(0, 0, 0, false, 1);
             CosmeticModel.alone(mesh, key, 0, 0, 0, 0.4,
@@ -379,6 +405,7 @@ class CosmeticsTest {
                     "the row still drew the boxes for a piece somebody has modelled");
         } finally {
             SceneModels.setDirectory(Path.of(SceneModels.DIRECTORY));
+            SceneModels.setSources(SceneModels.Sources.NONE);
         }
     }
 
@@ -456,6 +483,7 @@ class CosmeticsTest {
                 StandardCharsets.UTF_8);
 
         SceneModels.setDirectory(dir);
+        SceneModels.setSources(SceneModels.Sources.FOLDER_ONLY);
         try {
             Mesh drawn = wornLegs(key, 0);
             assertEquals(bx, (drawn.minX() + drawn.maxX()) / 2, 0.005,
@@ -466,6 +494,7 @@ class CosmeticsTest {
                     "Blender's z is not the game's z");
         } finally {
             SceneModels.setDirectory(Path.of(SceneModels.DIRECTORY));
+            SceneModels.setSources(SceneModels.Sources.NONE);
         }
     }
 
@@ -494,6 +523,7 @@ class CosmeticsTest {
                 StandardCharsets.UTF_8);
 
         SceneModels.setDirectory(dir);
+        SceneModels.setSources(SceneModels.Sources.FOLDER_ONLY);
         try {
             for (double phase : new double[]{0.25, 0.75}) {
                 double modelled = leadingSide(wornLegs(key, phase));
@@ -505,6 +535,7 @@ class CosmeticsTest {
             }
         } finally {
             SceneModels.setDirectory(Path.of(SceneModels.DIRECTORY));
+            SceneModels.setSources(SceneModels.Sources.NONE);
         }
     }
 

@@ -1,6 +1,10 @@
 package com.larsons.engine.watch.render;
 
 import com.larsons.engine.watch.Cosmetics;
+import com.larsons.engine.watch.life.AnimState;
+import com.larsons.engine.watch.model.ModelRig;
+import com.larsons.engine.watch.model.SceneModel;
+import com.larsons.engine.watch.model.SceneModels;
 import com.larsons.engine.watch.world.WatchMaterial;
 import com.larsons.engine.watch.world.WatchMaterials;
 
@@ -67,11 +71,38 @@ import java.util.List;
  */
 public final class WalkerModel {
 
+    /**
+     * The name an imported model must be filed under to <b>be</b> the player.
+     *
+     * <p>The same arrangement {@code RangerModel} has, pointed at the figure
+     * you are rather than the one outside the shop: drop a {@code .glb} in and
+     * everybody in the world — you in third person, the party around you — is
+     * drawn from it instead of from the boxes below. Nothing else changes, and
+     * a missing or broken file leaves the boxes exactly where they were with
+     * one line on stderr.
+     *
+     * <p><b>Deliberately not {@code characters/ranger}.</b> Filing both under
+     * one name would make every trading-post ranger the player's twin, which
+     * is the one thing the ranger's own silhouette was designed to avoid.
+     */
+    public static final String MODEL = "characters/walker";
+
     /** How tall a standing walker is, in metres. */
     public static final double HEIGHT = 1.78;
 
     /** …and a crouched one. */
     public static final double CROUCH_HEIGHT = 1.18;
+
+    /**
+     * Below this many metres a second they are standing, and at or above
+     * {@link #RUNNING} they are running.
+     *
+     * <p>{@code RUNNING} sits between {@code WatchPlayer.WALK_SPEED} at 4.4
+     * and {@code RUN_SPEED} at 8.0 rather than at either, because a threshold
+     * *on* a speed the player holds for minutes at a time is a figure
+     * flickering between two clips.
+     */
+    private static final double STILL = 0.15, RUNNING = 6.2;
 
     /**
      * How far a thigh swings from vertical at a full walk, in radians.
@@ -234,6 +265,39 @@ public final class WalkerModel {
     public static void walker(Mesh.Builder mesh, double x, double y, double z,
                               double yaw, boolean crouching, double phase, double speed,
                               Leap leap, int tint, List<String> worn) {
+        walker(mesh, x, y, z, yaw, crouching, phase, speed, leap, tint, worn, 0);
+    }
+
+    /** Whether walkers are being drawn from an imported file. */
+    public static boolean imported() { return model() != null; }
+
+    private static SceneModel model() {
+        // One unit tall, and drawn at `height` metres per unit below — which is
+        // CROUCH_HEIGHT when they are crouching, exactly as the boxes are
+        // scaled down rather than posed. A crude crouch, but the same crude
+        // crouch, so dropping a file in does not change what crouching looks
+        // like as well as what the player looks like.
+        return SceneModels.of(MODEL, ModelRig.Kind.HUMANOID, SceneModel.Size.height(1));
+    }
+
+    /**
+     * The same walker again, with a clock for the standing-still animation.
+     *
+     * <p><b>Why a clock as well as a phase.</b> {@link Gait}'s phase is the
+     * gait clock: it advances with the ground going past and stops dead when
+     * the walker does, which is exactly right for a walk cycle and useless for
+     * an idle. A boxed walker never noticed, because its standing pose is a
+     * pose rather than a cycle. An imported one has an {@code idle} clip to
+     * play, and played at a frozen phase it is a photograph.
+     *
+     * <p>Ignored entirely when there is no file, which is why the overload
+     * above can pass zero and every existing caller is unaffected.
+     *
+     * @param clock the world animation clock, in seconds
+     */
+    public static void walker(Mesh.Builder mesh, double x, double y, double z,
+                              double yaw, boolean crouching, double phase, double speed,
+                              Leap leap, int tint, List<String> worn, double clock) {
         float[] uv = new float[4];
         WatchMaterials.uv(WatchMaterial.PLANK, uv);
         // Anything somebody has modelled in Blender is a rigged figure of its
@@ -243,6 +307,25 @@ public final class WalkerModel {
         List<String> boxes = CosmeticModel.boxesOnly(worn);
 
         double height = crouching ? CROUCH_HEIGHT : HEIGHT;
+
+        SceneModel figure = model();
+        if (figure != null) {
+            // Turned, because the boxes below and an imported model do not
+            // agree about which way a yaw of zero points — SceneModel.PERSON_TURN
+            // names this method as one of the three that has to add it.
+            //
+            // The head does not turn: a walker looks where they are going and
+            // nowhere else, which is why the aim is zero rather than plumbed
+            // through. Only the keeper and the ranger watch you.
+            figure.mesh(mesh, x, y, z, yaw + SceneModel.PERSON_TURN, state(speed),
+                    at(speed, phase, clock), height, uv, 0);
+            // The clothes still go on over the top, at `z` for the same reason
+            // the boxes put them at `base`: a piece authored on a reference
+            // walker measured itself from the floor.
+            CosmeticModel.overlay(mesh, worn, x, y, z, yaw, height, speed, phase, uv);
+            return;
+        }
+
         double base = z;
         int coat = tint;
         int skin = WatchMaterials.shade(WatchMaterial.CLAY);
@@ -421,6 +504,41 @@ public final class WalkerModel {
         // the floor, and the floor is where a piece authored on a reference
         // walker measured itself from.
         CosmeticModel.overlay(mesh, worn, x, y, base, yaw, height, speed, phase, uv);
+    }
+
+    /**
+     * Which of an imported model's clips a walker is in.
+     *
+     * <p><b>Three, and only ever three.</b> A state a model did not animate is
+     * posed by {@code ModelRig}'s procedural table instead, and that table
+     * works per piece about each bone's own pivot rather than down the
+     * hierarchy — which is invisible at an idle's 0.03 radians and, at a run's
+     * 0.67, is a hand left hovering at the wrist its arm has swung away from.
+     * So this never asks for a fourth: a file that ships {@code idle},
+     * {@code walk} and {@code run} is never posed by the fallback at all.
+     *
+     * <p>A jump is drawn in whichever of the three the walker's speed says,
+     * because there is no airborne state in {@code AnimState} to ask for. The
+     * boxes have a real jump pose and an imported figure does not; that is the
+     * one thing this route loses, and it is four frames long.
+     */
+    private static AnimState state(double speed) {
+        return speed >= RUNNING ? AnimState.RUN
+                : speed > STILL ? AnimState.WALK : AnimState.IDLE;
+    }
+
+    /**
+     * How far through that clip they are, in cycles.
+     *
+     * <p>A walk and a run ride the gait clock, so the feet land where the
+     * ground says rather than where a frame rate does — the same phase the
+     * cosmetics are driven by, which is what keeps a modelled cloak swinging
+     * in step with the legs under it. An idle has no ground to ride and takes
+     * the world clock at the state's own rate.
+     */
+    private static double at(double speed, double phase, double clock) {
+        return state(speed) == AnimState.IDLE
+                ? clock * AnimState.IDLE.cyclesPerSecond() : phase;
     }
 
     /**
