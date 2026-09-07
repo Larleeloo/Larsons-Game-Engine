@@ -322,6 +322,7 @@ folder **next to the jar** first, then `watch/models/` **on the classpath**.
 | `<species key>.glb` | that one species (see §1 for keys) |
 | `<family key>.glb` | all 49 species of that family |
 | `characters/ranger.glb` | **the forest ranger** who stands outside every trading post |
+| `characters/walker.glb` | **the player** — you, and everybody else walking about. See §17 |
 | `cosmetics/<piece key>.glb` | **one thing to wear** — a hat, a cape, a pair of boots. See §16 |
 
 A `.bbmodel` under the same name **wins** over a `.glb`. That is on purpose:
@@ -697,5 +698,63 @@ Three things a modelled piece does **not** do, all on purpose:
 6. Animate `walk` if you animate anything.
 7. Export **glTF Binary (.glb)**, *+Y Up*, *Apply Modifiers*, *Animation* on.
 8. Save to `watch/models/cosmetics/<piece key>.glb`.
+
+---
+
+## 17. The player
+
+`characters/walker.glb` replaces the figure in §5's boxes with your own — in
+third person, for every other player in the party, and for anybody you pass in
+a clearing. It is authored exactly like the ranger in §15: **+Z up, facing −Y,
+feet on `Z = 0`**, materials rather than textures, separate overlapping pieces
+one per bone, §10's bone names, under about 1200 triangles.
+
+Two things are its own.
+
+### Ship three clips, not one
+
+`idle`, `walk` and `run`. Everywhere else in this folder a partial model is
+fine and the procedural table poses the rest; here it is fine only up to a
+point, and that point is the size of the angle.
+
+The fallback poses each **piece** about its own bone's pivot rather than
+composing down the hierarchy. At an idle's 0.03 radians nothing shows. At a
+run's 0.67 the hand rotates about the wrist it is still standing at while the
+arm swings away from the shoulder, and the two come apart by a third of a
+metre. Those three states are the only ones a walker is ever drawn in, so
+three clips means the fallback never runs on this figure at all.
+
+The `walk` and `run` clips ride the **gait clock**, so the feet land with the
+ground going past rather than with a frame rate — the same clock a cosmetic's
+`walk` is driven by, which is what keeps a modelled cloak swinging in step with
+the legs under it. `idle` runs on the world clock.
+
+### What stays boxes
+
+- **Swimming and rowing.** Those poses are numbers no clip knows — a spine laid
+  along a dive, a body folded onto a thwart — so a walker who wades in changes
+  back to the boxes and changes back again on the shore. §16 has the same edge
+  for worn pieces and the same reason.
+- **Your own hands in first person**, which are built in the camera's frame.
+- **A jump**, which is drawn in whichever of the three clips the walker's speed
+  says, because there is no airborne state to name a fourth with.
+- **A crouch** is the model scaled to `CROUCH_HEIGHT`, which is what happens to
+  the boxes too: a smaller person rather than a folded one.
+
+### Cosmetics are fitted to the boxes, not to your model
+
+Everything on the rail was authored against the reference figure in §16 —
+shoulders at Z 1.45, head at 1.70, hat brim at 1.85 — and a worn piece is
+`AS_PLACED`: never measured, never rescaled. A model with different landmarks
+wears them at the box walker's heights, not at its own. Either match those
+landmarks or re-author the eighteen pieces to yours.
+
+### Testing against it
+
+`SceneModels.setSources` is how a test says which figure it means. A test of
+the boxes takes `NONE`; a test with a `.glb` fixture of its own takes
+`FOLDER_ONLY`, so the classpath does not hand it this file as well. Without
+that, committing a walker silently changes what half the walker tests are
+measuring.
 
 ---

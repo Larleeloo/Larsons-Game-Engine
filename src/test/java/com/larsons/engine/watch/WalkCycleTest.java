@@ -7,6 +7,9 @@ import com.larsons.engine.watch.render.Mesh;
 import com.larsons.engine.watch.render.RowStroke;
 import com.larsons.engine.watch.render.Shapes;
 import com.larsons.engine.watch.render.WalkerModel;
+import com.larsons.engine.watch.model.SceneModels;
+import org.junit.jupiter.api.AfterEach;
+import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.Timeout;
 
@@ -42,6 +45,22 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
  */
 @Timeout(120)
 class WalkCycleTest {
+
+    /**
+     * The cycle measured here is the boxes': knees folding, a hip rising and
+     * falling, a boot put on the ground. An imported walker's cycle is
+     * whatever its artist keyframed, and pinning that would be a test of
+     * somebody's `.glb` rather than of this game's gait.
+     */
+    @BeforeEach
+    void boxesOnly() {
+        SceneModels.setSources(SceneModels.Sources.NONE);
+    }
+
+    @AfterEach
+    void restoreImports() {
+        SceneModels.setSources(SceneModels.Sources.FOLDER_AND_CLASSPATH);
+    }
 
     // --- the clock ---------------------------------------------------------------------
 

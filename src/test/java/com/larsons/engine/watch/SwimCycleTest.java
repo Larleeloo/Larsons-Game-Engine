@@ -7,6 +7,9 @@ import com.larsons.engine.watch.render.Mesh;
 import com.larsons.engine.watch.render.SwimStroke;
 import com.larsons.engine.watch.render.WalkerModel;
 import com.larsons.engine.watch.world.TerrainField;
+import com.larsons.engine.watch.model.SceneModels;
+import org.junit.jupiter.api.AfterEach;
+import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.Timeout;
 
@@ -41,6 +44,26 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
  */
 @Timeout(120)
 class SwimCycleTest {
+
+    /**
+     * <b>Both halves of this class's comparisons have to be the same figure.</b>
+     *
+     * <p>A swimmer is always the boxes — that pose is a spine laid along the
+     * way somebody is diving, which no clip knows — while a stander is an
+     * imported model the moment one is committed. So
+     * {@code aSwimmerGoingNowhereIsTheStandingFigure} would be comparing a box
+     * swimmer against a modelled stander and reporting, correctly and
+     * uselessly, that they differ.
+     */
+    @BeforeEach
+    void boxesOnly() {
+        SceneModels.setSources(SceneModels.Sources.NONE);
+    }
+
+    @AfterEach
+    void restoreImports() {
+        SceneModels.setSources(SceneModels.Sources.FOLDER_AND_CLASSPATH);
+    }
 
     /** A swimmer floating at the surface has their feet exactly this far under. */
     private static final double FLOATING =

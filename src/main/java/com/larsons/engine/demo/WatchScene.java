@@ -4494,7 +4494,13 @@ public class WatchScene extends AbstractScene {
             }
             default -> {
                 WalkerModel.walker(mesh, x, y, step.z(), step.yaw(), walker.crouching(),
-                        step.phase(), step.speed(), step.leap(), coat, worn);
+                        step.phase(), step.speed(), step.leap(), coat, worn,
+                        // Offset per walker, so two people standing in a
+                        // clearing are not breathing in step. Folded into a
+                        // small range first: an id is an int, and an id times
+                        // a third of a second is a clock big enough to have
+                        // lost the fraction the idle is made of.
+                        drawClock + Math.floorMod(walker.id(), 19) * 0.37);
                 eyeZ = step.z() + (walker.crouching() ? 1.10 : 1.68);
             }
         }
@@ -4538,7 +4544,7 @@ public class WatchScene extends AbstractScene {
                     WalkerModel.swimPitch(animSpeed, pitch, submerged),
                     WalkerModel.swimDrive(animSpeed), swimPhase, !submerged, coat, worn);
             case STRIDE -> WalkerModel.walker(mesh, px - ox, py - oy, pz, yaw,
-                    crouching, gait, animSpeed, leap(), coat, worn);
+                    crouching, gait, animSpeed, leap(), coat, worn, drawClock);
         }
     }
 

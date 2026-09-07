@@ -14,6 +14,9 @@ import com.larsons.engine.watch.render.Gait;
 import com.larsons.engine.watch.render.Mesh;
 import com.larsons.engine.watch.render.WalkerModel;
 import com.larsons.engine.watch.world.TerrainField;
+import com.larsons.engine.watch.model.SceneModels;
+import org.junit.jupiter.api.AfterEach;
+import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.Timeout;
 import org.junit.jupiter.api.io.TempDir;
@@ -47,6 +50,21 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
  */
 @Timeout(180)
 class JumpTest {
+
+    /**
+     * The leap this class measures is the boxes' — an imported walker has no
+     * jump clip to play, because there is no airborne state to name one with,
+     * and every assertion below is about a pose that only the boxes strike.
+     */
+    @BeforeEach
+    void boxesOnly() {
+        SceneModels.setSources(SceneModels.Sources.NONE);
+    }
+
+    @AfterEach
+    void restoreImports() {
+        SceneModels.setSources(SceneModels.Sources.FOLDER_AND_CLASSPATH);
+    }
 
     // --- the keys ------------------------------------------------------------------
 
