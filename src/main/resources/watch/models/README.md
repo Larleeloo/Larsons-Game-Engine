@@ -27,7 +27,7 @@ deliberate — see [Partial models are fine](#partial-models-are-fine).
 | Good for | animals, in bulk | characters, props, one-offs |
 
 Both end up in the same mesh, lit by the same flat shading, posed by the same
-ten animation states, and falling back to the same procedural animation for a
+twelve animation states, and falling back to the same procedural animation for a
 state you have not got to. Neither is the "real" one.
 
 **Which to use.** If you are dressing forty-nine species of songbird from one
@@ -185,7 +185,7 @@ an imported model animates strangely.
 
 ## 4. Animations
 
-Name a Blockbench animation after one of the ten states below and it is used
+Name a Blockbench animation after one of the twelve states below and it is used
 for that state. Matching ignores any `animation.<model>.` prefix Blockbench
 writes, is case-insensitive, and accepts the name with a `_`-separated prefix or
 suffix — so `walk`, `Walk`, `animation.wren.walk`, and `walk_cycle` all mean
@@ -194,7 +194,7 @@ suffix — so `walk`, `Walk`, `animation.wren.walk`, and `walk_cycle` all mean
 | State | Accepted clip names | When it plays |
 |---|---|---|
 | `IDLE` | `idle`, `stand` | standing, sitting, floating |
-| `WALK` | `walk`, `move`, `swim` | moving at a normal pace |
+| `WALK` | `walk`, `move` | moving at a normal pace |
 | `RUN` | `run`, `sprint`, `flee` | fleeing, covering ground |
 | `FLY` | `fly`, `flap`, `glide` | airborne |
 | `FORAGE` | `forage`, `eat`, `feed`, `peck`, `graze` | head down at a lure or a berry |
@@ -203,12 +203,21 @@ suffix — so `walk`, `Walk`, `animation.wren.walk`, and `walk_cycle` all mean
 | `CALL` | `call`, `sing`, `display` | the moment that gives it away |
 | `TAME` | `tame`, `sit`, `perch` | a pet, at home |
 | `STRIKE` | `strike`, `attack`, `bite`, `lunge`, `swipe` | swinging at somebody — mutants only |
+| `SWIM` | `swim`, `stroke`, `paddle` | in the water — **the player only**, see §17 |
+| `ROW` | `row`, `oar` | sitting to a pair of oars — **the player only**, see §17 |
 
-`STRIKE` is the odd one out: nothing but the three mutants (`wendigo`,
-`werewolf`, `mirewraith`) ever enters it, so a clip for it on a wren is simply
-never played. It is a full state all the same, with the same fallback rule as
-the other nine, because the three of them are ordinary imported models in every
-other respect.
+`STRIKE` is the odd one out among the animals: nothing but the three mutants
+(`wendigo`, `werewolf`, `mirewraith`) ever enters it, so a clip for it on a
+wren is simply never played. It is a full state all the same, with the same
+fallback rule as the rest, because the three of them are ordinary imported
+models in every other respect.
+
+`SWIM` and `ROW` are the player's, and no animal enters either. **`swim` used
+to be an alias on `WALK`** — fair enough while swimming was something only an
+otter did, and wrong the moment a person had both a walk cycle and a
+breaststroke, because one alias cannot name two clips. No model in this
+repository shipped a `swim` clip when it moved, so nothing that was working
+stopped.
 
 **What is read from a clip:** its `length`, whether it loops, and per-bone
 **`rotation`** and **`position`** keyframes with their interpolation mode
@@ -711,11 +720,12 @@ one per bone, §10's bone names, under about 1200 triangles.
 
 Two things are its own.
 
-### Ship three clips, not one
+### Ship five clips, not one
 
-`idle`, `walk` and `run`. Everywhere else in this folder a partial model is
-fine and the procedural table poses the rest; here it is fine only up to a
-point, and that point is the size of the angle.
+`idle`, `walk`, `run`, `swim` and `row` — every state a walker is ever drawn
+in. Everywhere else in this folder a partial model is fine and the procedural
+table poses the rest; here it is fine only up to a point, and that point is
+the size of the angle.
 
 The fallback poses each **piece** about its own bone's pivot rather than
 composing down the hierarchy. At an idle's 0.03 radians nothing shows. At a
@@ -724,22 +734,58 @@ arm swings away from the shoulder, and the two come apart by a third of a
 metre. Those three states are the only ones a walker is ever drawn in, so
 three clips means the fallback never runs on this figure at all.
 
-The `walk` and `run` clips ride the **gait clock**, so the feet land with the
-ground going past rather than with a frame rate — the same clock a cosmetic's
-`walk` is driven by, which is what keeps a modelled cloak swinging in step with
-the legs under it. `idle` runs on the world clock.
+The `walk`, `run`, `swim` and `row` clips ride the **gait clock**, so the feet
+land with the ground going past rather than with a frame rate — the same clock
+a cosmetic's `walk` is driven by, which is what keeps a modelled cloak swinging
+in step with the legs under it. `idle` runs on the world clock.
+
+### Swimming: author it standing up
+
+**`swim` is the one clip that looks wrong in Blender and right in the game.**
+A swimmer's body angle runs continuously from upright, treading water, through
+flat on the surface, to head-down in a dive, and which of those it is depends
+on where the player is looking. No keyframe can hold that, so the clip supplies
+only the stroke — the arms sweeping, the knees drawing up — with the figure
+standing upright, and the engine tips the whole body at draw time about the
+hips (`SceneModel.Lean`, at 0.47 of the height).
+
+Read every pose in it as though the figure were already face-down: arms
+overhead is the reach out in front, knees to the chest is the frog kick drawing
+up, and the head tipping back is the breath.
+
+At a tip of nothing this is the standing figure exactly, which is the point:
+somebody wading out of their depth tips over into a swim rather than cutting to
+a different model.
+
+### Rowing: author it against the boat
+
+`row` is the one clip measured against furniture rather than anatomy. The
+figure is drawn from the **floorboards** — `BoatModel.floorZ` — and folded onto
+a thwart `DEPTH * 0.76` above them, about 350 mm, with the hip joint a further
+110 mm up. Keep the hips over the model's own origin and reach the feet forward
+from there; the engine seats the whole figure with one offset along the boat.
+
+Two things that bite:
+
+- **A leg needs a knee.** At 65° the thigh leaves the knee 265 mm above the
+  floorboards, which a 300 mm shin can just reach down. Any flatter and the
+  feet hang in the bilge. A leg rigged as one rigid bone cannot sit down.
+- **Pin the hips.** If the spine bone pivots at the waist rather than at the
+  hips — and it should, for everything else — then leaning back swings the hips
+  forward off the seat and takes the braced feet with them. Undo it on the root
+  or the boots skate over the boards, 160 mm a stroke.
 
 ### What stays boxes
 
-- **Swimming and rowing.** Those poses are numbers no clip knows — a spine laid
-  along a dive, a body folded onto a thwart — so a walker who wades in changes
-  back to the boxes and changes back again on the shore. §16 has the same edge
-  for worn pieces and the same reason.
 - **Your own hands in first person**, which are built in the camera's frame.
-- **A jump**, which is drawn in whichever of the three clips the walker's speed
-  says, because there is no airborne state to name a fourth with.
+- **A jump**, which is drawn in whichever locomotion clip the walker's speed
+  says, because there is no airborne state to name one with.
 - **A crouch** is the model scaled to `CROUCH_HEIGHT`, which is what happens to
   the boxes too: a smaller person rather than a folded one.
+- **A swimmer's effort.** The boxes scull at a third of a stroke when somebody
+  is holding station and swim a full one when they are going somewhere; a clip
+  is a clip, so a modelled swimmer always swims. Worth knowing, not worth a
+  second clip.
 
 ### Cosmetics are fitted to the boxes, not to your model
 

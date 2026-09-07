@@ -80,6 +80,38 @@ public final class SceneModel {
     public static final double PERSON_TURN = -Math.PI / 2;
 
     /**
+     * A whole-body tip, for a figure that is not standing up.
+     *
+     * <p><b>Why this is a parameter and not an animation</b> — the same
+     * argument {@link #mesh}'s {@code headTurn} makes, one joint further out.
+     * A swimmer's body angle is not a pose an artist can key: it runs
+     * continuously from upright, treading water, through flat on the surface,
+     * to head-down in a dive, and which of those it is depends on where the
+     * player is looking. No clip knows that. So the {@code swim} clip is
+     * authored **upright**, doing the arms and the legs of a breaststroke, and
+     * the tip is applied here, afterwards, about a pivot up the body.
+     *
+     * <p>That is also what keeps a modelled swimmer continuous with a modelled
+     * walker: at {@code pitch} zero this is the standing figure exactly, so
+     * somebody wading out of their depth tips over into a swim rather than
+     * cutting to a different model. {@code WalkerModel.swimmer} makes the same
+     * promise about the boxes and for the same reason.
+     *
+     * @param pitch radians to tip forward — {@code 0} upright, {@code π/2}
+     *              face-down and flat, negative for a head-up float
+     * @param pivot how far up the model, as a share of its height, the tip
+     *              turns about. The hips, for a swimmer: turned about the neck
+     *              instead the same body floats with its whole chest in the air
+     */
+    public record Lean(double pitch, double pivot) {
+        /** Standing up: what everything but a swimmer passes. */
+        public static final Lean UPRIGHT = new Lean(0, 0);
+
+        /** Whether this does nothing, which is the common case and a fast path. */
+        public boolean none() { return pitch == 0; }
+    }
+
+    /**
      * How big a model should come out, and where its floor is.
      *
      * @param height   floor to crown, in whatever units the caller then draws
@@ -302,6 +334,20 @@ public final class SceneModel {
     public void mesh(Mesh.Builder mesh, double x, double y, double z, double yaw,
                      AnimState state, double phase, double scale, float[] uv,
                      double headTurn, AnimalModel.PoseSource fallback) {
+        mesh(mesh, x, y, z, yaw, state, phase, scale, uv, headTurn, fallback,
+                Lean.UPRIGHT);
+    }
+
+    /**
+     * {@link #mesh} with the whole body tipped over. See {@link Lean}.
+     *
+     * <p>Applied after the clip and after the head's own turn, so a swimmer
+     * laid flat still has the breaststroke the clip gave them and still has a
+     * head that looks where it is pointed.
+     */
+    public void mesh(Mesh.Builder mesh, double x, double y, double z, double yaw,
+                     AnimState state, double phase, double scale, float[] uv,
+                     double headTurn, AnimalModel.PoseSource fallback, Lean lean) {
         AnimalModel.PoseSource poses = fallback == null ? ownPoses : fallback;
         Take take = clips.get(state);
         double[][] globals = take == null ? rest : sample(take, phase);
@@ -323,9 +369,9 @@ public final class SceneModel {
             double aim = bone.joint() == AnimalModel.Joint.HEAD ? headTurn : 0;
             for (int t = 0; t < colours.length; t++) {
                 int at = t * 9;
-                corner(global, positions, at, bone, pose, aim, point, a);
-                corner(global, positions, at + 3, bone, pose, aim, point, b);
-                corner(global, positions, at + 6, bone, pose, aim, point, c);
+                corner(global, positions, at, bone, pose, aim, lean, point, a);
+                corner(global, positions, at + 3, bone, pose, aim, lean, point, b);
+                corner(global, positions, at + 6, bone, pose, aim, lean, point, c);
                 Shapes.face(mesh,
                         x + (a[0] * cos - a[1] * sin) * scale,
                         y + (a[0] * sin + a[1] * cos) * scale, z + a[2] * scale,
@@ -343,7 +389,8 @@ public final class SceneModel {
      * fallback pose if there is one.
      */
     private void corner(double[] global, float[] positions, int at, Bone bone,
-                        AnimalModel.Pose pose, double aim, double[] scratch, double[] out) {
+                        AnimalModel.Pose pose, double aim, Lean lean,
+                        double[] scratch, double[] out) {
         RawModel.transform(global, positions[at], positions[at + 1], positions[at + 2],
                 scratch);
         double forward = scratch[2] * unit;
@@ -371,13 +418,23 @@ public final class SceneModel {
             out[1] = bone.pivotY() + fx * st + ry * ct + pose.dy();
             out[2] = bone.pivotZ() + fz + pose.dz();
         }
-        if (aim == 0) return;
-        // The head's own turn, last, about the same pivot: it has to compose
-        // with whatever the clip already did to the neck rather than replace it.
-        double ca = Math.cos(aim), sa = Math.sin(aim);
-        double dx = out[0] - bone.pivotX(), dy = out[1] - bone.pivotY();
-        out[0] = bone.pivotX() + dx * ca - dy * sa;
-        out[1] = bone.pivotY() + dx * sa + dy * ca;
+        if (aim != 0) {
+            // The head's own turn, about the same pivot: it has to compose with
+            // whatever the clip already did to the neck rather than replace it.
+            double ca = Math.cos(aim), sa = Math.sin(aim);
+            double dx = out[0] - bone.pivotX(), dy = out[1] - bone.pivotY();
+            out[0] = bone.pivotX() + dx * ca - dy * sa;
+            out[1] = bone.pivotY() + dx * sa + dy * ca;
+        }
+        if (lean.none()) return;
+        // …and the whole body last of all, about a pivot up the model rather
+        // than about any one bone's, because this is the figure lying down and
+        // not a joint bending. Forward and up only: a tip has no yaw in it, and
+        // the yaw the caller wants is applied outside this method anyway.
+        double cl = Math.cos(lean.pitch()), sl = Math.sin(lean.pitch());
+        double df = out[0], du = out[2] - lean.pivot();
+        out[0] = df * cl + du * sl;
+        out[2] = lean.pivot() - df * sl + du * cl;
     }
 
     /**

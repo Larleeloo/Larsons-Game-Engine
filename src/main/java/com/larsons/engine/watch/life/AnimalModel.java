@@ -332,6 +332,20 @@ public final class AnimalModel {
                 case WING_R -> new Pose(0.1, 0.8, 0, 0.6);
                 default -> Pose.REST;
             };
+            // <b>Two states no animal enters.</b> Swimming and rowing belong to
+            // the player — see AnimState — and nothing in the field guide is
+            // ever asked for them. They are answered anyway, because the switch
+            // is exhaustive over the enum and "an animal cannot get here" is a
+            // claim that should cost a line rather than a compiler flag.
+            //
+            // A paddling otter is near enough a walking one for the placeholder
+            // to be a walk. A rowing animal is a joke this game does not make,
+            // so it is left sitting there breathing — and *not* at REST, which
+            // is a distinction `everyAnimationStateMovesTheAnimal` is right to
+            // insist on: a state that poses every joint at rest is not an
+            // animation, it is an animal that has stopped.
+            case SWIM -> pose(AnimState.WALK, joint, phase);
+            case ROW -> pose(AnimState.IDLE, joint, phase);
         };
     }
 

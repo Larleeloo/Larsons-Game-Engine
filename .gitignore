@@ -58,3 +58,4 @@ bin/
 # these belong to whoever is running this copy of the game, not to the repo.
 /src/main/resources/config/player.json
 /src/main/resources/saves/
+__pycache__/
