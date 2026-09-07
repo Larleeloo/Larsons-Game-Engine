@@ -11,6 +11,7 @@ import com.larsons.engine.ui.ConfigForm;
 import com.larsons.engine.ui.Menu;
 import com.larsons.engine.ui.MenuTheme;
 import com.larsons.engine.watch.FieldGuide;
+import com.larsons.engine.watch.Figure;
 import com.larsons.engine.watch.WatchGame;
 import com.larsons.engine.watch.WatchStore;
 import com.larsons.engine.watch.life.AnimalRegistry;
@@ -64,6 +65,17 @@ public class WatchLobbyScene extends AbstractScene {
     private String seedText = "";
     private String hostAddress = "localhost";
     private int port = WatchProto.DEFAULT_PORT;
+
+    /**
+     * Which figure to walk as — see {@link Figure}.
+     *
+     * <p>On this screen as well as on the pause screen, and both for the same
+     * reason a name is: it is a thing you decide once, before setting off, and
+     * a game that made you set off first and then find a menu to be yourself in
+     * has the order wrong. It is remembered between walks like everything else
+     * on these forms.
+     */
+    private Figure figure = Figure.DEFAULT;
 
     private enum Screen { MENU, NEW_WALK, HOST, JOIN }
 
@@ -140,6 +152,7 @@ public class WatchLobbyScene extends AbstractScene {
         form = new ConfigForm(hosting ? "Host a Walk" : "New Walk")
                 .theme(MenuTheme.dark());
         form.addText("Your name", () -> playerName, v -> playerName = v, 24);
+        addFigureRow(form);
         form.addText("World name", () -> worldName, v -> worldName = v, 28);
         form.addText("Seed (blank for a new one)", () -> seedText, v -> seedText = v, 20);
         if (hosting) {
@@ -162,6 +175,7 @@ public class WatchLobbyScene extends AbstractScene {
         statusIsError = false;
         form = new ConfigForm("Join a Walk").theme(MenuTheme.dark());
         form.addText("Your name", () -> playerName, v -> playerName = v, 24);
+        addFigureRow(form);
         form.addText("Host address", () -> hostAddress, v -> hostAddress = v, 40);
         form.addInt("Port", () -> port, v -> port = v, 1024, 65535, 1);
         form.addNote(() -> "Connecting to " + hostOf(hostAddress) + " on port "
@@ -171,6 +185,19 @@ public class WatchLobbyScene extends AbstractScene {
         form.addNote("The host's world, the host's clock, and the host's field guide.");
         form.addAction("Join", this::join);
         form.addAction("Cancel", this::backToMenu);
+    }
+
+    /**
+     * The "walk as" row, on every form that starts a walk.
+     *
+     * <p>Directly under the name, because those two are the same question asked
+     * twice — who is this — and because everything below them is about the
+     * world rather than about you. The note under it is the figure's own, so
+     * this screen and the pause screen describe them in the same words.
+     */
+    private void addFigureRow(ConfigForm form) {
+        form.addEnum("Walk as", Figure.values(), () -> figure, v -> figure = v);
+        form.addNote(() -> figure.note());
     }
 
     private void backToMenu() {
@@ -200,7 +227,8 @@ public class WatchLobbyScene extends AbstractScene {
                 seed != 0 ? seed : new Random().nextLong(), name, 1));
         store.load(game);
         worldName = name;
-        handOff(WatchSession.solo(game));
+        // No figure: whoever walked this world last is who is walking it now.
+        handOff(WatchSession.solo(game), null);
     }
 
     /**
@@ -312,8 +340,18 @@ public class WatchLobbyScene extends AbstractScene {
 
 
     private void handOff(WatchSession session) {
+        handOff(session, figure);
+    }
+
+    /**
+     * @param opening which figure the form asked for, or {@code null} for a
+     *                walk that was continued rather than started — a save
+     *                already knows who was walking it, and the last thing that
+     *                happened to that answer was somebody choosing it
+     */
+    private void handOff(WatchSession session, Figure opening) {
         if (scenes.get(WatchScene.NAME) instanceof WatchScene scene) {
-            scene.adopt(session, store);
+            scene.adopt(session, store, opening);
             scenes.transitionTo(WatchScene.NAME);
         } else {
             session.close();

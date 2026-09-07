@@ -187,6 +187,19 @@ public final class WatchPlayer {
      * dropped — which is three reasons it is not an item.
      */
     private final Outfit outfit = new Outfit();
+
+    /**
+     * Which body the clothes go on.
+     *
+     * <p>Beside the outfit rather than in it, and for the same reason the
+     * outfit is beside the satchel: a figure belongs to the person rather than
+     * to the party, it is never a count of anything, and it cannot be dropped.
+     * What is different about it is that it is not <em>bought</em> — there is
+     * no rail it comes off and no points it costs, because it is not a thing
+     * you get, it is who you are. See {@link Figure}.
+     */
+    private Figure figure = Figure.DEFAULT;
+
     private final Fishing rod;
 
     public WatchPlayer(int id, String name, double x, double y, double z) {
@@ -441,6 +454,25 @@ public final class WatchPlayer {
     /** Their wardrobe, and what is on. */
     public Outfit outfit() { return outfit; }
 
+    /** Which figure they walk as. Never {@code null}. */
+    public Figure figure() { return figure; }
+
+    /**
+     * Walk as somebody else, from now on.
+     *
+     * <p>Free, instant, and allowed anywhere — there is nothing to check, which
+     * is why this is a setter and {@link Outfit#wear} is not: a cloak has to be
+     * owned before it can be worn and a body does not.
+     *
+     * @return whether it actually changed, so a caller can keep quiet when it
+     *         did not
+     */
+    public boolean setFigure(Figure to) {
+        if (to == null || to == figure) return false;
+        figure = to;
+        return true;
+    }
+
     /** Their rod, and whatever it is doing. */
     public Fishing rod() { return rod; }
 
@@ -565,6 +597,12 @@ public final class WatchPlayer {
         // only when they are wearing anything at all. See Outfit.wornLine for
         // why the wardrobe behind it deliberately stays private.
         if (!outfit.bare()) m.put("w", outfit.wornLine());
+        // Which body to draw them as. On everybody's row for the same reason
+        // the outfit is: it is the first thing anybody sees about a walker
+        // across a clearing. One short key, and only when it is not the figure
+        // this game drew before there was a choice — so a party of walkers
+        // costs exactly what it always did on the wire.
+        if (figure != Figure.DEFAULT) m.put("fg", figure.key());
         return m;
     }
 
@@ -626,6 +664,11 @@ public final class WatchPlayer {
         // from the spyglass above and the same one as the lantern. Nobody puts
         // their hat away for the night.
         outfit.load(WatchJson.map(m, "fit"));
+        // …and in the same coat means in the same body. A save from before
+        // there were two of them has no key here and loads as the figure it
+        // was written by, which is the only answer that cannot surprise
+        // anybody: see Figure.of.
+        figure = Figure.of(WatchJson.str(m, "fg", null));
         // …but debug mode does survive: a walk played with everything unlimited
         // is that walk when it is reopened, and the code turns it off as easily
         // as it turned it on.

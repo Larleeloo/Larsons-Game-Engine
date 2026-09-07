@@ -815,7 +815,7 @@ class ModelImportTest {
         Files.createDirectories(dir.resolve("cosmetics"));
         Files.write(dir.resolve("cosmetics/" + key + ".glb"), glbBytes());
 
-        SceneModels.setDirectory(dir);
+        onlyTheFolder(dir);
         try {
             assertTrue(CosmeticModel.modelled(key), "the dropped-in piece was not found");
             assertEquals(List.of(), CosmeticModel.boxesOnly(List.of(key)),
@@ -847,7 +847,7 @@ class ModelImportTest {
         Files.writeString(dir.resolve("cosmetics/" + key + ".gltf"), "{ not glTF }",
                 StandardCharsets.UTF_8);
 
-        SceneModels.setDirectory(dir);
+        onlyTheFolder(dir);
         try {
             assertFalse(CosmeticModel.modelled(key), "a broken file replaced something");
             assertEquals(List.of(key), CosmeticModel.boxesOnly(List.of(key)));
@@ -874,7 +874,7 @@ class ModelImportTest {
         Files.createDirectories(dir.resolve("cosmetics"));
         Files.write(dir.resolve("cosmetics/" + key + ".glb"), glbBytes());
 
-        SceneModels.setDirectory(dir);
+        onlyTheFolder(dir);
         try {
             SceneModel model = CosmeticModel.importedFor(key);
             assertNotNull(model);
@@ -981,9 +981,26 @@ class ModelImportTest {
                 + mesh.maxX() + "," + mesh.maxY() + "," + mesh.maxZ();
     }
 
+    /**
+     * Point the loader at a fixture folder and at <b>nothing else</b>.
+     *
+     * <p>{@link SceneModels#setDirectory} alone moves the folder searched
+     * <em>first</em> and leaves the classpath searched after it, which is
+     * exactly right for the game and wrong for a test with one file in it: this
+     * repository ships a wardrobe under {@code cosmetics/<figure>/}, so a test
+     * that writes one {@code wool_mittens.glb} to a temp folder and asks
+     * whether the piece is modelled is answered by the real one. Every test
+     * here that owns its own fixture wants only its own fixture.
+     */
+    private static void onlyTheFolder(Path dir) {
+        SceneModels.setDirectory(dir);
+        SceneModels.setSources(SceneModels.Sources.FOLDER_ONLY);
+    }
+
     /** Put the loaders back where the rest of the suite expects to find them. */
     private static void reset() {
         AnimalModels.setDirectory(Path.of(AnimalModels.DIRECTORY));
         SceneModels.setDirectory(Path.of(SceneModels.DIRECTORY));
+        SceneModels.setSources(SceneModels.Sources.FOLDER_AND_CLASSPATH);
     }
 }

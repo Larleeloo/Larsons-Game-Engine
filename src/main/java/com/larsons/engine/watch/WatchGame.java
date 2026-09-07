@@ -1690,6 +1690,23 @@ public final class WatchGame implements Animal.Surroundings {
     }
 
     /**
+     * Draw somebody as a different {@link Figure} from now on.
+     *
+     * <p>The one thing about a walker that is changed with no counter, no
+     * price and no check beyond the key being a figure this build has. It is a
+     * host verb all the same, and for exactly {@link #wear}'s reason: which
+     * body somebody is goes out on their snapshot row to everybody, so it has
+     * to be the host's copy that changes and not a client's idea of it.
+     *
+     * @return whether anything changed
+     */
+    public synchronized boolean setFigure(int playerId, String key) {
+        WatchPlayer player = players.get(playerId);
+        Figure figure = Figure.byKey(key);
+        return player != null && figure != null && player.setFigure(figure);
+    }
+
+    /**
      * Have a keeper stamp a fresh page: everything already seen counts again.
      *
      * <p>The other half of what a trading post is for, and the half the shelves

@@ -1,6 +1,7 @@
 package com.larsons.engine.watch.render;
 
 import com.larsons.engine.watch.Cosmetics;
+import com.larsons.engine.watch.Figure;
 import com.larsons.engine.watch.life.AnimState;
 import com.larsons.engine.watch.model.ModelRig;
 import com.larsons.engine.watch.model.SceneModel;
@@ -51,11 +52,19 @@ import java.util.List;
  *
  * <h2>Every one of them can be replaced by a modelled one</h2>
  *
- * <p>Drop {@code watch/models/cosmetics/<key>.glb} beside the jar or on the
- * classpath and it is drawn instead of the boxes below — the same drop-in the
- * ranger and the thirteen hundred animals already have ({@link SceneModels}),
+ * <p>Drop {@code watch/models/cosmetics/<figure>/<key>.glb} beside the jar or on
+ * the classpath and it is drawn instead of the boxes below — the same drop-in
+ * the ranger and the thirteen hundred animals already have ({@link SceneModels}),
  * under the same rules, failing the same soft way. That is what
  * {@link #importedFor} answers and it is the whole of the mechanism.
+ *
+ * <p><b>Named for the wearer's {@link Figure}</b>, because a worn piece is the
+ * one model in this game that is never measured and never rescaled, and a
+ * garment that is not rescaled is a garment cut to a body. The wardrobe this
+ * game ships is built twice for that reason —
+ * {@code tools/blender/cosmetics.py} — and the unqualified
+ * {@code cosmetics/<key>.glb} beside it still works, for a piece that really
+ * does fit everybody.
  *
  * <p><b>An imported piece is a rigged figure, not a box on an anchor.</b> The
  * descriptions below are written against a {@link Fit} — a point on one body
@@ -194,6 +203,21 @@ public final class CosmeticModel {
     public static final String FOLDER = "cosmetics/";
 
     /**
+     * The folder a piece cut to one figure lives in — {@code cosmetics/<key>/}.
+     *
+     * <p><b>A wardrobe is fitted to a body, and there is more than one body.</b>
+     * Every other model in this game is measured and rescaled — one file dresses
+     * a hummingbird and an elk. A worn piece is {@link SceneModel.Size#AS_PLACED}:
+     * the metre it was modelled at is the metre it is worn at, which is right,
+     * and which means a collar cut for a 0.33 m chest stands 40 mm off a 0.28 m
+     * one and a hat cut to cover a square crown swallows a round one. So the
+     * folder named for the wearer's own {@link Figure} is looked in first.
+     */
+    private static String fittedTo(Figure figure, String key) {
+        return FOLDER + (figure == null ? Figure.DEFAULT : figure).key() + "/" + key;
+    }
+
+    /**
      * How the file is read: as a person, at the size and the height it was
      * modelled at.
      *
@@ -207,22 +231,55 @@ public final class CosmeticModel {
     private static final SceneModel.Size WORN_SIZE = SceneModel.Size.AS_PLACED;
 
     /**
-     * The modelled version of a piece, or {@code null} for one that is still
-     * boxes.
+     * The modelled version of a piece as this figure wears it, or {@code null}
+     * for one that is still boxes.
      *
      * <p>Every rule about where the file may be and what may be wrong with it is
      * {@link SceneModels}'s, unchanged: beside the jar first and then the
      * classpath, {@code .glb} then {@code .gltf} then {@code .obj}, and anything
      * missing, truncated or empty leaves the boxes in place with one line on
      * stderr. Nothing a player drops in this folder can stop the game starting.
+     *
+     * <p><b>Two places, and they mean different things.</b>
+     *
+     * <ol>
+     *   <li>{@code cosmetics/<figure>/<key>} — cut to that figure's modelled
+     *       body, and used <em>only while that body is the one being drawn</em>.
+     *       A piece is never rescaled, so one authored on the {@code .glb}
+     *       walker — hat brim at 1.59, shoulders at 1.18 — is authored against
+     *       that figure's landmarks and not against the procedural boxes
+     *       underneath it, whose hat brim is at 1.85. With the boxes showing,
+     *       the two sets of numbers must not meet.</li>
+     *   <li>{@code cosmetics/<key>} — the drop-in slot that was here before
+     *       there was a choice of figure, authored against §16's reference
+     *       walker, and used whatever is being drawn. Everything already in it
+     *       goes on working exactly as it did, and it stays the right place for
+     *       a piece that genuinely fits anybody — a lanyard, a pair of
+     *       spectacles.</li>
+     * </ol>
      */
-    public static SceneModel importedFor(String key) {
-        return key == null ? null
-                : SceneModels.of(FOLDER + key, ModelRig.Kind.HUMANOID, WORN_SIZE);
+    public static SceneModel importedFor(Figure figure, String key) {
+        if (key == null) return null;
+        if (WalkerModel.imported(figure)) {
+            SceneModel fitted = SceneModels.of(fittedTo(figure, key),
+                    ModelRig.Kind.HUMANOID, WORN_SIZE);
+            if (fitted != null) return fitted;
+        }
+        return SceneModels.of(FOLDER + key, ModelRig.Kind.HUMANOID, WORN_SIZE);
     }
 
-    /** Whether anybody has modelled this piece. */
-    public static boolean modelled(String key) { return importedFor(key) != null; }
+    /** The same, for the figure this game drew before there was a choice. */
+    public static SceneModel importedFor(String key) {
+        return importedFor(Figure.DEFAULT, key);
+    }
+
+    /** Whether anybody has modelled this piece for this figure. */
+    public static boolean modelled(Figure figure, String key) {
+        return importedFor(figure, key) != null;
+    }
+
+    /** Whether anybody has modelled this piece at all. */
+    public static boolean modelled(String key) { return modelled(Figure.DEFAULT, key); }
 
     /**
      * The worn keys that are still boxes — what a {@link Fit} is handed.
@@ -231,17 +288,22 @@ public final class CosmeticModel {
      * every walker in an installation nobody has dropped a file into: the common
      * path allocates nothing and the uncommon one allocates a list six long.
      */
-    public static List<String> boxesOnly(List<String> worn) {
+    public static List<String> boxesOnly(Figure figure, List<String> worn) {
         if (worn == null || worn.isEmpty()) return worn;
         List<String> out = null;
         for (int i = 0; i < worn.size(); i++) {
-            if (!modelled(worn.get(i))) {
+            if (!modelled(figure, worn.get(i))) {
                 if (out != null) out.add(worn.get(i));
                 continue;
             }
             if (out == null) out = new ArrayList<>(worn.subList(0, i));
         }
         return out == null ? worn : out;
+    }
+
+    /** The same, for the figure this game drew before there was a choice. */
+    public static List<String> boxesOnly(List<String> worn) {
+        return boxesOnly(Figure.DEFAULT, worn);
     }
 
     /**
@@ -268,18 +330,25 @@ public final class CosmeticModel {
      * @param phase  the gait clock, in turns, so a walk cycle is in step with
      *               the legs underneath it
      */
-    public static void overlay(Mesh.Builder mesh, List<String> worn, double x, double y,
-                               double z, double yaw, double height, double speed,
-                               double phase, float[] uv) {
+    public static void overlay(Mesh.Builder mesh, Figure figure, List<String> worn,
+                               double x, double y, double z, double yaw, double height,
+                               double speed, double phase, float[] uv) {
         if (worn == null || worn.isEmpty()) return;
         AnimState state = stateFor(speed);
         double scale = height / WalkerModel.HEIGHT;
         for (String key : worn) {
-            SceneModel model = importedFor(key);
+            SceneModel model = importedFor(figure, key);
             if (model == null) continue;
             model.mesh(mesh, x, y, z, yaw + SceneModel.PERSON_TURN, state, phase,
                     scale, uv);
         }
+    }
+
+    /** The same, for the figure this game drew before there was a choice. */
+    public static void overlay(Mesh.Builder mesh, List<String> worn, double x, double y,
+                               double z, double yaw, double height, double speed,
+                               double phase, float[] uv) {
+        overlay(mesh, Figure.DEFAULT, worn, x, y, z, yaw, height, speed, phase, uv);
     }
 
     /**
@@ -318,11 +387,11 @@ public final class CosmeticModel {
      * @param size what to treat the missing body part as being — pass the
      *             {@linkplain #portraitSize natural size} for its slot
      */
-    public static void alone(Mesh.Builder mesh, String key, double x, double y, double z,
-                             double yaw, double size, int coat) {
+    public static void alone(Mesh.Builder mesh, Figure figure, String key, double x,
+                             double y, double z, double yaw, double size, int coat) {
         Cosmetics.Piece piece = Cosmetics.byKey(key);
         if (piece == null) return;
-        SceneModel model = importedFor(key);
+        SceneModel model = importedFor(figure, key);
         if (model != null) {
             // Standing still at the origin, and the frame is found by measuring
             // the triangles — so a hat authored at head height comes back as a
@@ -335,6 +404,12 @@ public final class CosmeticModel {
             return;
         }
         draw(mesh, piece, Fit.upright(x, y, z, yaw, size), coat);
+    }
+
+    /** The same, for the figure this game drew before there was a choice. */
+    public static void alone(Mesh.Builder mesh, String key, double x, double y, double z,
+                             double yaw, double size, int coat) {
+        alone(mesh, Figure.DEFAULT, key, x, y, z, yaw, size, coat);
     }
 
     /**

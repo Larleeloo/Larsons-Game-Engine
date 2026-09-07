@@ -644,6 +644,16 @@ public final class WatchServer implements WatchGame.Sink {
                 if (line != null) bagChanged(id, line);
             }
 
+            case "figure" -> {
+                // Nothing goes back at all. Which body somebody is drawn as
+                // rides on their own player row, so the next snapshot — twenty
+                // milliseconds away — tells this client and every other client
+                // in the same field it was already sending. There is no
+                // wardrobe to resend and no ledger to touch: a figure costs
+                // nothing and is owned by nobody.
+                game.setFigure(id, WatchJson.str(message, "k", ""));
+            }
+
             case "stamp" -> {
                 String line = game.stamp(id, WatchJson.big(message, "s", 0));
                 if (line != null) {

@@ -65,12 +65,17 @@ public final class WatchView {
      *              On everybody's row because a hat is worn to be seen; what is
      *              in the wardrobe behind it is nobody else's business and does
      *              not travel
+     * @param figure which body to draw them as — see {@link Figure}. Never
+     *              {@code null}: a key this build does not know is the figure
+     *              this game drew before there was a choice, because the one
+     *              guarantee worth having about somebody joining from a newer
+     *              version is that they are still <em>drawn</em>
      */
     public record Walker(int id, String name, double x, double y, double z,
                          double yaw, double pitch, double stillness, boolean crouching,
                          boolean submerged, double breath, long boatId, double glass,
                          boolean debug, double health, int respawns, String light,
-                         double lightHours, String worn) {
+                         double lightHours, String worn, Figure figure) {
 
         /** Whether they have something lit in their hand. */
         public boolean carryingLight() { return light != null && !light.isBlank(); }
@@ -397,7 +402,7 @@ public final class WatchView {
                     player.crouching(), player.submerged(), player.breath(),
                     player.boatId(), player.glassPower(), player.debugging(),
                     player.health(), player.respawns(), player.carriedLight(),
-                    player.lampFuel(), player.outfit().wornLine()));
+                    player.lampFuel(), player.outfit().wornLine(), player.figure()));
         }
         creatures.clear();
         for (Animal animal : game.animals()) {
@@ -465,7 +470,8 @@ public final class WatchView {
                     WatchJson.big(row, "boat", 0), WatchJson.num(row, "gl", 1),
                     WatchJson.bool(row, "dbg", false), WatchJson.num(row, "hp", 1),
                     WatchJson.integer(row, "rs", 0), WatchJson.str(row, "lt", null),
-                    WatchJson.num(row, "lh", 0), WatchJson.str(row, "w", "")));
+                    WatchJson.num(row, "lh", 0), WatchJson.str(row, "w", ""),
+                    Figure.of(WatchJson.str(row, "fg", null))));
         }
         Walker me = self();
         satchel.setBottomless(me != null && me.debug());

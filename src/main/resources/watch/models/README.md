@@ -331,8 +331,10 @@ folder **next to the jar** first, then `watch/models/` **on the classpath**.
 | `<species key>.glb` | that one species (see §1 for keys) |
 | `<family key>.glb` | all 49 species of that family |
 | `characters/ranger.glb` | **the forest ranger** who stands outside every trading post |
-| `characters/walker.glb` | **the player** — you, and everybody else walking about. See §17 |
-| `cosmetics/<piece key>.glb` | **one thing to wear** — a hat, a cape, a pair of boots. See §16 |
+| `characters/walker.glb` | **a player** — the first of the two figures you can walk as. See §17 |
+| `characters/wayfarer.glb` | **the other one.** See §17 |
+| `cosmetics/<figure>/<piece key>.glb` | **one thing to wear, cut to one figure** — a hat, a cape, a pair of boots. See §16 |
+| `cosmetics/<piece key>.glb` | the same, for a piece that fits anybody. Looked at second |
 
 A `.bbmodel` under the same name **wins** over a `.glb`. That is on purpose:
 adding a mesh beside an existing box model should be a deliberate act — delete
@@ -557,12 +559,14 @@ remember the jar's neighbour wins over the classpath.
 
 ## 16. Cosmetics — clothes for the player
 
-Everything the player can buy off a trading post's clothes rail is a pile of
-boxes today, exactly like the animals and the ranger, and exactly as replaceable.
-Drop a file in and it is worn instead:
+Everything the player can buy off a trading post's clothes rail exists twice: as
+a pile of boxes in `CosmeticModel.java`, drawn when there is no model to draw
+instead, and as a modelled garment in this folder. Drop a file in and it is worn
+instead:
 
 ```
-watch/models/cosmetics/<piece key>.glb
+watch/models/cosmetics/<figure>/<piece key>.glb    cut to that figure
+watch/models/cosmetics/<piece key>.glb             fits anybody
 ```
 
 The keys are the ones in `Cosmetics.java`, and there are eighteen of them:
@@ -575,13 +579,35 @@ river_waders      moth_veil        fur_collar       oilskin_cape
 antler_circlet    heron_cloak
 ```
 
-One file replaces one piece. Everything else on the rail keeps its boxes, so you
-can do these one at a time — and the game will happily draw a modelled hat over
-a boxed scarf.
+One file replaces one piece. Everything else on the rail keeps whatever it had,
+so you can do these one at a time — and the game will happily draw a modelled hat
+over a boxed scarf.
 
-**There is a walkthrough with the clicks in it**, plus a Blender script that
-builds the reference figure and its armature for you, in `tools/blender/` at the
-root of this repository. This section is the contract; that is the tutorial.
+### Two folders, and which one you want
+
+`<figure>` is a player figure's key — `walker` or `wayfarer`, see §17. **This
+is the one place in the folder where a model belongs to a body**, and the reason
+is §16's whole subject: a worn piece is the only model in this game that is
+never measured and never rescaled, so the metre you put a hat at is the metre it
+is worn at, and a collar cut for a 0.33 m chest stands 40 mm off a 0.28 m one.
+
+- **`cosmetics/<figure>/<key>.glb`** is looked at first, and only while that
+  figure's own `.glb` is the body being drawn. That is deliberate: a piece
+  authored on the modelled walker — hat brim at 1.59, shoulders at 1.18 — must
+  never be hung on the procedural boxes underneath, whose hat brim is at 1.85.
+- **`cosmetics/<key>.glb`** is looked at second and is always used. It is where
+  a piece that genuinely fits anybody goes — a lanyard, a pair of spectacles —
+  and it is the folder that existed before there were two figures, so everything
+  already in it goes on working. Author against the boxed reference figure
+  (`tools/blender/cosmetic_reference.py`, and the table below).
+
+The game ships all eighteen for both figures, built by
+`tools/blender/cosmetics.py` out of one set of measurements in
+`tools/blender/figures.py`. Adding a third figure is a row in that file, a body
+`.glb`, and one run of that script.
+
+**There is a walkthrough with the clicks in it** in `tools/blender/` at the root
+of this repository. This section is the contract; that is the tutorial.
 
 ### A cosmetic is a rigged figure, not a prop
 
@@ -591,30 +617,69 @@ cosmetic is *the clothes off a person with the person deleted* — so you model 
 the way you would model a coat: on a body, in place, rigged to that body's
 skeleton.
 
-1. **Stand a reference figure at the origin** — feet on `Z = 0`, facing **−Y**
-   (Blender's Front view), 1.95 m to the top of its hat. Run
-   `tools/blender/cosmetic_reference.py` and you have one, armature included;
-   the table below is what it builds, landmark by landmark. §9's axes apply unchanged, and they are what
-   tells a cape from a bib: **−Y is the front**, so a cape goes at **+Y**, behind
-   the chest's back face (0.22 m from its middle).
+1. **Stand the figure you are cutting for at the origin** — feet on `Z = 0`,
+   facing **−Y** (Blender's Front view). §9's axes apply unchanged, and they are
+   what tells a cape from a bib: **−Y is the front**, so a cape goes at **+Y**,
+   behind the back of the chest.
 2. **Model your piece where it sits on them.** A hat goes at head height. A cape
    hangs off the shoulders and down the back. Boots go round the ankles.
 3. **Rig it to bones with the §10 names** — `head`, `spine`, `arm_l`, `arm_r`,
    `leg_l`, `leg_r`. A cape is on `spine`; mittens are on `hand_l` and `hand_r`;
    a hat is on `head`.
-4. **Delete the reference figure** and export just your piece.
+4. **Delete the figure** and export just your piece.
 
 That is what makes a piece follow the joint it is worn on, and it is why a cape
 can hang off the shoulders *and* reach the knees — a single anchor point could
 not describe that.
 
-### Where the reference figure's parts are
+### Where the figure's parts are
 
-These are the walker's own numbers (`WalkerModel`), in metres, for a standing
-figure with their feet on `Z = 0` and their arms at rest.
-`CosmeticsTest.theReferenceFigureIsTheOneThisFolderDescribes` holds every row of
-this table against the real mesh, so it cannot drift away from the game without
-a test going red.
+Two tables, because there are two figures and a garment is cut to one of them.
+Which you want depends on which folder the file is going in — see above.
+
+**For `cosmetics/<figure>/`, the modelled bodies.** Both stand **exactly 1.78 m**
+to the crown, which is `WalkerModel.HEIGHT` and is not a coincidence: an imported
+character is normalised by its height and redrawn at that number, so a figure
+authored at 1.78 comes out at the metres it was authored in and the landmarks
+below are the landmarks the game draws. Every row is
+`tools/blender/figures.py`, which is also what `cosmetics.py` cuts the shipped
+wardrobe from.
+
+| Landmark | `walker` | `wayfarer` |
+|---|---|---|
+| sole of boot | 0.00 | 0.00 |
+| boot centre | 0.05 | 0.04 |
+| top of the boot | 0.25 | 0.26 |
+| knee | 0.37 | 0.40 |
+| hand centre (arms at rest) | 0.59 | 0.60 |
+| hip | 0.69 | 0.72 |
+| coat hem | 0.45 | 0.40 |
+| chest centre | 1.03 | 1.05 |
+| shoulder | 1.18 | 1.19 |
+| neck / collar | 1.27 | 1.28 |
+| head centre | 1.45 | 1.47 |
+| top of the head | 1.62 | 1.62 |
+| brim of the hat | 1.59 | 1.61 |
+| **top of the hat** | **1.78** | **1.78** |
+| shoulders, either side of centre | ±0.205 | ±0.175 |
+| hips | ±0.105 | ±0.100 |
+| chest, half-width | 0.165 | 0.142 |
+| front of the chest | −0.145 | −0.130 |
+| back of the pack | +0.330 | +0.300 |
+| hat brim, radius | 0.320 | 0.275 |
+| radius that covers the crown | 0.238 | 0.162 |
+
+That last row is the one an artist actually needs for a hat: the walker's crown
+is a square box 0.33 across, so covering it takes the radius of its *corners*
+and not half of its side. The wayfarer's is round, so it barely needs more than
+itself.
+
+**For `cosmetics/`, the boxed reference figure.** These are the procedural
+walker's own numbers (`WalkerModel`), which is what the game draws when there is
+no character `.glb` at all.
+`CosmeticsTest.theReferenceFigureIsTheOneThisFolderDescribes` holds every row
+against the real mesh, so it cannot drift without a test going red. Run
+`tools/blender/cosmetic_reference.py` and you have the figure, armature included.
 
 | Landmark | Z |
 |---|---|
@@ -632,7 +697,7 @@ a test going red.
 | brim of the default hat | 1.85 |
 | **top of the default hat** | **1.95** |
 
-**`WalkerModel.HEIGHT` is 1.78 and the figure is 1.95 m tall.** Those are not in
+**`WalkerModel.HEIGHT` is 1.78 and that figure is 1.95 m tall.** Those are not in
 conflict: 1.78 is the nominal height every proportion above is a fraction of, and
 the hat stands above it. Build against 1.95 — it is what you would measure.
 
@@ -643,10 +708,14 @@ the hat stands above it. Build against 1.95 — it is what you would measure.
 - The chest is **0.29 wide and 0.44 deep**. Deeper than it looks, which is why a
   scarf tail written "just in front of the neck" ends up inside somebody.
 
+**The two tables are 170 mm apart at the hat and 250 mm at the hands**, which is
+the whole reason the folders are separate: a piece cut to one and filed under
+the other is worn nowhere near a person.
+
 Model at **1.0 = 1 metre**. Unlike everything else in this folder a cosmetic is
 **not measured and rescaled**: the size you model at and the height you put it at
-are both answers rather than accidents, so a hat modelled at 1.85 m arrives at
-1.85 m. (It does scale with the wearer — a crouching walker's cape crouches — but
+are both answers rather than accidents, so a hat modelled at 1.62 m arrives at
+1.62 m. (It does scale with the wearer — a crouching walker's cape crouches — but
 not with your file.)
 
 ### Animation
@@ -698,7 +767,9 @@ Three things a modelled piece does **not** do, all on purpose:
 
 ### Checklist
 
-1. Reference figure at the origin, facing **−Y**, feet on `Z = 0`, hat at 1.95.
+1. The figure you are cutting for at the origin, facing **−Y**, feet on `Z = 0`.
+   For `cosmetics/<figure>/` that is a 1.78 m body from the table above; for
+   `cosmetics/` it is the 1.95 m boxed reference figure.
 2. Model the piece **in place** on it, in metres.
 3. Rig to §10 bone names. Cape → `spine`; hat → `head`; mittens →
    `hand_l`/`hand_r`.
@@ -706,19 +777,52 @@ Three things a modelled piece does **not** do, all on purpose:
 5. `Ctrl+A → All Transforms`. Triangulate.
 6. Animate `walk` if you animate anything.
 7. Export **glTF Binary (.glb)**, *+Y Up*, *Apply Modifiers*, *Animation* on.
-8. Save to `watch/models/cosmetics/<piece key>.glb`.
+8. Save to `watch/models/cosmetics/<figure>/<piece key>.glb`.
 
 ---
 
 ## 17. The player
 
-`characters/walker.glb` replaces the figure in §5's boxes with your own — in
-third person, for every other player in the party, and for anybody you pass in
-a clearing. It is authored exactly like the ranger in §15: **+Z up, facing −Y,
-feet on `Z = 0`**, materials rather than textures, separate overlapping pieces
-one per bone, §10's bone names, under about 1200 triangles.
+There are **two** figures you can walk as, and which one you are is chosen on the
+lobby's New Walk screen before you set off and on the pause screen in the middle
+of a walk (`Esc`, then left or right). It is remembered in the save and it rides
+everybody's snapshot row, so a party spread across a valley sees each other
+correctly.
 
-Two things are its own.
+| Figure | File | Who they are |
+|---|---|---|
+| **Walker** | `characters/walker.glb` | Square in the shoulder, campaign hat, field coat, a beard. The one this game has always drawn |
+| **Wayfarer** | `characters/wayfarer.glb` | Slighter in the shoulder, a waist cut above the belt, soft felt hat, long coat, hair in a plait |
+
+A figure picks two files and nothing else: the body above, and the wardrobe cut
+to it in `cosmetics/<key>/` (§16). **Nothing else about a walker changes with
+it** — not the height, not the reach, not the speed, not the eye. Both are 1.78 m
+to the crown and `WalkerModel.HEIGHT` is still one number, because the moment one
+of them were faster this would stop being a thing you pick because you like it.
+
+Either file replaces the figure in §5's boxes — in third person, for every other
+player in the party, and for anybody you pass in a clearing. Both are authored
+exactly like the ranger in §15: **+Z up, facing −Y, feet on `Z = 0`**, materials
+rather than textures, separate overlapping pieces one per bone, §10's bone names,
+under about 1200 triangles. They are built by `tools/blender/ranger.py` and
+`tools/blender/wayfarer.py`.
+
+**Adding a third** is a row in `Figure.java`, a body `.glb` under that key, and
+one run of `tools/blender/cosmetics.py` for its wardrobe. It is not a code change
+anywhere else, and that is the property `Figure` exists to have.
+
+Three things are the player's own.
+
+### Author at exactly 1.78 m
+
+**This is the load-bearing number and it is easy to miss.** An imported character
+is measured, normalised by its height, and redrawn at `WalkerModel.HEIGHT` —
+which is 1.78. A figure authored at 1.78 therefore comes out at exactly the
+metres it was authored in, and every landmark in §16's table is a landmark the
+game draws. A figure authored at 2.10 comes out scaled by 0.85, its head lands
+250 mm below where you put it, and the wardrobe cut to your table is worn 250 mm
+above the head it belongs on — because a cosmetic is the one thing here that is
+never rescaled.
 
 ### Ship five clips, not one
 
@@ -787,20 +891,35 @@ Two things that bite:
   is a clip, so a modelled swimmer always swims. Worth knowing, not worth a
   second clip.
 
-### Cosmetics are fitted to the boxes, not to your model
+### Cosmetics are fitted to a figure, and yours is not one of them
 
-Everything on the rail was authored against the reference figure in §16 —
-shoulders at Z 1.45, head at 1.70, hat brim at 1.85 — and a worn piece is
-`AS_PLACED`: never measured, never rescaled. A model with different landmarks
-wears them at the box walker's heights, not at its own. Either match those
-landmarks or re-author the eighteen pieces to yours.
+A worn piece is `AS_PLACED`: never measured, never rescaled. So the eighteen
+under `cosmetics/walker/` are cut to *this repository's* walker — hat brim at
+1.59, shoulders at 1.18 — and a `.glb` you drop in over that name with different
+landmarks wears them at those heights rather than at its own.
+
+Three ways out, in increasing order of effort:
+
+1. **Match the landmarks.** §16's first table is the whole contract, and if your
+   figure hits those rows the whole wardrobe fits it for nothing.
+2. **Re-cut the wardrobe.** `tools/blender/cosmetics.py` builds all eighteen from
+   one row of measurements — write yours into `tools/blender/figures.py` and run
+   it against your figure's key.
+3. **File it under a new figure.** A row in `Figure.java`, your body under
+   `characters/<key>.glb`, its wardrobe under `cosmetics/<key>/`, and the two
+   that ship are untouched.
 
 ### Testing against it
 
 `SceneModels.setSources` is how a test says which figure it means. A test of
 the boxes takes `NONE`; a test with a `.glb` fixture of its own takes
-`FOLDER_ONLY`, so the classpath does not hand it this file as well. Without
-that, committing a walker silently changes what half the walker tests are
-measuring.
+`FOLDER_ONLY`, so the classpath does not hand it the shipped bodies and the
+shipped wardrobe as well. Without that, committing a walker silently changes
+what half the walker tests are measuring — and committing a wardrobe answers
+"is this piece modelled?" with somebody else's file.
+
+`PlayerFiguresTest` is the one that goes the other way on purpose: its subject is
+the art that ships, so it asks the loader for exactly what a player would get and
+checks every piece is worn where its slot says it is, on both figures.
 
 ---
