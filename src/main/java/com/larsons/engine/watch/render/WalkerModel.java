@@ -339,6 +339,22 @@ public final class WalkerModel {
                               double z, double yaw, boolean crouching, double phase,
                               double speed, Leap leap, int tint, List<String> worn,
                               double clock) {
+        walker(mesh, who, x, y, z, yaw, crouching, phase, speed, leap, tint, worn,
+                clock, CosmeticModel.Dyes.AS_MADE);
+    }
+
+    /**
+     * …and in whatever colours this walker has dyed their clothes.
+     *
+     * <p>Beside {@code worn} rather than inside it because the two answer to
+     * different owners: what is on comes off a snapshot row and is the host's,
+     * and what colour it is comes off the same row and is equally the host's,
+     * but a portrait and a first-person hand want one without the other.
+     */
+    public static void walker(Mesh.Builder mesh, Figure who, double x, double y,
+                              double z, double yaw, boolean crouching, double phase,
+                              double speed, Leap leap, int tint, List<String> worn,
+                              double clock, CosmeticModel.Dyes dyes) {
         float[] uv = new float[4];
         WatchMaterials.uv(WatchMaterial.PLANK, uv);
         // Anything somebody has modelled in Blender is a rigged figure of its
@@ -358,12 +374,22 @@ public final class WalkerModel {
             // The head does not turn: a walker looks where they are going and
             // nowhere else, which is why the aim is zero rather than plumbed
             // through. Only the keeper and the ranger watch you.
-            figure.mesh(mesh, x, y, z, yaw + SceneModel.PERSON_TURN, state(speed),
-                    at(speed, phase, clock), height, uv, 0);
-            // The clothes still go on over the top, at `z` for the same reason
-            // the boxes put them at `base`: a piece authored on a reference
-            // walker measured itself from the floor.
-            CosmeticModel.overlay(mesh, who, worn, x, y, z, yaw, height, speed, phase, uv);
+            AnimState state = state(speed);
+            double at = at(speed, phase, clock);
+            figure.mesh(mesh, x, y, z, yaw + SceneModel.PERSON_TURN, state, at,
+                    height, uv, 0);
+            // The clothes go on over the top, at `z` for the same reason the
+            // boxes put them at `base`: a piece authored on a reference walker
+            // measured itself from the floor.
+            //
+            // Drawn through the body's own motion rather than beside it, and at
+            // the body's state and clock rather than at one worked out again
+            // from the speed. Both matter: a hat posed by the procedural
+            // stand-in while the head plays an authored walk hangs in the air
+            // once a stride, and a hat that agreed about the pose but not about
+            // *which* clip would do it at every threshold.
+            CosmeticModel.overlay(mesh, who, worn, x, y, z, yaw, height, state, at, uv,
+                    figure.wornAt(state, at, height, SceneModel.Lean.UPRIGHT), dyes);
             return;
         }
 
@@ -677,6 +703,14 @@ public final class WalkerModel {
     public static void rower(Mesh.Builder mesh, Figure who, double x, double y,
                              double waterZ, double yaw, double bob, double stroke,
                              int tint, List<String> worn) {
+        rower(mesh, who, x, y, waterZ, yaw, bob, stroke, tint, worn,
+                CosmeticModel.Dyes.AS_MADE);
+    }
+
+    /** …in the colours they dyed them. */
+    public static void rower(Mesh.Builder mesh, Figure who, double x, double y,
+                             double waterZ, double yaw, double bob, double stroke,
+                             int tint, List<String> worn, CosmeticModel.Dyes dyes) {
         float[] uv = new float[4];
         WatchMaterials.uv(WatchMaterial.PLANK, uv);
         int coat = tint;
@@ -698,10 +732,22 @@ public final class WalkerModel {
             // Along the boat by SEAT_ALONG, which is where the thwart is. The
             // clip keeps the hips over its own origin and reaches the feet
             // forward from there, so this one offset seats the whole figure.
-            figure.mesh(mesh, x + fx * BoatModel.SEAT_ALONG,
-                    y + fy * BoatModel.SEAT_ALONG, BoatModel.floorZ(waterZ, bob),
-                    yaw + SceneModel.PERSON_TURN, AnimState.ROW,
-                    RowStroke.wrap(stroke), HEIGHT, uv, 0);
+            double at = RowStroke.wrap(stroke);
+            double seatX = x + fx * BoatModel.SEAT_ALONG;
+            double seatY = y + fy * BoatModel.SEAT_ALONG;
+            double boards = BoatModel.floorZ(waterZ, bob);
+            figure.mesh(mesh, seatX, seatY, boards, yaw + SceneModel.PERSON_TURN,
+                    AnimState.ROW, at, HEIGHT, uv, 0);
+            // **A modelled rower is dressed, which they used not to be.** Their
+            // pose is numbers no garment's clip could know — a body folded onto
+            // a thwart — so the clothes used to fall back to standing bolt
+            // upright, and the honest answer was to leave them off. Now the
+            // body says where its joints went and the coat goes wherever they
+            // did, so there is nothing left to fall back to.
+            CosmeticModel.overlay(mesh, who, worn, seatX, seatY, boards, yaw, HEIGHT,
+                    AnimState.ROW, at, uv,
+                    figure.wornAt(AnimState.ROW, at, HEIGHT, SceneModel.Lean.UPRIGHT),
+                    dyes);
             return;
         }
 
@@ -897,6 +943,15 @@ public final class WalkerModel {
                                double z, double yaw, double bodyPitch, double drive,
                                double phase, boolean surfaced, int tint,
                                List<String> worn) {
+        swimmer(mesh, who, x, y, z, yaw, bodyPitch, drive, phase, surfaced, tint,
+                worn, CosmeticModel.Dyes.AS_MADE);
+    }
+
+    /** …in the colours they dyed them. */
+    public static void swimmer(Mesh.Builder mesh, Figure who, double x, double y,
+                               double z, double yaw, double bodyPitch, double drive,
+                               double phase, boolean surfaced, int tint,
+                               List<String> worn, CosmeticModel.Dyes dyes) {
         float[] uv = new float[4];
         WatchMaterials.uv(WatchMaterial.PLANK, uv);
         int coat = tint;
@@ -920,9 +975,17 @@ public final class WalkerModel {
             // chest-deep for somebody upright, so a body laid down about its
             // hips puts the head at the waterline without being told where the
             // water is.
+            double at = RowStroke.wrap(phase);
+            SceneModel.Lean lean = new SceneModel.Lean(UPRIGHT - bodyPitch, HIP_SHARE);
             figure.mesh(mesh, x, y, z, yaw + SceneModel.PERSON_TURN, AnimState.SWIM,
-                    RowStroke.wrap(phase), HEIGHT, uv, 0, null,
-                    new SceneModel.Lean(UPRIGHT - bodyPitch, HIP_SHARE));
+                    at, HEIGHT, uv, 0, null, lean);
+            // …and dressed, laid down with them. The tip is inside the pose the
+            // clothes are carried by rather than applied to them separately —
+            // see SceneModel.wornAt, which is also why a swimmer's cloak no
+            // longer has to be left off.
+            CosmeticModel.overlay(mesh, who, worn, x, y, z, yaw, HEIGHT,
+                    AnimState.SWIM, at, uv,
+                    figure.wornAt(AnimState.SWIM, at, HEIGHT, lean), dyes);
             return;
         }
 

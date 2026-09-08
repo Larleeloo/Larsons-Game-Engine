@@ -39,8 +39,95 @@ public final class Outfit {
     /** What is on, one per slot. */
     private final Map<Cosmetics.Slot, String> worn = new EnumMap<>(Cosmetics.Slot.class);
 
+    /**
+     * What colour each piece is being drawn in, where the player has said.
+     *
+     * <p><b>Per player, not per piece.</b> Two people in the same coat are two
+     * people who chose the same coat, and if one of them dyes theirs the other
+     * one's does not change — so this cannot live on {@link Cosmetics.Piece},
+     * which is a catalogue row and is shared by everybody in the world.
+     *
+     * <p>Only what has actually been changed. A piece with no entry is drawn in
+     * the colours its artist gave it, which is what every piece starts as and
+     * what most of them stay, so the common outfit costs nothing here and
+     * nothing on the wire.
+     */
+    private final Map<String, Integer> dyed = new LinkedHashMap<>();
+
+    /**
+     * Give somebody the clothes they walk out in.
+     *
+     * <p>Called when a player joins and again after a save is read, because
+     * both of those are moments where somebody might otherwise be standing in
+     * a wood in their underwear. The kit is free and universal, so this is not
+     * a grant so much as a statement of fact — {@link #acquire} refuses what is
+     * already owned, so calling it twice costs nothing.
+     *
+     * <p>What it does <em>not</em> do is dress anybody. See {@link #dressIn}.
+     */
+    public void grantStandardKit() {
+        for (Cosmetics.Piece piece : Cosmetics.standardKit()) acquire(piece.key());
+    }
+
+    /**
+     * Put the standard kit on, in every slot that is still empty.
+     *
+     * <p><b>Empty slots only, and that is the whole subtlety.</b> This runs
+     * after a save is read as well as on a fresh walker, and a walk saved in a
+     * heron cloak has to come back in the heron cloak rather than in the coat
+     * it started in. It also runs on a save written before the kit existed, in
+     * which every slot but the ones they had bought is empty — which is
+     * precisely the case that needs dressing.
+     *
+     * @param hair which hairstyle this figure starts in; see {@link Figure#hair}
+     */
+    public void dressIn(String hair) {
+        for (Cosmetics.Piece piece : Cosmetics.standardKit()) {
+            if (piece.slot() == Cosmetics.Slot.HAIR) continue;
+            if (worn.get(piece.slot()) == null) wear(piece.key());
+        }
+        if (worn.get(Cosmetics.Slot.HAIR) == null) wear(hair);
+    }
+
     /** Whether this player owns a piece. */
     public boolean owns(String key) { return key != null && owned.contains(key); }
+
+    // --- colour ---------------------------------------------------------------------
+
+    /**
+     * What colour a piece is drawn in for this player, or {@code 0} for the
+     * colours its artist gave it.
+     *
+     * <p>Zero rather than {@code null} because it is read once per piece per
+     * frame by the renderer, and because {@code 0} is unusable as a colour
+     * anyway: black cloth in this world is {@code 0x1A1A1A} and a true
+     * {@code 000000} has never been anything but a sentinel — see
+     * {@code Cosmetics.Piece.tinted}, which already spends it.
+     */
+    public int colourOf(String key) {
+        Integer chosen = key == null ? null : dyed.get(key);
+        return chosen == null ? 0 : chosen;
+    }
+
+    /**
+     * Dye a piece, or put it back to how it was made with {@code 0}.
+     *
+     * <p>Allowed on anything in the catalogue rather than only on what is
+     * owned. That is deliberate and it is the opposite call from {@link #wear}:
+     * wearing a cloak you have not bought is claiming something, and choosing
+     * what colour you would dye it if you had one is not — so the wardrobe
+     * screen can show a real preview of a coat on the rail instead of a swatch.
+     *
+     * @return whether anything changed
+     */
+    public boolean dye(String key, int rgb) {
+        if (!Cosmetics.isWorn(key)) return false;
+        Integer was = rgb == 0 ? dyed.remove(key) : dyed.put(key, rgb & 0xFFFFFF);
+        return (was == null ? 0 : was) != (rgb & 0xFFFFFF);
+    }
+
+    /** Every piece this player has dyed, and to what. */
+    public Map<String, Integer> colours() { return Map.copyOf(dyed); }
 
     /**
      * Add a piece to the wardrobe.
@@ -158,6 +245,49 @@ public final class Outfit {
         }
     }
 
+    /**
+     * What has been dyed, as one short string — {@code "field_coat:8A3B2E"}.
+     *
+     * <p>Beside {@link #wornLine} on the player row and for its reason: a coat
+     * is dyed to be seen, so everybody's renderer needs it. Only what has
+     * actually been changed goes out, so a party who have left their clothes
+     * alone cost nothing at all — which is most parties, most of the time.
+     *
+     * <p>At most nine entries and no commas or colons inside a key, so it stays
+     * a string rather than becoming an array of objects on a message that goes
+     * out twenty times a second.
+     */
+    public String dyeLine() {
+        if (dyed.isEmpty()) return "";
+        StringBuilder out = new StringBuilder();
+        for (Map.Entry<String, Integer> e : dyed.entrySet()) {
+            if (out.length() > 0) out.append(',');
+            out.append(e.getKey()).append(':')
+                    .append(String.format("%06X", e.getValue() & 0xFFFFFF));
+        }
+        return out.toString();
+    }
+
+    /** Replace the dyes from {@link #dyeLine}, ignoring anything unknown. */
+    public void loadDyes(String line) {
+        dyed.clear();
+        if (line == null || line.isBlank()) return;
+        for (String entry : line.split(",")) {
+            int at = entry.indexOf(':');
+            if (at <= 0) continue;
+            String key = entry.substring(0, at).trim();
+            if (!Cosmetics.isWorn(key)) continue;
+            try {
+                dyed.put(key, Integer.parseInt(entry.substring(at + 1).trim(), 16)
+                        & 0xFFFFFF);
+            } catch (NumberFormatException e) {
+                // A colour that is not a colour is no colour, which draws the
+                // piece as its artist made it. Nothing anybody sends here can
+                // stop a walker being drawn.
+            }
+        }
+    }
+
     // --- persistence -------------------------------------------------------------------
 
     /** The wardrobe and the outfit, for a save or for this player's own screen. */
@@ -165,14 +295,17 @@ public final class Outfit {
         Map<String, Object> m = new LinkedHashMap<>();
         m.put("own", List.copyOf(owned));
         m.put("on", wornLine());
+        if (!dyed.isEmpty()) m.put("dye", dyeLine());
         return m;
     }
 
-    /** Restore both from {@link #toMap}. */
+    /** Restore all three from {@link #toMap}. */
     public void load(Map<String, Object> m) {
         owned.clear();
         worn.clear();
+        dyed.clear();
         if (m == null) return;
+        loadDyes(WatchJson.str(m, "dye", ""));
         for (String key : WatchJson.strings(m, "own")) {
             // Anything the catalogue no longer has is dropped rather than kept:
             // a piece deleted between one session and the next is not a piece,

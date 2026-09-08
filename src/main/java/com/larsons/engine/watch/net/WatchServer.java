@@ -644,6 +644,14 @@ public final class WatchServer implements WatchGame.Sink {
                 if (line != null) bagChanged(id, line);
             }
 
+            case "dye" -> {
+                // Nothing back, for "figure"'s reason: the colour rides the
+                // player's own row and the next snapshot carries it to
+                // everybody, this client included.
+                game.dye(id, WatchJson.str(message, "k", ""),
+                        WatchJson.integer(message, "c", 0));
+            }
+
             case "figure" -> {
                 // Nothing goes back at all. Which body somebody is drawn as
                 // rides on their own player row, so the next snapshot — twenty

@@ -2,11 +2,13 @@ package com.larsons.engine.watch.model;
 
 import com.larsons.engine.watch.life.AnimState;
 import com.larsons.engine.watch.life.AnimalModel;
+import com.larsons.engine.watch.life.Blockbench;
 import com.larsons.engine.watch.render.Mesh;
 import com.larsons.engine.watch.render.Shapes;
 
 import java.util.ArrayList;
 import java.util.EnumMap;
+import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
@@ -155,6 +157,101 @@ public final class SceneModel {
     /** One clip, with its tracks indexed by the node they move. */
     private record Take(double length, List<RawModel.Track> tracks) {}
 
+    /**
+     * Where a figure's joints have got to at one moment — <b>what a garment worn
+     * over it has to follow.</b>
+     *
+     * <h2>The bug this exists to fix</h2>
+     *
+     * <p>A worn piece and the body under it are two separate models with two
+     * separate rigs, drawn by two separate calls. Left to itself each animates
+     * on its own: the body plays the {@code walk} the artist authored — which
+     * drops the root to put the lower boot on the floor, leans the chest, nods
+     * the head — and the garment, having no clip of its own, is posed by
+     * {@link ModelRig}'s procedural table instead. So the walker bobbed and the
+     * hat did not. Standing still it was invisible; at a run the hat hung in the
+     * air while the head dropped 50 mm out from under it, once a stride.
+     *
+     * <p>Giving every garment a copy of the body's clips would have worked and
+     * is what the folder README used to suggest. It is also thirty-six copies of
+     * one animation, several megabytes of keyframes, and thirty-six chances for
+     * a cloak to disagree with the coat under it. This is the other answer: the
+     * body is asked where its joints went, and the clothes are drawn through
+     * that.
+     *
+     * <h2>What it is</h2>
+     *
+     * <p>One rigid transform per bone, <b>in world metres relative to the
+     * figure's feet</b>, taking a point where that bone rests to where it is
+     * now. Keyed by bone name first and by {@link AnimalModel.Joint} second,
+     * because the two rigs share README §10's names — a mitten on {@code hand_l}
+     * follows the wearer's {@code hand_l} exactly — and a garment bone named
+     * something the body has not got still has a joint in common with one.
+     *
+     * <p><b>It composes rather than replaces.</b> A piece with a clip of its own
+     * plays it and is then moved by this on top, which is the physically honest
+     * order: a cloak's swing is motion relative to the shoulders it hangs from.
+     * A piece with no clip is simply carried.
+     */
+    public static final class Worn {
+
+        private final Map<String, double[]> byBone;
+        private final Map<AnimalModel.Joint, double[]> byJoint;
+
+        private Worn(Map<String, double[]> byBone,
+                     Map<AnimalModel.Joint, double[]> byJoint) {
+            this.byBone = byBone;
+            this.byJoint = byJoint;
+        }
+
+        /**
+         * The transform for a garment bone, or {@code null} to leave it where it
+         * is.
+         *
+         * <p>By name, then by joint. The fallback matters more than it looks:
+         * a cape rigged to one bone called {@code cape_spine} has no
+         * counterpart on the body at all, and what it wants is the spine's.
+         */
+        double[] forBone(String name, AnimalModel.Joint joint) {
+            double[] exact = byBone.get(Blockbench.normalise(name));
+            return exact != null ? exact : byJoint.get(joint);
+        }
+
+        /** Whether anything here actually moves anything. */
+        public boolean still() { return byBone.isEmpty() && byJoint.isEmpty(); }
+
+        /** Apply one of {@link #forBone}'s transforms to a point, in place. */
+        static void apply(double[] m, double[] p) {
+            double x = p[0], y = p[1], z = p[2];
+            p[0] = m[0] * x + m[1] * y + m[2] * z + m[3];
+            p[1] = m[4] * x + m[5] * y + m[6] * z + m[7];
+            p[2] = m[8] * x + m[9] * y + m[10] * z + m[11];
+        }
+    }
+
+    /**
+     * Which triangles are the model's <b>base colour</b>, and how far off it —
+     * what a player recolouring a garment is allowed to change.
+     *
+     * <p>One entry per triangle per piece, in thousandths: {@code 1000} for a
+     * triangle painted in the base colour itself, {@code 800} for one painted
+     * in a shade at four fifths of it, and {@code -1} for one that is not in
+     * that family at all.
+     *
+     * <p><b>The rule is "a scalar multiple of the commonest colour".</b> Every
+     * garment in this game is painted out of a tin of five — a main, a main at
+     * 0.80, a main at 1.14, a trim and a trim at 0.78 — and the three mains are
+     * exactly one colour scaled, because that is how {@code ShopModel.shade}
+     * makes a second tone and how {@code cosmetics.py} mixes its palette. So
+     * "the base colour and its shades" is a thing that can be recognised in a
+     * finished mesh rather than a thing an artist has to label, and dyeing a
+     * coat rust leaves its brass buttons brass.
+     */
+    private final int[][] family;
+
+    /** The colour {@link #family} is measured against — the commonest one. */
+    private final int base;
+
     private final String name;
     private final AnimalModel.PoseSource ownPoses;
     private final Bone[] bones;
@@ -175,6 +272,8 @@ public final class SceneModel {
         this.ownPoses = (state, joint, phase) -> ModelRig.poseOf(kind, state, joint, phase);
         this.bones = bones;
         this.pieces = pieces;
+        this.base = commonest(pieces);
+        this.family = shadesOf(pieces, base);
         this.clips = clips;
         this.rest = rest;
         this.unit = unit;
@@ -255,6 +354,82 @@ public final class SceneModel {
 
         return new SceneModel(raw.name(), kind, bones, List.copyOf(pieces), clips, rest,
                 unit, floor, spanU * unit, Math.max(spanF, spanR) * unit, raw.triangles());
+    }
+
+    /**
+     * The colour most of this model is painted in — what a player is choosing
+     * when they dye it, and what the swatch on the wardrobe screen shows.
+     */
+    public int baseColour() { return base; }
+
+    /** The colour a triangle painted in {@code was} becomes when dyed {@code to}. */
+    private static int recoloured(int shade, int was, int to) {
+        if (shade < 0) return was;
+        return (clamp(((to >> 16) & 0xFF) * shade / 1000) << 16)
+                | (clamp(((to >> 8) & 0xFF) * shade / 1000) << 8)
+                | clamp((to & 0xFF) * shade / 1000);
+    }
+
+    private static int clamp(int channel) {
+        return channel < 0 ? 0 : Math.min(255, channel);
+    }
+
+    /** The colour the most triangles of a model are painted in. */
+    private static int commonest(List<RawModel.Piece> pieces) {
+        Map<Integer, Integer> tally = new LinkedHashMap<>();
+        for (RawModel.Piece piece : pieces) {
+            for (int colour : piece.colours()) {
+                tally.merge(colour, 1, Integer::sum);
+            }
+        }
+        int best = 0, most = 0;
+        for (Map.Entry<Integer, Integer> e : tally.entrySet()) {
+            if (e.getValue() > most) {
+                most = e.getValue();
+                best = e.getKey();
+            }
+        }
+        return best;
+    }
+
+    /**
+     * How far off the base colour every triangle is, or {@code -1} for one
+     * painted out of a different tin entirely. See {@link #family}.
+     *
+     * <p>The scale is read off whichever channel of the base is brightest,
+     * because that is the one with the most precision in it, and then checked
+     * against all three: a colour that only agrees on one channel is a
+     * different colour that happens to share a red.
+     */
+    private static int[][] shadesOf(List<RawModel.Piece> pieces, int base) {
+        int[] channels = {(base >> 16) & 0xFF, (base >> 8) & 0xFF, base & 0xFF};
+        int widest = 0;
+        for (int i = 1; i < 3; i++) {
+            if (channels[i] > channels[widest]) widest = i;
+        }
+        int[][] out = new int[pieces.size()][];
+        for (int p = 0; p < pieces.size(); p++) {
+            int[] colours = pieces.get(p).colours();
+            int[] shades = new int[colours.length];
+            for (int t = 0; t < colours.length; t++) {
+                shades[t] = shadeOf(colours[t], channels, widest);
+            }
+            out[p] = shades;
+        }
+        return out;
+    }
+
+    private static int shadeOf(int colour, int[] base, int widest) {
+        if (base[widest] < 8) return -1;
+        int[] got = {(colour >> 16) & 0xFF, (colour >> 8) & 0xFF, colour & 0xFF};
+        int shade = got[widest] * 1000 / base[widest];
+        // Off by two per channel, which is what a scale in bytes costs: the
+        // shades are made by multiplying and truncating, twice — once in the
+        // Blender script and once when the importer converts out of linear.
+        for (int i = 0; i < 3; i++) {
+            if (Math.abs(got[i] - base[i] * shade / 1000) > 2) return -1;
+        }
+        return shade;
     }
 
     /** What the file called itself. */
@@ -348,6 +523,41 @@ public final class SceneModel {
     public void mesh(Mesh.Builder mesh, double x, double y, double z, double yaw,
                      AnimState state, double phase, double scale, float[] uv,
                      double headTurn, AnimalModel.PoseSource fallback, Lean lean) {
+        mesh(mesh, x, y, z, yaw, state, phase, scale, uv, headTurn, fallback, lean, null);
+    }
+
+    /**
+     * {@link #mesh} drawn through the motion of the figure this is worn over.
+     *
+     * <p><b>For a garment, and it is what stops a hat hanging in the air while
+     * the head under it bobs.</b> See {@link Worn}: the body is asked where its
+     * joints went and every triangle here is carried along with the one it is
+     * rigged to, on top of whatever this model's own clip did.
+     *
+     * @param worn the wearer's {@link #wornAt}, or {@code null} for a figure
+     *             that is not being worn by anybody
+     */
+    public void mesh(Mesh.Builder mesh, double x, double y, double z, double yaw,
+                     AnimState state, double phase, double scale, float[] uv,
+                     double headTurn, AnimalModel.PoseSource fallback, Lean lean,
+                     Worn worn) {
+        mesh(mesh, x, y, z, yaw, state, phase, scale, uv, headTurn, fallback, lean,
+                worn, 0);
+    }
+
+    /**
+     * {@link #mesh} in a colour the player chose.
+     *
+     * @param dye the colour to draw this model's {@linkplain #baseColour base}
+     *            in, or {@code 0} for the colours its artist gave it. Only the
+     *            base and its own shades move; a trim, a buckle and a lens stay
+     *            exactly as they were, which is what stops a dyed coat coming
+     *            out as one flat shape. See {@link #family}
+     */
+    public void mesh(Mesh.Builder mesh, double x, double y, double z, double yaw,
+                     AnimState state, double phase, double scale, float[] uv,
+                     double headTurn, AnimalModel.PoseSource fallback, Lean lean,
+                     Worn worn, int dye) {
         AnimalModel.PoseSource poses = fallback == null ? ownPoses : fallback;
         Take take = clips.get(state);
         double[][] globals = take == null ? rest : sample(take, phase);
@@ -355,12 +565,18 @@ public final class SceneModel {
         double[] point = new double[3];
         double[] a = new double[3], b = new double[3], c = new double[3];
 
-        for (RawModel.Piece piece : pieces) {
+        for (int p = 0; p < pieces.size(); p++) {
+            RawModel.Piece piece = pieces.get(p);
+            int[] shades = dye == 0 ? null : family[p];
             Bone bone = bones[piece.node()];
+            double[] carry = worn == null ? null
+                    : worn.forBone(bone.name(), bone.joint());
             // A state the model animates is drawn from its own clip; one it
             // does not is drawn at rest and posed by the procedural table, per
-            // joint. That is what makes a two-clip model worth committing.
-            AnimalModel.Pose pose = take == null
+            // joint. That is what makes a two-clip model worth committing —
+            // except on a garment being carried by a body, where the body's own
+            // motion is the answer and the stand-in would fight it.
+            AnimalModel.Pose pose = take == null && carry == null
                     ? poses.poseOf(state, bone.joint(), phase) : null;
             double[] global = globals[piece.node()];
             float[] positions = piece.positions();
@@ -372,16 +588,25 @@ public final class SceneModel {
                 corner(global, positions, at, bone, pose, aim, lean, point, a);
                 corner(global, positions, at + 3, bone, pose, aim, lean, point, b);
                 corner(global, positions, at + 6, bone, pose, aim, lean, point, c);
+                metres(carry, a, scale);
+                metres(carry, b, scale);
+                metres(carry, c, scale);
                 Shapes.face(mesh,
-                        x + (a[0] * cos - a[1] * sin) * scale,
-                        y + (a[0] * sin + a[1] * cos) * scale, z + a[2] * scale,
-                        x + (b[0] * cos - b[1] * sin) * scale,
-                        y + (b[0] * sin + b[1] * cos) * scale, z + b[2] * scale,
-                        x + (c[0] * cos - c[1] * sin) * scale,
-                        y + (c[0] * sin + c[1] * cos) * scale, z + c[2] * scale,
-                        uv, colours[t]);
+                        x + a[0] * cos - a[1] * sin, y + a[0] * sin + a[1] * cos, z + a[2],
+                        x + b[0] * cos - b[1] * sin, y + b[0] * sin + b[1] * cos, z + b[2],
+                        x + c[0] * cos - c[1] * sin, y + c[0] * sin + c[1] * cos, z + c[2],
+                        uv, shades == null ? colours[t]
+                                : recoloured(shades[t], colours[t], dye));
             }
         }
+    }
+
+    /** Normalised units to metres above the figure's feet, and along with it. */
+    private static void metres(double[] carry, double[] p, double scale) {
+        p[0] *= scale;
+        p[1] *= scale;
+        p[2] *= scale;
+        if (carry != null) Worn.apply(carry, p);
     }
 
     /**
@@ -393,31 +618,10 @@ public final class SceneModel {
                         double[] scratch, double[] out) {
         RawModel.transform(global, positions[at], positions[at + 1], positions[at + 2],
                 scratch);
-        double forward = scratch[2] * unit;
-        double right = scratch[0] * unit;
-        double up = scratch[1] * unit - floor;
-        if (pose == null) {
-            out[0] = forward;
-            out[1] = right;
-            out[2] = up;
-        } else {
-            // The same three hinges, in the same order, as AnimalModel.emitBox —
-            // roll about forward, pitch about right, turn about up, all of it
-            // about the bone's own rest pivot.
-            double cp = Math.cos(pose.pitch()), sp = Math.sin(pose.pitch());
-            double cr = Math.cos(pose.roll()), sr = Math.sin(pose.roll());
-            double ct = Math.cos(pose.turn()), st = Math.sin(pose.turn());
-            double px = forward - bone.pivotX();
-            double py = (right - bone.pivotY()) * pose.spread();
-            double pz = up - bone.pivotZ();
-            double ry = py * cr - pz * sr;
-            double rz = py * sr + pz * cr;
-            double fx = px * cp + rz * sp;
-            double fz = -px * sp + rz * cp;
-            out[0] = bone.pivotX() + fx * ct - ry * st + pose.dx();
-            out[1] = bone.pivotY() + fx * st + ry * ct + pose.dy();
-            out[2] = bone.pivotZ() + fz + pose.dz();
-        }
+        out[0] = scratch[2] * unit;
+        out[1] = scratch[0] * unit;
+        out[2] = scratch[1] * unit - floor;
+        if (pose != null) posed(bone, pose, out);
         if (aim != 0) {
             // The head's own turn, about the same pivot: it has to compose with
             // whatever the clip already did to the neck rather than replace it.
@@ -435,6 +639,133 @@ public final class SceneModel {
         double df = out[0], du = out[2] - lean.pivot();
         out[0] = df * cl + du * sl;
         out[2] = lean.pivot() - df * sl + du * cl;
+    }
+
+    /**
+     * One point through a procedural {@link AnimalModel.Pose}, in place.
+     *
+     * <p>The same three hinges, in the same order, as {@code AnimalModel.emitBox}
+     * — roll about forward, pitch about right, turn about up, all of it about
+     * the bone's own rest pivot. Extracted because {@link #wornAt} has to apply
+     * exactly this and a second copy of it would drift.
+     */
+    private static void posed(Bone bone, AnimalModel.Pose pose, double[] p) {
+        double cp = Math.cos(pose.pitch()), sp = Math.sin(pose.pitch());
+        double cr = Math.cos(pose.roll()), sr = Math.sin(pose.roll());
+        double ct = Math.cos(pose.turn()), st = Math.sin(pose.turn());
+        double px = p[0] - bone.pivotX();
+        double py = (p[1] - bone.pivotY()) * pose.spread();
+        double pz = p[2] - bone.pivotZ();
+        double ry = py * cr - pz * sr;
+        double rz = py * sr + pz * cr;
+        double fx = px * cp + rz * sp;
+        double fz = -px * sp + rz * cp;
+        p[0] = bone.pivotX() + fx * ct - ry * st + pose.dx();
+        p[1] = bone.pivotY() + fx * st + ry * ct + pose.dy();
+        p[2] = bone.pivotZ() + fz + pose.dz();
+    }
+
+    /**
+     * Where this figure's joints are at a moment of a state, for a garment worn
+     * over it to be drawn through. See {@link Worn}.
+     *
+     * <p>Built by measuring rather than by algebra: the map from a bone's rest
+     * space into world metres is affine, so it is recovered by pushing the
+     * origin and the three unit axes through the whole chain — the bone's own
+     * posed transform, the file-to-game axis permutation, the normalising scale,
+     * the floor offset — and reading off the columns. Four points a bone, once a
+     * draw, and no chance of a sign convention being written down twice.
+     *
+     * <p><b>The lean goes in here rather than being applied to the garment
+     * separately</b>, and that is not tidiness. A {@link Lean}'s pivot is a
+     * share of the model's own height, and a worn piece is the one model in this
+     * game that is not normalised — its units are metres. Two different meanings
+     * for one number is how a swimmer's cloak ends up tipping about their
+     * ankles. Folded in here, {@code Worn} is simply where the joints went, and
+     * the garment needs no opinion about leaning at all.
+     *
+     * @param scale metres per normalised unit, exactly as {@link #mesh} takes it
+     * @param lean  the tip the wearer is drawn under, or {@link Lean#UPRIGHT}
+     */
+    public Worn wornAt(AnimState state, double phase, double scale, Lean lean) {
+        Take take = clips.get(state);
+        double[][] globals = take == null ? rest : sample(take, phase);
+        Map<String, double[]> byBone = new LinkedHashMap<>();
+        Map<AnimalModel.Joint, double[]> byJoint = new EnumMap<>(AnimalModel.Joint.class);
+        double[] probe = new double[3];
+        double[] origin = new double[3];
+        double[] axis = new double[3];
+
+        for (int i = 0; i < bones.length; i++) {
+            Bone bone = bones[i];
+            // A state with no clip is posed by the procedural table, per joint,
+            // and the clothes have to follow *that* rather than nothing — which
+            // is what a half-finished body dropped into the folder gets.
+            AnimalModel.Pose pose = take == null
+                    ? ownPoses.poseOf(state, bone.joint(), phase) : null;
+            double[] moved = RawModel.multiply(globals[i], RawModel.invert(rest[i]));
+            place(moved, bone, pose, scale, lean, 0, 0, 0, origin);
+            double[] m = new double[12];
+            for (int a = 0; a < 3; a++) {
+                place(moved, bone, pose, scale, lean,
+                        a == 0 ? 1 : 0, a == 1 ? 1 : 0, a == 2 ? 1 : 0, probe);
+                for (int r = 0; r < 3; r++) axis[r] = probe[r] - origin[r];
+                m[a] = axis[0];
+                m[4 + a] = axis[1];
+                m[8 + a] = axis[2];
+            }
+            m[3] = origin[0];
+            m[7] = origin[1];
+            m[11] = origin[2];
+            if (identity(m)) continue;
+            byBone.put(Blockbench.normalise(bone.name()), m);
+            // First bone of a joint wins, which is the one nearest the root —
+            // the whole limb rather than a fingertip.
+            byJoint.putIfAbsent(bone.joint(), m);
+        }
+        return new Worn(byBone, byJoint);
+    }
+
+    /**
+     * Where a point that rests at world metres {@code (mx, my, mz)} on this
+     * figure has been moved to by {@code moved}.
+     *
+     * <p>Out of world metres, back through the axis permutation and the
+     * normalising scale into the file's own space, through the bone's
+     * rest-relative motion, and out again — which is why it is written once here
+     * and read four times a bone rather than being inlined.
+     *
+     * @param moved this bone's transform relative to its rest, in file space
+     */
+    private void place(double[] moved, Bone bone, AnimalModel.Pose pose, double scale,
+                       Lean lean, double mx, double my, double mz, double[] out) {
+        double forward = mx / scale, right = my / scale, up = mz / scale + floor;
+        // Game (forward, right, up) back to file (right, up, front).
+        double[] local = new double[3];
+        RawModel.transform(moved, right / unit, up / unit, forward / unit, local);
+        double[] point = {local[2] * unit, local[0] * unit, local[1] * unit - floor};
+        // Exactly the order `corner` applies them in, and for the same reason:
+        // two copies of this that disagree is a garment that follows a body
+        // almost everywhere.
+        if (pose != null) posed(bone, pose, point);
+        if (!lean.none()) {
+            double cl = Math.cos(lean.pitch()), sl = Math.sin(lean.pitch());
+            double df = point[0], du = point[2] - lean.pivot();
+            point[0] = df * cl + du * sl;
+            point[2] = lean.pivot() - df * sl + du * cl;
+        }
+        out[0] = point[0] * scale;
+        out[1] = point[1] * scale;
+        out[2] = point[2] * scale;
+    }
+
+    /** Whether a rigid transform leaves everything exactly where it was. */
+    private static boolean identity(double[] m) {
+        for (int i = 0; i < 12; i++) {
+            double want = i == 0 || i == 5 || i == 10 ? 1 : 0;
+            if (Math.abs(m[i] - want) > 1e-9) return false;
+        }
+        return true;
     }
 
     /**

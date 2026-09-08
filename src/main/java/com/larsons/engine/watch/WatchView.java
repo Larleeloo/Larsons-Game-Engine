@@ -7,6 +7,7 @@ import com.larsons.engine.watch.life.AnimalDef;
 import com.larsons.engine.watch.life.AnimalRegistry;
 import com.larsons.engine.watch.life.Hurl;
 import com.larsons.engine.watch.light.Lights;
+import com.larsons.engine.watch.render.CosmeticModel;
 import com.larsons.engine.watch.world.Grove;
 
 import java.util.ArrayList;
@@ -75,7 +76,24 @@ public final class WatchView {
                          double yaw, double pitch, double stillness, boolean crouching,
                          boolean submerged, double breath, long boatId, double glass,
                          boolean debug, double health, int respawns, String light,
-                         double lightHours, String worn, Figure figure) {
+                         double lightHours, String worn, Figure figure, String dyes) {
+
+        /**
+         * What colour they have dyed each piece — {@code Outfit.dyeLine}, ready
+         * for the renderer.
+         *
+         * <p>Read through an {@link Outfit} rather than by a second parser
+         * here, because a wire format with two readers has two readers to keep
+         * agreeing. Nobody pays for it who has not dyed anything: an empty
+         * line answers with the shared constant and allocates nothing, which
+         * is every walker until somebody opens the wardrobe screen.
+         */
+        public CosmeticModel.Dyes dyeing() {
+            if (dyes == null || dyes.isEmpty()) return CosmeticModel.Dyes.AS_MADE;
+            Outfit reading = new Outfit();
+            reading.loadDyes(dyes);
+            return reading::colourOf;
+        }
 
         /** Whether they have something lit in their hand. */
         public boolean carryingLight() { return light != null && !light.isBlank(); }
@@ -402,7 +420,8 @@ public final class WatchView {
                     player.crouching(), player.submerged(), player.breath(),
                     player.boatId(), player.glassPower(), player.debugging(),
                     player.health(), player.respawns(), player.carriedLight(),
-                    player.lampFuel(), player.outfit().wornLine(), player.figure()));
+                    player.lampFuel(), player.outfit().wornLine(), player.figure(),
+                    player.outfit().dyeLine()));
         }
         creatures.clear();
         for (Animal animal : game.animals()) {
@@ -471,7 +490,8 @@ public final class WatchView {
                     WatchJson.bool(row, "dbg", false), WatchJson.num(row, "hp", 1),
                     WatchJson.integer(row, "rs", 0), WatchJson.str(row, "lt", null),
                     WatchJson.num(row, "lh", 0), WatchJson.str(row, "w", ""),
-                    Figure.of(WatchJson.str(row, "fg", null))));
+                    Figure.of(WatchJson.str(row, "fg", null)),
+                    WatchJson.str(row, "dy", "")));
         }
         Walker me = self();
         satchel.setBottomless(me != null && me.debug());

@@ -209,6 +209,12 @@ public final class WatchPlayer {
         this.y = y;
         this.z = z;
         this.rod = new Fishing(name.hashCode() * 31L + id);
+        // Dressed before they take a step. The body in characters/<figure>.glb
+        // is a vest and a pair of shorts, so a walker who was not handed the
+        // standard kit would arrive in a wood in their underwear — see
+        // Cosmetics.standardKit for why the coat is a garment now.
+        outfit.grantStandardKit();
+        outfit.dressIn(figure.hair());
     }
 
     public int id() { return id; }
@@ -597,6 +603,11 @@ public final class WatchPlayer {
         // only when they are wearing anything at all. See Outfit.wornLine for
         // why the wardrobe behind it deliberately stays private.
         if (!outfit.bare()) m.put("w", outfit.wornLine());
+        // …and what they have dyed, beside it and for its reason: a coat is
+        // dyed to be seen. Only what has actually been changed, so a party who
+        // left their clothes alone put nothing on the wire at all.
+        String dyes = outfit.dyeLine();
+        if (!dyes.isEmpty()) m.put("dy", dyes);
         // Which body to draw them as. On everybody's row for the same reason
         // the outfit is: it is the first thing anybody sees about a walker
         // across a clearing. One short key, and only when it is not the figure
@@ -669,6 +680,14 @@ public final class WatchPlayer {
         // was written by, which is the only answer that cannot surprise
         // anybody: see Figure.of.
         figure = Figure.of(WatchJson.str(m, "fg", null));
+        // The standard kit again, and every slot the save left empty filled
+        // from it. **This is what carries a save written before the coat came
+        // off**: it has a wardrobe and an outfit, neither of which mentions
+        // trousers, and without this the walk reopens in a vest. A save that
+        // does know about them fills nothing, because none of its slots are
+        // empty — see Outfit.dressIn.
+        outfit.grantStandardKit();
+        outfit.dressIn(figure.hair());
         // …but debug mode does survive: a walk played with everything unlimited
         // is that walk when it is reopened, and the code turns it off as easily
         // as it turned it on.

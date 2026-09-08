@@ -16,18 +16,23 @@ matter of editing one:
 
 | Script | Builds |
 |---|---|
-| `ranger.py` | the **walker** — the first player figure, and the ranger outside the trading post |
-| `wayfarer.py` | the **wayfarer** — the second player figure. Writes `characters/wayfarer.glb` |
-| `cosmetics.py` | **all eighteen pieces, for both figures.** Writes thirty-six files |
-| `figures.py` | the measurements the last two are built from — every landmark, once |
-| `kit.py` | the shapes they are built out of — boxes, drums, tapers, struts |
+| `bodies.py` | the **two player bodies** — a head, bare limbs, a vest and shorts. Writes both `characters/*.glb` |
+| `cosmetics.py` | **all twenty-eight pieces, for both figures.** Writes fifty-six files |
+| `figures.py` | the measurements those two are built from — every landmark, once |
+| `gait.py` | the five clips a walker is drawn in, which now animate the clothes as well |
+| `kit.py` | the shapes it is all built out of — boxes, drums, tapers, struts |
+| `ranger.py` | the **ranger** outside the trading post, who is an NPC and keeps his clothes on |
 | `cosmetic_reference.py` | the *boxed* reference figure, for the figure-agnostic folder |
 
 ```bash
-blender --background --python tools/blender/wayfarer.py
+blender --background --python tools/blender/bodies.py
 blender --background --python tools/blender/cosmetics.py
 blender --background --python tools/blender/cosmetics.py -- wayfarer heron_cloak
 ```
+
+**A body is not an outfit.** The coat, the trousers, the boots, the pack, the hat
+and the hair are worn pieces — `cosmetics.py` builds them — because a player can
+take them off. What `bodies.py` makes is what is left underneath.
 
 Redoing one piece by hand is completely legitimate — that is what the rest of
 this file is for. Changing a *proportion* is not: put it in `figures.py` and
@@ -85,12 +90,19 @@ anything.
 **For `cosmetics/walker/` or `cosmetics/wayfarer/`** — the modelled bodies:
 
 ```bash
-blender --python tools/blender/ranger.py       # the walker
-blender --python tools/blender/wayfarer.py     # the wayfarer
+blender --python tools/blender/bodies.py -- walker
+blender --python tools/blender/bodies.py -- wayfarer
 ```
 
 Either leaves a collection with the figure in it, rigged, standing on `Z = 0`
-facing `−Y`, 1.78 m to the crown. That is the body you fit the garment to.
+facing `−Y`, 1.78 m to the crown. That is the body you fit the garment to — and
+it is a body, in a vest and shorts, so if the piece you are making is a coat you
+are fitting it to skin rather than to other clothes. Add the standard kit as
+well when that matters:
+
+```bash
+blender --python tools/blender/cosmetics.py -- walker field_coat field_trousers
+```
 
 **For `cosmetics/`** — the figure-agnostic folder:
 
@@ -214,9 +226,16 @@ one-minute version if you are just trying the pipeline out.
 
 ---
 
-## 5. Animate it (optional, and the part worth doing)
+## 5. Animate it (you almost certainly should not)
 
-Name your actions exactly:
+**The body carries the clothes.** The figure plays its own clip, the engine asks
+it where each joint went, and your garment is moved along with the bone it is
+rigged to — so a hat bobs, a boot walks, a coat sits down in a boat, and you do
+not have to key a single frame. Every one of the fifty-six pieces this game ships
+has no animation in it at all.
+
+If you do want secondary motion — a cloak with a swing of its own — name your
+actions exactly:
 
 | Action | Plays when |
 |---|---|
@@ -224,14 +243,11 @@ Name your actions exactly:
 | `walk` | walking |
 | `run` | sprinting |
 
-Three, because three is what a person's legs do. **A clip is driven by the
-wearer's own gait clock**, so a cloak's `walk` lands in step with the legs
-underneath it by construction — you do not have to match a frame rate to
-anything.
-
-A piece with **no animation at all still moves**: it swings with the bone it is
-rigged to, posed by the game's procedural humanoid table. Ship `walk` first if
-you ship one.
+**It composes with the body rather than replacing it.** Your clip runs and the
+wearer's motion is applied on top, which means you author only the *extra*: a hem
+lifting, a tail lagging. Animating the walk itself into a cloak gets you two
+walks. And a clip is driven by the wearer's own gait clock, so what you make
+lands in step with the legs by construction — there is no frame rate to match.
 
 **Bake to keyframes on the bones before exporting.** No IK, no constraints, no
 shape keys — none of them are read. `LINEAR` and `STEP` interpolation are read
@@ -282,7 +298,8 @@ hand-set keys overshoots, which bends a limb backwards.
    the folder only if you cut it to the boxed reference figure and mean it to be
    worn by anybody; see fact 4.
 
-   The eighteen keys:
+   The twenty-eight keys — eighteen off the rail, six of standard kit and four
+   of hair:
 
    ```
    wool_mittens      knitted_beanie   canvas_gaiters   wool_scarf
@@ -290,6 +307,11 @@ hand-set keys overshoots, which bends a limb backwards.
    leather_gloves    straw_boater     snow_goggles     oilskin_hood
    river_waders      moth_veil        fur_collar       oilskin_cape
    antler_circlet    heron_cloak
+
+   field_coat        field_trousers   walking_boots
+   field_pack        walking_hat      neckerchief
+
+   swept_hair        long_plait       cropped_hair     topknot
    ```
 
 ---
@@ -339,14 +361,18 @@ The causes, in the order they actually happen:
 
 Worth knowing before you spend an evening on a cape:
 
-* **A swimmer and a rower keep the boxes.** Those poses are numbers no glTF clip
-  knows — a spine laid along the way somebody is diving, a body folded onto a
-  thwart — so a modelled piece falls back rather than standing bolt upright in
-  the middle of a lake. Your hat changes shape when you dive.
-* **Your own hands in first person keep the boxes too**, for the same reason: the
-  view model is built in the camera's frame rather than the world's.
-* **It is not recoloured.** The two pieces the game tints to the wearer's own
-  coat — the oilskin hood and the cape — stop being tinted the moment they are
+* **Your own hands in first person keep the boxes**, and they are the only thing
+  that does now: the view model is built in the camera's frame rather than the
+  world's, so there is nothing there for a world-space garment to be carried by.
+  A swimmer and a rower used to keep them too and no longer do.
+* **The player picks its colour.** The base colour of your piece and its own
+  shades are moved by three sliders on the wardrobe screen; the trim, the
+  buckles and the lenses are not. So give the base colour to most of the piece,
+  and make the trim a colour of its own rather than the main at some fraction —
+  a trim that is exactly `main × 0.5` is a trim that gets dyed with it.
+* **It is not recoloured *per wearer*.** The two pieces the game tints to the
+  wearer's own coat — the oilskin hood and the cape — stop being tinted the
+  moment they are
   modelled. If you want a cape that still reads as *that player's* across a
   valley, leave some of the coat showing.
 

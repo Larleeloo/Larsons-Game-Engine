@@ -1700,6 +1700,21 @@ public final class WatchGame implements Animal.Surroundings {
      *
      * @return whether anything changed
      */
+    /**
+     * Dye a piece, or put it back to how it was made with {@code 0}.
+     *
+     * <p>A host verb for {@link #wear}'s reason — the colour goes out on a
+     * snapshot row to everybody — and, like {@link #setFigure}, one with no
+     * price and no counter. Unlike {@code wear} it does not check ownership:
+     * see {@link Outfit#dye}.
+     *
+     * @return whether anything changed
+     */
+    public synchronized boolean dye(int playerId, String key, int rgb) {
+        WatchPlayer player = players.get(playerId);
+        return player != null && player.outfit().dye(key, rgb);
+    }
+
     public synchronized boolean setFigure(int playerId, String key) {
         WatchPlayer player = players.get(playerId);
         Figure figure = Figure.byKey(key);

@@ -87,16 +87,22 @@ WALKER = {
     "face_y": -0.145,              # the front of the face
     "eye_z": 1.462,                # …and the height of the eyes in it
 
-    # The hat already on them, which everything in the HEAD slot goes over.
-    #
-    # `hat_cover_r` is the one an artist actually needs: the radius a piece
-    # has to reach to *hide* the crown underneath it. The walker's crown is
-    # a square box 0.33 across, so covering it takes the radius of its
-    # corners, 0.233, and not half of its side.
-    "hat_brim_z": 1.590,
+    # A beard, which is not a hat: it never comes off, so it is on the body
+    # rather than in the hairstyle. Shaving somebody by changing their
+    # parting would be a strange thing for a wardrobe to be able to do.
+    "beard": True,
+    # A campaign hat rather than a soft one: a flat brim and a four-sided peak.
+    # Named rather than inferred from the beard, which would have worked and
+    # would have been a thing nobody could defend the next time it mattered.
+    "peaked": True,
+
+    # The hat this figure walks out in — `walking_hat`, the HEAD piece they
+    # own from the start. It is a garment now rather than part of the body,
+    # so these rows are the *specification* for cutting it, and every other
+    # head piece is cut to the head rather than to cover this.
+    "hat_brim_z": 1.660,
     "hat_brim_r": 0.320,           # half of a 0.64 brim: the widest thing
     "hat_crown_r": 0.165,
-    "hat_cover_r": 0.238,
     "hat_top": 1.780,
 
     # The throat, and the chest under it.
@@ -166,10 +172,9 @@ WAYFARER = {
     # A soft felt hat: a rolled brim and a round crown, where the walker has
     # a flat brim and a peak. Narrower than his, so a hat bought off a rail
     # is cut to it rather than hung over it.
-    "hat_brim_z": 1.612,
+    "hat_brim_z": 1.672,
     "hat_brim_r": 0.275,
     "hat_crown_r": 0.152,
-    "hat_cover_r": 0.162,          # a round crown, so barely more than itself
     "hat_top": 1.780,
 
     "collar_z": 1.283,
@@ -229,6 +234,11 @@ COAT = {
     "brass":         0xB8A050,
     "glass":         0x243230,
     "eye":           0x241C18,
+    # The underwear. Undyed linen, because a vest and a pair of shorts are
+    # what somebody who has taken everything else off is wearing and this
+    # world has no colour for "nothing".
+    "linen":         0xD8CFBC,
+    "linen_dark":    0xB6AC97,
 }
 
 #: What each figure adds to it, and what they call their own.
