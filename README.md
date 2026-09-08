@@ -3717,11 +3717,22 @@ across a lake.
 Everything is worked from the **pause screen** — every slot, everything you own
 to put in it, on and off, wherever you are standing. A trading post is where you
 *buy* a coat and no longer the only place you can take one off, which it had to
-stop being the moment the coat itself became a worn piece. And **every piece can
-be dyed**, with three sliders: what moves is its base colour and its own shades,
-so a dyed coat keeps its brass buttons. The rule is "a scalar multiple of the
+stop being the moment the coat itself became a worn piece. Hover and click, or
+use the arrow keys; either works throughout. And **every piece can be dyed**,
+with three bars you drag: what moves is its base colour and its own shades, so a
+dyed coat keeps its brass buttons. The rule is "a scalar multiple of the
 commonest colour in the mesh", which needs no labelling from the artist and works
 because of how §12 already asks them to paint.
+
+And you can **look at what you are wearing**. The third-person camera used to sit
+behind the walker and nowhere else — a fine camera to walk with, and useless for
+checking a scarf, a hat's brim or the hang of a cape. Hold the right mouse button
+in third person and it swings all the way round you, and up and down; the orbit
+is added to *both* where the camera sits and which way it looks, so you stay in
+the same place in the frame the whole way round, and at an orbit of nothing it is
+exactly the camera this game has always had. It swings back behind you on its own
+as soon as you walk off, because you stopped to look at your hat and not to walk
+home backwards.
 
 **And every one of them is modelled in Blender** — twice, once per figure, which
 is fifty-six files. Drop `watch/models/cosmetics/<figure>/<piece key>.glb`

@@ -328,8 +328,14 @@ piece on every figure out of `src/main/resources` and checks each is worn where
 its slot says, on both bodies, inside the triangle budget.
 
 In the game: press <kbd>Esc</kbd> and <kbd>←</kbd>/<kbd>→</kbd> to be the figure
-you cut it for, walk to a trading post, press <kbd>E</kbd>, press <kbd>←</kbd> for
-the clothes rail, buy the piece, then <kbd>F5</kbd> for third person.
+you cut it for, then <kbd>Enter</kbd> for the wardrobe and click the piece to put
+it on. (One of the eighteen has to be bought first: walk to a trading post, press
+<kbd>E</kbd>, then <kbd>←</kbd> for the clothes rail.)
+
+Then <kbd>F5</kbd> for third person and **hold the right mouse button to swing
+the camera round yourself** — up, down and all the way about. That is the only
+way to look at the front of anything, and it is what you want the moment you are
+checking a fit rather than playing.
 
 **If it did not load**, one line went to stderr saying why and whatever was there
 before was drawn instead:
