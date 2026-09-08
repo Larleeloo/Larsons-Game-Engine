@@ -389,7 +389,7 @@ swept_hair        long_plait       cropped_hair     topknot
 ```bash
 ./gradlew :test --tests '*PlayerFiguresTest*' --tests '*CosmeticsTest*' --tests '*ModelImportTest*'
 ./gradlew run     # Esc and ←/→ for the figure, Enter for the wardrobe, F5 and
-                  # the right mouse button held to look round yourself
+                  # the middle mouse button held to look round yourself
 ```
 
 `PlayerFiguresTest` is the one that says whether it fits: it draws every piece on

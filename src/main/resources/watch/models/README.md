@@ -543,8 +543,9 @@ like a faceted one from six metres away.
 **To check it loaded:** the ranger is at any trading post — walk up to one. For
 an animal, open the Field Guide (`G`) and turn to the species. For a cosmetic,
 put it on from the wardrobe (`Esc`, then `Enter`) and look at yourself in third
-person (`F5`) — with the right mouse button held, which swings the camera round
-you and is the only way to see anything from the front.
+person (`F5`) — standing still, with the middle mouse button (or `O`) held,
+which swings the camera round you and is the only way to see anything from the
+front.
 
 **If it did not load,** the reason was printed to stderr when the game tried:
 

@@ -264,6 +264,22 @@ public enum GameAction {
     // the alternate, for anybody playing without a mouse worth the name.
     WATCH_SPYGLASS("watch_spyglass", "Raise Spyglass", Category.WATCH,
             InputBinding.mouse(MouseEvent.BUTTON3), InputBinding.key(KeyEvent.VK_Z)),
+    // Swinging the third-person camera round yourself, held while the mouse
+    // does the swinging. It shipped on the right button, which is where an
+    // orbit belongs in every editor there has ever been — and which the glass
+    // above was already holding. Two verbs on one button is not a preference
+    // between them, it is the second one never happening: raising the glass
+    // puts it in front of your eye, an eye in front of your eye is not a camera
+    // four metres behind your head, and so the orbit refused itself on the same
+    // frame it was asked for, every time, for as long as it existed.
+    //
+    // The middle button because a drag on it is what turns a model round in
+    // every tool that has one, and because it is the only button on the mouse
+    // this game had not spent. O is the alternate, for a trackpad with no
+    // middle click to hold — the one letter left that is not a verb here and
+    // not a walking key.
+    WATCH_ORBIT("watch_orbit", "Look Around Yourself", Category.WATCH,
+            InputBinding.mouse(MouseEvent.BUTTON2), InputBinding.key(KeyEvent.VK_O)),
     WATCH_TURN_HOME("watch_turn_home", "Turn House", Category.WATCH,
             InputBinding.key(KeyEvent.VK_X)),
     // The two the dark needs. N lights or puts out whatever is in your hand —

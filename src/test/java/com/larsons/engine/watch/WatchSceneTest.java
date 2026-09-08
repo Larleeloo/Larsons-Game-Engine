@@ -279,6 +279,262 @@ class WatchSceneTest {
         }
     }
 
+    /**
+     * The orbit and the glass are not on the same button.
+     *
+     * <p>They were, and that is the whole of why the camera never moved: the
+     * orbit shipped on the right button, the spyglass was already there,
+     * {@code useGlass} runs one line above {@code steerLook}, and an orbit
+     * refuses itself while the glass is up. Every walker carrying a spyglass —
+     * which is every walker who has crafted one — held the button, raised the
+     * glass, and saw the camera stay exactly where it was.
+     *
+     * <p>The category check above would catch a straight duplicate. This one is
+     * here to say <em>why</em> it must never come back.
+     */
+    @Test
+    void theOrbitIsNotOnTheSpyglassButton() {
+        for (var mine : GameAction.WATCH_ORBIT.defaults()) {
+            assertFalse(GameAction.WATCH_SPYGLASS.defaults().contains(mine),
+                    "swinging the camera is back on " + mine.display()
+                            + ", which raises the spyglass — the glass wins and the "
+                            + "camera never moves");
+        }
+        assertFalse(GameAction.WATCH_ORBIT.defaults().isEmpty(),
+                "the camera has no way to be swung round at all");
+    }
+
+    /**
+     * The camera goes the whole way round a walker who has stopped.
+     *
+     * <p>Driven through the scene rather than the arithmetic, because the
+     * arithmetic was never what was wrong: the orbit was placed, commented and
+     * correct, and was asked for on a button that had already been spent. This
+     * holds the button it is on now, sweeps the mouse, and watches where the
+     * camera actually ends up each frame.
+     */
+    @Test
+    void theCameraGoesAllTheWayRoundAWalkerWhoIsStandingStill(@TempDir Path dir) {
+        GameContext ctx = context(dir);
+        WatchStore store = new WatchStore(dir.resolve("walks").toString());
+        WatchScene walk = new WatchScene(ctx);
+        SceneManager scenes = new SceneManager();
+        scenes.setViewport(WIDTH, HEIGHT);
+        scenes.register(WatchLobbyScene.NAME, new WatchLobbyScene(ctx, store));
+        scenes.register(WatchScene.NAME, walk);
+
+        WatchGame game = new WatchGame(new WatchGame.Config(2468L, "Orbit", 1));
+        game.join(1, "Kara");
+        com.larsons.engine.watch.net.WatchSession session =
+                com.larsons.engine.watch.net.WatchSession.solo(game);
+        session.setSelfId(1);
+        walk.adopt(session, store);
+        scenes.setScene(WatchScene.NAME);
+
+        InputManager input = new InputManager();
+        streamIn(walk, scenes, input);
+
+        // A spyglass in the satchel, because a walker without one was never the
+        // walker this failed for: with nothing to raise, the glass stayed down
+        // and the old right-button orbit worked. Crafting one broke the camera.
+        //
+        // Put in the *game's* satchel rather than the view's, because the view
+        // reloads its copy from the game every frame and would take it away
+        // again on the next one.
+        game.player(1).satchel().add(Spyglass.ITEM, 1);
+        frame(scenes, input);
+        assertTrue(walk.view().satchel().has(Spyglass.ITEM),
+                "the walker is not carrying a spyglass, so this is not the walk that broke");
+
+        // Third person. In first person the camera *is* the walker, and there
+        // is nothing to swing it round.
+        input.pressKey(java.awt.event.KeyEvent.VK_F5, 0);
+        frame(scenes, input);
+        input.releaseKey(java.awt.event.KeyEvent.VK_F5);
+        frame(scenes, input);
+
+        double[] start = walk.position();
+        double startArm = Math.hypot(walk.camera().x() - start[0],
+                walk.camera().y() - start[1]);
+        assertTrue(startArm > 2, "the camera is still in the walker's head — F5 did not "
+                + "put the walk in third person, so there is nothing to orbit");
+        double startYaw = walk.view().self().yaw();
+
+        // Hold the orbit on whatever it is bound to, and sweep the mouse.
+        for (var binding : GameAction.WATCH_ORBIT.defaults()) {
+            if (binding.kind() == com.larsons.engine.input.InputBinding.Kind.MOUSE) {
+                input.pressMouse(binding.code(), 0);
+            }
+        }
+        int mx = WIDTH / 2;
+        input.moveMouse(mx, HEIGHT / 2); // the origin, not a flick
+
+        double swept = 0, was = bearing(walk);
+        double closest = startArm, farthest = startArm, worstAim = 1, worstTurn = 0;
+        for (int step = 0; step < 200 && Math.abs(swept) < Math.PI * 2; step++) {
+            mx += 100;
+            input.moveMouse(mx, HEIGHT / 2);
+            frame(scenes, input);
+
+            double now = bearing(walk);
+            swept += wrap(now - was);
+            was = now;
+
+            double[] at = walk.position();
+            double arm = Math.hypot(walk.camera().x() - at[0], walk.camera().y() - at[1]);
+            closest = Math.min(closest, arm);
+            farthest = Math.max(farthest, arm);
+            worstAim = Math.min(worstAim, aimAtWalker(walk));
+            worstTurn = Math.max(worstTurn,
+                    Math.abs(wrap(walk.view().self().yaw() - startYaw)));
+        }
+
+        // First, because it is the whole distinction and the one the broken
+        // camera failed: the mouse has to move the camera and not the walker.
+        // A walker turning on the spot sweeps the camera round them too — the
+        // bearing below cannot tell the two apart, and this can.
+        assertEquals(0, worstTurn, 1e-9, "the walker turned "
+                + Math.round(Math.toDegrees(worstTurn)) + "° on the spot instead of the "
+                + "camera going round them — the mouse is still steering the walker");
+        double[] end = walk.position();
+        assertEquals(start[0], end[0], 1e-9, "the walker drifted while the camera swung");
+        assertEquals(start[1], end[1], 1e-9, "the walker drifted while the camera swung");
+
+        assertTrue(Math.abs(swept) >= Math.PI * 2,
+                "the camera swung " + Math.round(Math.toDegrees(Math.abs(swept)))
+                        + "° round the walker and stopped — it does not go all the way round");
+
+        // An orbit, not a spiral: the walker stays the same distance away the
+        // whole way, which is what keeps them the same size in the frame.
+        assertTrue(closest > startArm * 0.9 && farthest < startArm * 1.1,
+                "the camera wandered between " + String.format("%.2f", closest) + " m and "
+                        + String.format("%.2f", farthest) + " m of the walker instead of "
+                        + "circling them at " + String.format("%.2f", startArm) + " m");
+
+        // And it looks at them the whole way, which is the difference between
+        // swinging the camera round somebody and spinning it on the spot.
+        assertTrue(worstAim > 0.999, "the camera stopped pointing at the walker part way "
+                + "round — they slide out of shot instead of staying in the middle");
+
+        session.close();
+    }
+
+    /**
+     * The glass still goes up, and putting it up does not swing the camera.
+     *
+     * <p>The other half of the same fix: the two verbs have to stop fighting in
+     * both directions, or this trades one silently-dead control for the other.
+     */
+    @Test
+    void raisingTheGlassPutsTheEyeBackInTheWalkersHead(@TempDir Path dir) {
+        GameContext ctx = context(dir);
+        WatchStore store = new WatchStore(dir.resolve("walks").toString());
+        WatchScene walk = new WatchScene(ctx);
+        SceneManager scenes = new SceneManager();
+        scenes.setViewport(WIDTH, HEIGHT);
+        scenes.register(WatchLobbyScene.NAME, new WatchLobbyScene(ctx, store));
+        scenes.register(WatchScene.NAME, walk);
+
+        WatchGame game = new WatchGame(new WatchGame.Config(2468L, "Glass", 1));
+        game.join(1, "Kara");
+        com.larsons.engine.watch.net.WatchSession session =
+                com.larsons.engine.watch.net.WatchSession.solo(game);
+        session.setSelfId(1);
+        walk.adopt(session, store);
+        scenes.setScene(WatchScene.NAME);
+
+        InputManager input = new InputManager();
+        streamIn(walk, scenes, input);
+        game.player(1).satchel().add(Spyglass.ITEM, 1);
+        frame(scenes, input);
+        assertTrue(walk.view().satchel().has(Spyglass.ITEM),
+                "the walker is not carrying a spyglass, so there is nothing to raise");
+
+        input.pressKey(java.awt.event.KeyEvent.VK_F5, 0);
+        frame(scenes, input);
+        input.releaseKey(java.awt.event.KeyEvent.VK_F5);
+        frame(scenes, input);
+
+        double[] at = walk.position();
+        assertTrue(Math.hypot(walk.camera().x() - at[0], walk.camera().y() - at[1]) > 2,
+                "the walk is not in third person, so this proves nothing");
+
+        // Hold the spyglass button and sweep the mouse the way the orbit does.
+        for (var binding : GameAction.WATCH_SPYGLASS.defaults()) {
+            if (binding.kind() == com.larsons.engine.input.InputBinding.Kind.MOUSE) {
+                input.pressMouse(binding.code(), 0);
+            }
+        }
+        int mx = WIDTH / 2;
+        input.moveMouse(mx, HEIGHT / 2);
+        for (int step = 0; step < 60; step++) {
+            mx += 100;
+            input.moveMouse(mx, HEIGHT / 2);
+            frame(scenes, input);
+        }
+
+        // A raised glass is at your eye whatever the view setting says, so the
+        // camera comes home to the walker rather than orbiting them.
+        double[] end = walk.position();
+        assertEquals(0, Math.hypot(walk.camera().x() - end[0], walk.camera().y() - end[1]),
+                1e-9, "the spyglass is being looked through from four metres behind the "
+                        + "walker's own head");
+
+        session.close();
+    }
+
+    /** Tick the scene the way the engine does: promote the input, then update. */
+    private static void tick(SceneManager scenes, InputManager input) {
+        input.newFrame();
+        scenes.update(1.0 / 60, input);
+    }
+
+    /**
+     * …and draw it, which is where the camera is actually put: {@code update}
+     * works out the angles and {@code render} stands the eye on them. A test
+     * that only ticked would read the camera from before the walk started.
+     */
+    private static void frame(SceneManager scenes, InputManager input) {
+        tick(scenes, input);
+        scenes.render(new RecordingTarget(WIDTH, HEIGHT), 0f);
+    }
+
+    /** Run the walk until the ground under it exists, then a few frames more. */
+    private static void streamIn(WatchScene walk, SceneManager scenes, InputManager input) {
+        long deadline = System.currentTimeMillis() + 20_000;
+        while (System.currentTimeMillis() < deadline) {
+            tick(scenes, input);
+            if (walk.streamer() != null && walk.streamer().loadedCount() > 0) break;
+            Thread.yield();
+        }
+        // Long enough for the fall onto the spawn to finish and the eased speed
+        // to wind back down: the orbit is for a walker who has stopped.
+        for (int i = 0; i < 40; i++) tick(scenes, input);
+    }
+
+    /** Which way the camera is standing from the walker, in radians. */
+    private static double bearing(WatchScene walk) {
+        double[] at = walk.position();
+        return Math.atan2(walk.camera().x() - at[0], walk.camera().y() - at[1]);
+    }
+
+    /** How squarely the camera is pointing at the walker: {@code 1} is dead on. */
+    private static double aimAtWalker(WatchScene walk) {
+        double[] at = walk.position();
+        double dx = at[0] - walk.camera().x(), dy = at[1] - walk.camera().y();
+        double len = Math.hypot(dx, dy);
+        if (len < 1e-9) return 1;
+        return (walk.camera().forwardX() * dx + walk.camera().forwardY() * dy) / len;
+    }
+
+    /** An angle difference brought back into ±π, so a sweep can be totalled. */
+    private static double wrap(double radians) {
+        double r = radians;
+        while (r > Math.PI) r -= Math.PI * 2;
+        while (r < -Math.PI) r += Math.PI * 2;
+        return r;
+    }
+
     /** The brief's verb: click on it. That has to be a mouse button, not a key. */
     @Test
     void spottingIsBoundToTheMouse() {

@@ -3726,13 +3726,23 @@ because of how §12 already asks them to paint.
 
 And you can **look at what you are wearing**. The third-person camera used to sit
 behind the walker and nowhere else — a fine camera to walk with, and useless for
-checking a scarf, a hat's brim or the hang of a cape. Hold the right mouse button
-in third person and it swings all the way round you, and up and down; the orbit
-is added to *both* where the camera sits and which way it looks, so you stay in
-the same place in the frame the whole way round, and at an orbit of nothing it is
-exactly the camera this game has always had. It swings back behind you on its own
-as soon as you walk off, because you stopped to look at your hat and not to walk
-home backwards.
+checking a scarf, a hat's brim or the hang of a cape. Stand still in third person
+and **hold the middle mouse button** (or `O`) and it swings all the way round
+you, and up and down; the orbit is added to *both* where the camera sits and
+which way it looks, so you stay in the same place in the frame the whole way
+round, and at an orbit of nothing it is exactly the camera this game has always
+had. It swings back behind you on its own as soon as you walk off, because you
+stopped to look at your hat and not to walk home backwards.
+
+It was on the **right** button first, and on the right button it never once
+worked. That is where the spyglass is held up, the glass is read a line before
+the camera is, and an orbit refuses itself while the glass is up — so every
+walker who had crafted a spyglass held the button, raised the glass and watched
+the camera not move, and the walkers it did work for were the ones with nothing
+to raise. Two verbs on one button is not a preference between them; it is the
+second one never happening. It has a binding of its own now, on the controls
+screen with everything else, and the hint on the stillness bar names whichever
+button it has actually been put on.
 
 **And every one of them is modelled in Blender** — twice, once per figure, which
 is fifty-six files. Drop `watch/models/cosmetics/<figure>/<piece key>.glb`
