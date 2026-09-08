@@ -10,18 +10,23 @@ per bone — an armature called `ranger_rig`, and six actions: `idle`, `walk`,
 `run`, `swim`, `row` and `alert`. Nothing is exported; see EXPORT at the foot
 of this file for the settings that matter and for which name to save under.
 
-**This figure is the player.** Filed as `characters/walker.glb` it replaces
-the walker — you in third person, and everybody else in the clearing — which
-is why it carries the clips it does and a pack on its back. The five besides
-`alert` are every state a walker is ever drawn in, and that is the point: a
-state with no clip is posed by a procedural table that works per piece about
-each bone's own pivot, which comes apart at a run's angles and comes apart
-completely at a swimmer's. The pack is there because the back is the side of
-yourself you spend the game looking at.
+**This figure is the ranger**, and only the ranger: `characters/ranger.glb`,
+the person standing outside every trading post, who needs `idle` and gets the
+rest for nothing.
 
-Filed as `characters/ranger.glb` instead it is the figure outside the trading
-post, which needs only `idle`. Do not file it as both, or every ranger in the
-world is the player's twin.
+**It used to be the player as well, and must not be filed as one now.** A
+player figure is a *body* — a head with no hair on it, bare limbs, a vest and
+a pair of shorts — because the coat, the trousers, the boots, the pack and the
+hat are worn pieces that come off. Those are built by `tools/blender/bodies.py`
+and `tools/blender/cosmetics.py`. Filed as `characters/walker.glb`, everything
+here would be a player who could not be undressed and who would then have a
+second coat hung over the first.
+
+An NPC keeps his clothes on because nobody is going to ask him to take them
+off, which is why this file did not move with the rest and is not built out of
+`figures.py`. It is also, quietly, why the walker and the ranger still look
+like they work for the same outfit: the wardrobe's `field_coat` is cut from
+this coat's numbers.
 
 The contract is `src/main/resources/watch/models/README.md` §8-§15, and the
 ranger's own numbers are `BLENDER_BRIEF.md` §2. Where this file and those
@@ -1119,10 +1124,10 @@ def build():
 #
 # Save it as
 #
-#   src/main/resources/watch/models/characters/walker.glb   <- the player
-#   src/main/resources/watch/models/characters/ranger.glb   <- the NPC
+#   src/main/resources/watch/models/characters/ranger.glb
 #
-# One or the other, not both.
+# And not as `characters/walker.glb`: that is a player, a player is a body,
+# and this is a person in a coat. See the note at the top of the file.
 #
 # There is nothing to apply first: every object here is built in world
 # coordinates with an identity transform, so `Ctrl+A -> All Transforms` has

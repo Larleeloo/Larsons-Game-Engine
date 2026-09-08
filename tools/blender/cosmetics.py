@@ -97,6 +97,30 @@ OUTPUT = "src/main/resources/watch/models/cosmetics"
 OILSKIN = 0x2E3A34
 
 PAINT = {
+    # --- the standard kit -------------------------------------------------
+    #
+    # **These are the clothes that used to be modelled into the body.** Every
+    # player owns them and wears them from the start, none of them is on any
+    # rail, and all of them come off — which is the whole reason they are
+    # pieces rather than geometry. See `Cosmetics.Piece.kit`.
+    "field_coat":      (0x3C5240, 0x4A6450),
+    "field_trousers":  (0x6B6247, 0x5E563F),
+    "walking_boots":   (0x4A3626, 0x5C4433),
+    "field_pack":      (0x4A3626, 0xB8A050),
+    "walking_hat":     (0x2E4033, 0xA8442E),
+    "neckerchief":     (0xA8442E, 0x8A3626),
+
+    # --- hair -------------------------------------------------------------
+    #
+    # A hairstyle is a worn piece like any other: it is on the head bone, it
+    # comes off, and its colour is yours to set. The body underneath is bald,
+    # which is a haircut somebody may want anyway.
+    "cropped_hair":    (0x4A3220, 0x3A2718),
+    "swept_hair":      (0x4A3220, 0x5C4028),
+    "long_plait":      (0x6B3A22, 0x54301C),
+    "topknot":         (0x3A2A1E, 0x50382A),
+
+    # --- the rail ---------------------------------------------------------
     "wool_mittens":    (0xB4553F, 0xE0D2B8),
     "knitted_beanie":  (0x4A5A3C, 0xC9B98A),
     "canvas_gaiters":  (0x8A6A3A, 0x40382C),
@@ -155,23 +179,41 @@ def tin(key):
 # `figures.py`, so the same code fits both bodies.
 
 
-def knitted_beanie(f):
-    """Pulled down over the brim: a ribbed band, two knit courses and a bobble.
+# --- fitting to a head, now that there is not a hat on it ------------------
+#
+# **Everything in the HEAD slot used to be cut to go *over* the figure's own
+# hat**, which was modelled into the body and could not come off. It comes off
+# now — it is `walking_hat` — so one hat is worn at a time and a piece on the
+# head is cut to the head. These two are what a hat's crown has to be to fit
+# one, with the clearance a knitted thing needs and no more.
 
-    Sized off `hat_cover_r` rather than off the head, because the head has a
-    hat on it already and a beanie that fits the skull leaves a campaign hat
-    sticking out of the top of it.
-    """
+def wrist_of(f):
+    """The wrist, which is the hand's own centre with the joint above it."""
+    return (f["shoulder_x"], f["hand"][1] + 0.004, f["hand"][2] + 0.062)
+
+
+def crown_r(f):
+    """The radius a thing worn on the head sits at."""
+    return f["head_half_x"] * 1.14
+
+
+def brow_z(f):
+    """Where a band, a brim or the edge of a cap crosses the forehead."""
+    return f["eye_z"] + 0.062
+
+
+def knitted_beanie(f):
+    """Pulled down to the brow: a ribbed band, two knit courses and a bobble."""
     p = Part()
-    r = f["hat_cover_r"] + 0.022
-    low = f["hat_brim_z"] + 0.016
-    top = f["hat_top"] + 0.030
-    p.prism((0, 0, low + 0.030), r + 0.014, 0.060, "trim")           # band
-    p.prism((0, 0, low + 0.088), r, 0.060, "main")                   # course
-    p.prism((0, 0, low + 0.146), r - 0.008, 0.058, "main_light")     # course
-    p.prism((0, 0, (low + 0.174 + top) / 2), r - 0.014,
-            top - low - 0.174, "main", top_radius=r * 0.42)
-    p.prism((0, 0, top + 0.030), r * 0.30, 0.060, "trim", sides=6)   # bobble
+    r = crown_r(f)
+    low = brow_z(f) - 0.030
+    top = f["head_top"] + 0.036
+    p.prism((0, 0, low + 0.032), r + 0.012, 0.064, "trim")           # band
+    p.prism((0, 0, low + 0.094), r, 0.062, "main")                   # course
+    p.prism((0, 0, low + 0.150), r - 0.008, 0.052, "main_light")     # course
+    p.prism((0, 0, (low + 0.176 + top) / 2), r - 0.014,
+            max(0.02, top - low - 0.176), "main", top_radius=r * 0.44)
+    p.prism((0, 0, top + 0.032), r * 0.30, 0.062, "trim", sides=6)   # bobble
     return {"head": p}
 
 
@@ -183,13 +225,13 @@ def feathered_band(f):
     a feather where one flat strut reads as a stick.
     """
     p = Part()
-    r = f["hat_cover_r"] + 0.010
-    z = f["hat_brim_z"] + 0.055
+    r = crown_r(f) + 0.004
+    z = brow_z(f) + 0.010
     p.prism((0, 0, z), r, 0.052, "main")
     p.prism((0, 0, z + 0.040), r - 0.006, 0.026, "main_dark")
     p.box((0, -r * 0.96, z), (0.048, 0.026, 0.062), "trim_dark")     # keeper
     quill = (Vector((r * 0.62, -r * 0.52, z + 0.010)),
-             Vector((r * 0.30, r * 0.86, f["hat_top"] + 0.090)))
+             Vector((r * 0.30, r * 0.86, f["head_top"] + 0.150)))
     p.strut(quill[0], quill[1], 0.014, 0.014, "trim_dark")
     for t, width in ((0.30, 0.052), (0.58, 0.062), (0.84, 0.040)):
         at = quill[0].lerp(quill[1], t)
@@ -201,26 +243,22 @@ def feathered_band(f):
 def straw_boater(f):
     """Flat brim, blue ribbon, and a bow on the back of it.
 
-    **The brim goes just above the wearer's own**, half a centimetre proud
-    and 35 mm wider, so what you see from anywhere above the horizon is the
-    boater. Underneath it the campaign hat is still there, which is what a
-    hat lining looks like anyway.
+    Absurd in a wood and worn in one anyway. A boater's crown is straight-sided
+    and flat-topped and barely wider than the head, which is exactly what this
+    game's shapes are good at.
     """
     p = Part()
-    brim_r = f["hat_brim_r"] + 0.035
-    brim_z = f["hat_brim_z"] + 0.014
-    crown_r = f["hat_cover_r"] + 0.014
-    crown_top = f["hat_top"] + 0.026
-    p.prism((0, 0, brim_z), brim_r, 0.024, "main",
-            bottom_material="main_dark")
+    brim_r = f["hat_brim_r"] * 0.94
+    brim_z = brow_z(f) + 0.006
+    r = crown_r(f) + 0.008
+    top = f["head_top"] + 0.030
+    p.prism((0, 0, brim_z), brim_r, 0.024, "main", bottom_material="main_dark")
     p.prism((0, 0, brim_z + 0.014), brim_r - 0.030, 0.030, "main_light")
-    p.prism((0, 0, (brim_z + crown_top) / 2), crown_r,
-            crown_top - brim_z, "main")
-    p.prism((0, 0, crown_top - 0.008), crown_r - 0.006, 0.020, "main_light")
-    p.prism((0, 0, brim_z + 0.060), crown_r + 0.008, 0.048, "trim")  # ribbon
-    p.box((0, crown_r + 0.020, brim_z + 0.062), (0.090, 0.036, 0.052), "trim")
-    p.box((0, crown_r + 0.052, brim_z + 0.062), (0.048, 0.034, 0.030),
-          "trim_dark")
+    p.prism((0, 0, (brim_z + top) / 2), r, top - brim_z, "main")
+    p.prism((0, 0, top - 0.008), r - 0.006, 0.020, "main_light")
+    p.prism((0, 0, brim_z + 0.052), r + 0.008, 0.048, "trim")        # ribbon
+    p.box((0, r + 0.020, brim_z + 0.054), (0.090, 0.036, 0.052), "trim")
+    p.box((0, r + 0.052, brim_z + 0.054), (0.048, 0.034, 0.030), "trim_dark")
     return {"head": p}
 
 
@@ -234,26 +272,24 @@ def oilskin_hood(f):
     forward past the jaw.
     """
     p = Part()
-    r = f["hat_cover_r"] + 0.030
-    brim = f["hat_brim_z"]
-    top = f["hat_top"] + 0.045
-    # **The shell starts above the brim, not at the neck.** Pulled down over
-    # the whole head it has to be wider than the widest thing on the figure,
-    # which is the hat brim — and a hood 0.68 m across is a barrel. Up over
-    # the crown instead, and the brim it leaves showing is the hood's own
-    # edge as far as anybody looking at it is concerned.
-    p.prism((0, 0.014, brim + 0.090), r, 0.190, "main", squash=1.08)
-    p.prism((0, 0.018, (brim + 0.180 + top) / 2), r - 0.012,
-            top - brim - 0.180, "main", squash=1.08, top_radius=r * 0.58)
+    r = crown_r(f) + 0.026
+    brow = brow_z(f)
+    top = f["head_top"] + 0.050
+    # A shell over the whole skull, coming down to the brow at the front and
+    # past the nape at the back, with the gorget picking up at the throat.
+    p.prism((0, 0.014, brow + 0.030), r, 0.150, "main", squash=1.10)
+    p.prism((0, 0.018, (brow + 0.105 + top) / 2), r - 0.012,
+            max(0.02, top - brow - 0.105), "main", squash=1.10,
+            top_radius=r * 0.58)
     # The peak. Tilted, because a peak that rain runs off is not flat, and a
     # flat one reads as a shelf over somebody's eyes.
-    p.plate((0, f["face_y"] - 0.052, brim + 0.026),
-            (r * 1.30, 0.115, 0.026), "main_dark", tilt=0.30)
+    p.plate((0, f["face_y"] - 0.048, brow - 0.014),
+            (r * 1.34, 0.110, 0.026), "main_dark", tilt=0.30)
     # Cheek panels down past the jaw, in front of the ear. Narrow: this is
     # the edge of a hood and not a pair of blinkers.
-    kit.mirrored(p, ("plate", (f["head_half_x"] + 0.026, f["face_y"] + 0.085,
-                               f["eye_z"] - 0.055),
-                     (0.040, 0.185, 0.250), "main", 0.0, 0.24))
+    kit.mirrored(p, ("plate", (f["head_half_x"] + 0.024, f["face_y"] + 0.085,
+                               f["eye_z"] - 0.062),
+                     (0.038, 0.180, 0.240), "main", 0.0, 0.24))
     # The gorget, over the collarbone, with the storm toggle on it.
     p.prism((0, 0.008, f["collar_z"] - 0.020), f["neck_r"] + 0.082, 0.080,
             "main_dark", squash=1.14)
@@ -270,20 +306,21 @@ def antler_circlet(f):
     round and a square one reads as a fence post.
     """
     p = Part()
-    r = f["hat_cover_r"] + 0.012
-    z = f["hat_brim_z"] + 0.062
+    r = crown_r(f) + 0.010
+    z = brow_z(f) + 0.014
+    top = f["head_top"]
     p.prism((0, 0, z), r, 0.036, "trim")
     p.prism((0, 0, z + 0.026), r - 0.004, 0.016, "trim_dark")
     for side in (1, -1):
         base = Vector((side * r * 0.80, 0.010, z + 0.020))
-        mid = Vector((side * (r + 0.090), -0.030, f["hat_top"] + 0.075))
-        tip = Vector((side * (r + 0.140), -0.115, f["hat_top"] + 0.185))
+        mid = Vector((side * (r + 0.090), -0.030, top + 0.130))
+        tip = Vector((side * (r + 0.140), -0.115, top + 0.240))
         p.roll(base, mid, 0.021, "main", sides=6)
         p.roll(mid, tip, 0.015, "main", sides=6)
-        p.roll(mid, Vector((side * (r + 0.165), 0.105, f["hat_top"] + 0.130)),
+        p.roll(mid, Vector((side * (r + 0.165), 0.105, top + 0.185)),
                0.013, "main_light", sides=6)
         p.roll(base.lerp(mid, 0.45),
-               Vector((side * (r + 0.075), -0.150, f["hat_top"] + 0.010)),
+               Vector((side * (r + 0.075), -0.150, top + 0.065)),
                0.012, "main_light", sides=6)
     return {"head": p}
 
@@ -352,10 +389,13 @@ def moth_veil(f):
     fence: what you see is as much gap as slat.
     """
     p = Part()
-    r = f["hat_brim_r"] * 0.84
-    top = f["hat_brim_z"] - 0.008
+    # A brim of its own, because there is no longer a hat to hang off: the
+    # figure's own went into the wardrobe and one hat is worn at a time.
+    r = f["head_half_x"] * 1.60
+    top = brow_z(f) + 0.030
     drop = top - f["collar_z"] + 0.026
     p.prism((0, 0, top), r + 0.016, 0.018, "trim")
+    p.prism((0, 0, top - 0.026), crown_r(f), 0.052, "trim_dark")
     for i in range(8):
         angle = math.tau * (i + 0.5) / 8
         out = r + 0.006
@@ -659,8 +699,318 @@ def river_waders(f):
     return _feet(f, build)
 
 
+# --- the standard kit -------------------------------------------------------
+#
+# **What used to be the figure.** These six were modelled into the body until
+# the day somebody wanted the coat off, and they are ordinary worn pieces now:
+# owned from the start, worn by default, free, on no rail, and every one of
+# them removable and recolourable like anything else.
+#
+# They are also the reason the two figures still read as two people while
+# wearing the same catalogue. One key, two files: `walker/walking_hat.glb` is a
+# flat-brimmed campaign hat with a four-sided peak and
+# `wayfarer/walking_hat.glb` is a soft felt one with a rolled brim and a bell
+# crown, because a wardrobe cut per figure can afford to be.
+
+def field_coat(f):
+    """The green field coat, and the belt that cinches it.
+
+    A collar, a placket with buttons down it, patch pockets, shoulder yokes a
+    shade lighter, and a skirt that tapers out to the hem — which is what a
+    stack of boxes cannot do without a staircase down its side.
+    """
+    p = Part()
+    chest_x, back = f["chest_half_x"], f["chest_back_y"]
+    waist_x, skirt_x = f["waist_half_x"], f["skirt_half_x"]
+    front = f["chest_front_y"]
+    collar = f["collar_z"]
+    belt = f["hip_z"] + 0.100
+    p.taper((0, 0, belt - 0.030), (0, 0, collar - 0.014),
+            (waist_x * 2.10, back * 1.96), (chest_x * 2.08, back * 2.02), "main")
+    p.box((0, 0, collar), (chest_x * 1.50, back * 1.48, 0.058), "main_light")
+    kit.mirrored(p, ("box", (chest_x * 0.44, front - 0.014, collar - 0.022),
+                     (chest_x * 0.50, 0.030, 0.052), "main_light"))
+    p.box((0, front - 0.020, (belt + collar) / 2),
+          (0.052, 0.022, collar - belt - 0.030), "main_dark")         # placket
+    for at in (0.24, 0.62):
+        p.box((0, front - 0.032, belt + (collar - belt) * at),
+              (0.026, 0.020, 0.026), "trim")                          # buttons
+    kit.mirrored(p, ("box", (chest_x * 0.90, 0, f["shoulder_z"] - 0.010),
+                     (chest_x * 0.90, back * 2.24, 0.058), "main_light"))
+    kit.mirrored(p, ("box", (chest_x * 0.52, front - 0.014, belt + 0.120),
+                     (chest_x * 0.68, 0.038, 0.100), "main_dark"))    # pockets
+    kit.mirrored(p, ("box", (chest_x * 0.52, front - 0.018, belt + 0.176),
+                     (chest_x * 0.74, 0.042, 0.030), "main_light"))
+    p.box((0, 0, belt), (waist_x * 2.16, back * 2.00, 0.062), "trim_dark")
+    p.box((0, front - 0.024, belt), (0.058, 0.032, 0.058), "trim")    # buckle
+    p.taper((0, 0, f["hem_z"]), (0, 0, belt - 0.010),
+            (skirt_x * 2, back * 2.36), (waist_x * 2.14, back * 2.00), "main_dark")
+    p.box((0, 0, f["hem_z"] + 0.014), (skirt_x * 2 + 0.008, back * 2.42, 0.028),
+          "main_dark")
+
+    # **Sleeves, on the arm bones and not on the spine.** A coat modelled as a
+    # body and a pair of front panels is a waistcoat: the bare arm shows
+    # straight through it, which is what the first version of this looked like.
+    # An upper sleeve and a cuff on each arm, each on its own bone, so the coat
+    # bends at the elbow with the person inside it.
+    made = {"spine": p}
+    wrist = wrist_of(f)
+    for arm, fore, side in (("arm_l", "forearm_l", 1), ("arm_r", "forearm_r", -1)):
+        x = side * f["shoulder_x"]
+        upper = Part()
+        upper.taper((x, 0, f["elbow_z"] - 0.024), (x, 0, f["shoulder_z"] + 0.040),
+                    (0.126, 0.126), (0.150, 0.150), "main")
+        upper.box((x, -0.012, f["elbow_z"] - 0.002), (0.134, 0.138, 0.062),
+                  "main_dark")                                        # elbow
+        upper.box((x, -0.022, f["shoulder_z"] - 0.086), (0.140, 0.092, 0.050),
+                  "trim")                                             # patch
+        made[arm] = upper
+        cuff = Part()
+        cuff.strut((x, -0.008, f["elbow_z"]), (x, wrist[1], wrist[2] + 0.026),
+                   0.112, 0.112, "main")
+        cuff.box((x, wrist[1] + 0.004, wrist[2] + 0.036), (0.122, 0.122, 0.046),
+                 "main_light")
+        made[fore] = cuff
+    return made
+
+
+def field_trousers(f):
+    """Trousers, with a cargo pocket on the thigh and a turn-up at the ankle.
+
+    One leg on each leg bone rather than both on the spine, so they bend at the
+    knee with the person in them.
+    """
+    made = {}
+    for bone, side in (("leg_l", 1), ("leg_r", -1)):
+        p = Part()
+        x = side * f["hip_x"]
+        top = f["hip_z"] + 0.020
+        p.taper((x, 0, f["knee_z"] - 0.010), (x, 0, top),
+                (0.152, 0.152), (0.176, 0.176), "main")
+        p.box((x, -0.005, f["knee_z"]), (0.148, 0.156, 0.054), "main_dark")
+        p.box((x, -0.062, f["knee_z"] + 0.130), (0.150, 0.070, 0.130), "main_dark")
+        p.box((x, -0.066, f["knee_z"] + 0.204), (0.156, 0.076, 0.032), "trim")
+        made[bone] = p
+    for bone, side in (("shin_l", 1), ("shin_r", -1)):
+        p = Part()
+        x = side * f["hip_x"]
+        p.taper((x, 0, f["boot_top"] - 0.040), (x, 0, f["knee_z"] + 0.006),
+                (0.128, 0.128), (0.146, 0.146), "main")
+        p.box((x, 0, f["boot_top"] - 0.032), (0.134, 0.134, 0.030), "trim")
+        made[bone] = p
+    return made
+
+
+def walking_boots(f):
+    """A sole, a toe cap, a tall shaft, laces up the front — and mud.
+
+    The mud is a band of its own colour just above the sole rather than shading
+    painted on, because a face painted dark to fake a shadow is dark on the
+    sunny side too. This one is dirt, and dirt is dark on both sides.
+    """
+    wide, deep = f["boot_half_x"], f["boot_half_y"]
+    bz = f["boot"][2]
+    top = f["boot_top"]
+
+    def build(p, side):
+        x = side * f["boot"][0]
+        y = f["boot"][1]
+        p.box((x, y, bz + 0.006), (wide * 2.06, deep * 2.06, 0.088), "main")
+        p.box((x, y, 0.012), (wide * 2.16, deep * 2.16, 0.024), "main_dark")
+        p.box((x, y, 0.032), (wide * 2.10, deep * 2.10, 0.026), "trim_dark")
+        p.box((x, y - deep * 0.78, 0.056), (wide * 1.76, 0.072, 0.070), "main_dark")
+        p.taper((x, 0, 0.088), (x, -0.004, top),
+                (wide * 2.10, deep * 2.20), (wide * 1.90, deep * 1.96), "trim")
+        p.box((x, -deep * 0.70, 0.168), (0.052, 0.026, 0.132), "main_dark")
+        p.box((x, -0.004, top - 0.016), (wide * 2.00, deep * 2.04, 0.032), "main")
+        return p
+    return _feet(f, build)
+
+
+def field_pack(f):
+    """A pack on the back, a bedroll lashed under it, and the straps that say
+    it is being carried rather than floating behind somebody.
+
+    **This is the side of the figure a player actually looks at** — the camera
+    is behind them in third person — so it gets the same care the front does.
+    """
+    p = Part()
+    chest_x, back = f["chest_half_x"], f["chest_back_y"]
+    mid = f["chest_z"] - 0.020
+    y = back + 0.088
+    p.box((0, y, mid), (chest_x * 1.76, 0.176, 0.300), "main")
+    p.box((0, y, mid + 0.170), (chest_x * 1.84, 0.186, 0.056), "main_light")
+    kit.mirrored(p, ("box", (chest_x * 0.96, y + 0.008, mid - 0.040),
+                     (0.052, 0.130, 0.168), "main_light"))
+    kit.mirrored(p, ("box", (chest_x * 0.52, y + 0.084, mid + 0.140),
+                     (0.040, 0.020, 0.124), "main_dark"))
+    kit.mirrored(p, ("box", (chest_x * 0.52, y + 0.084, mid + 0.058),
+                     (0.032, 0.024, 0.032), "trim"))
+    p.roll((-(chest_x + 0.070), y + 0.010, mid - 0.150),
+           (chest_x + 0.070, y + 0.010, mid - 0.144), 0.058, "trim_dark",
+           end_material="main_dark")
+    kit.mirrored(p, ("strut", (chest_x * 0.60, y - 0.038, f["shoulder_z"] + 0.020),
+                     (chest_x * 0.62, f["chest_front_y"] - 0.010, mid - 0.020),
+                     0.042, 0.020, "main"))
+    return {"spine": p}
+
+
+def walking_hat(f):
+    """The hat a figure walks out in — and the one piece cut differently enough
+    per figure that they read as two people from behind at two hundred metres.
+
+    A campaign hat for the walker: a flat brim with a darker underside, a band,
+    a box of a crown and a four-sided peak on top. A soft felt one for the
+    wayfarer: a rolled brim and a bell crown. `figures.py` says which by
+    carrying a `beard`, which is a proxy nobody should have to defend — so it
+    says so explicitly instead, with `peaked`.
+    """
+    p = Part()
+    brim_r, brim_z = f["hat_brim_r"], f["hat_brim_z"]
+    r, top = f["hat_crown_r"], f["hat_top"]
+    if f.get("peaked"):
+        p.box((0, 0, brim_z), (brim_r * 2, brim_r * 1.88, 0.030), "main",
+              faces={"-z": "main_dark"})
+        p.box((0, 0, brim_z + 0.020), (r * 2.12, r * 2.06, 0.030), "trim")
+        p.box((0, 0, brim_z + 0.062), (r * 2, r * 2, 0.084), "main")
+        p.pyramid((0, 0), brim_z + 0.100, r * 1.82, top, "main")
+        p.box((0, -r * 1.02, brim_z + 0.062), (0.050, 0.022, 0.050), "trim_dark")
+    else:
+        p.prism((0, 0, brim_z), brim_r, 0.044, "main", squash=0.96)
+        p.prism((0, 0, brim_z + 0.002), brim_r - 0.020, 0.026, "main",
+                squash=0.96, bottom_material="main_dark")
+        p.prism((0, 0, (brim_z + top) / 2 + 0.014), r, top - brim_z - 0.028,
+                "main", squash=0.96, top_radius=r * 0.88)
+        p.prism((0, 0, brim_z + 0.030), r + 0.008, 0.034, "trim", sides=6,
+                squash=0.96)
+        p.strut((r * 0.64, -r * 0.62, brim_z + 0.036),
+                (r * 0.96, r * 0.84, top + 0.014), 0.052, 0.014, "main_light")
+    return {"head": p}
+
+
+def neckerchief(f):
+    """Worn high, standing proud of the jaw, with one corner down the front.
+
+    The one thing on the standard kit that is the figure's own colour rather
+    than the coat's — which is what makes two people in the same uniform
+    tellable apart at the distance a coat stops being a coat.
+    """
+    p = Part()
+    r = f["neck_r"] + 0.038
+    z = f["collar_z"] + 0.020
+    p.prism((0, 0, z), r, 0.062, "main", squash=1.06)
+    p.prism((0, 0, z + 0.040), r - 0.008, 0.024, "trim", squash=1.06)
+    p.plate((0, f["chest_front_y"] + 0.010, z - 0.086),
+            (0.092, 0.030, 0.120), "main_dark", tilt=-0.10)
+    return {"head": p}
+
+
+# --- hair -------------------------------------------------------------------
+#
+# **A hairstyle is a worn piece.** The body is bald — see `bodies.py` — so this
+# is where hair lives, on the head bone, in the HAIR slot, off the same rail
+# rules as everything else except that nobody has to buy it: hair is not loot.
+#
+# Four of them, cut to each head. Both figures can wear any of them; which one
+# they start in is `Figure`'s business and not this file's.
+
+def _scalp(p, f, thickness=0.022):
+    """The cap every hairstyle starts from: the skull, a shade proud of it."""
+    hx, hy = f["head_half_x"], f["head_half_y"]
+    top, mid = f["head_top"], f["head_z"]
+    p.box((0, 0.004, mid + (top - mid) * 0.52),
+          (hx * 2 + thickness, hy * 2 + thickness, (top - mid) * 1.20), "main")
+    p.box((0, hy + thickness * 0.4, mid), (hx * 2 - 0.010, thickness * 1.6,
+                                           (top - mid) * 1.30), "main_dark")
+
+
+def cropped_hair(f):
+    """Short back and sides. Nothing to catch on a branch."""
+    p = Part()
+    _scalp(p, f, 0.016)
+    hx, hy = f["head_half_x"], f["head_half_y"]
+    p.box((0, f["face_y"] + 0.008, f["eye_z"] + 0.086),
+          (hx * 2 + 0.014, 0.040, 0.036), "main_dark")                # fringe
+    kit.mirrored(p, ("box", (hx + 0.006, 0.006, f["eye_z"] + 0.052),
+                     (0.018, hy * 1.70, 0.090), "main"))              # sides
+    return {"head": p}
+
+
+def swept_hair(f):
+    """A side sweep and a fringe on the brow. The walker's own."""
+    p = Part()
+    _scalp(p, f)
+    hx, hy = f["head_half_x"], f["head_half_y"]
+    p.box((0, f["face_y"] + 0.004, f["eye_z"] + 0.082),
+          (hx * 2 + 0.018, 0.052, 0.056), "main")
+    p.plate((hx * 0.30, f["face_y"] + 0.010, f["eye_z"] + 0.100),
+            (hx * 1.30, 0.048, 0.048), "main_light", turn=0.22)
+    kit.mirrored(p, ("box", (hx + 0.010, 0.010, f["eye_z"] + 0.030),
+                     (0.024, hy * 1.86, 0.130), "main"))
+    p.box((0, hy + 0.030, f["head_z"] - 0.052), (hx * 1.80, 0.058, 0.128), "main")
+    return {"head": p}
+
+
+def long_plait(f):
+    """Long, gathered at the nape and plaited forward over one shoulder.
+
+    Forward rather than down the back for one reason that is entirely about
+    this game: the back has a pack on it, and a rope of hair down the middle of
+    a bedroll is a smear rather than a plait. Over the front it has a coat to
+    lie against and a silhouette of its own.
+    """
+    p = Part()
+    _scalp(p, f)
+    hx, hy = f["head_half_x"], f["head_half_y"]
+    p.box((0, f["face_y"] + 0.010, f["eye_z"] + 0.076),
+          (hx * 2 + 0.020, 0.062, 0.070), "main")                     # fringe
+    p.box((0, hy + 0.038, f["head_z"] - 0.010), (hx * 2.04, 0.074, 0.240), "main")
+    kit.mirrored(p, ("box", (hx + 0.012, -0.030, f["head_z"] - 0.026),
+                     (0.036, hy * 2.30, 0.200), "main"))
+    p.box((0, hy + 0.026, f["head_z"] - 0.132), (hx * 1.20, 0.078, 0.116), "main")
+    # Three strands of falling width and a tie, which is the fewest that reads
+    # as plaited rather than as a rope.
+    p.strut((hx * 0.50, hy * 0.76, f["head_z"] - 0.128),
+            (hx * 0.86, f["face_y"] * 0.20, f["collar_z"] - 0.030),
+            0.070, 0.070, "main")
+    p.strut((hx * 0.86, f["face_y"] * 0.20, f["collar_z"] - 0.030),
+            (hx * 0.78, f["chest_front_y"] + 0.014, f["collar_z"] - 0.140),
+            0.060, 0.060, "main_dark")
+    p.strut((hx * 0.78, f["chest_front_y"] + 0.014, f["collar_z"] - 0.140),
+            (hx * 0.68, f["chest_front_y"] - 0.006, f["collar_z"] - 0.228),
+            0.046, 0.046, "main")
+    p.box((hx * 0.67, f["chest_front_y"] - 0.008, f["collar_z"] - 0.240),
+          (0.050, 0.050, 0.026), "trim")
+    return {"head": p}
+
+
+def topknot(f):
+    """Gathered up and out of the way, with a pin through it."""
+    p = Part()
+    _scalp(p, f)
+    hx, hy = f["head_half_x"], f["head_half_y"]
+    top = f["head_top"]
+    p.box((0, f["face_y"] + 0.014, f["eye_z"] + 0.084),
+          (hx * 1.70, 0.044, 0.040), "main_dark")
+    p.prism((0, 0.026, top + 0.052), hx * 0.62, 0.088, "main", sides=6)
+    p.prism((0, 0.026, top + 0.104), hx * 0.44, 0.036, "main_light", sides=6)
+    p.roll((-hx * 0.72, 0.026, top + 0.062), (hx * 0.72, 0.026, top + 0.044),
+           0.011, "trim", sides=6)                                    # the pin
+    return {"head": p}
+
+
 #: Which function builds which key, in the catalogue's own order.
 BUILDERS = {
+    "field_coat": field_coat,
+    "field_trousers": field_trousers,
+    "walking_boots": walking_boots,
+    "field_pack": field_pack,
+    "walking_hat": walking_hat,
+    "neckerchief": neckerchief,
+    "cropped_hair": cropped_hair,
+    "swept_hair": swept_hair,
+    "long_plait": long_plait,
+    "topknot": topknot,
     "wool_mittens": wool_mittens,
     "knitted_beanie": knitted_beanie,
     "canvas_gaiters": canvas_gaiters,

@@ -331,7 +331,7 @@ folder **next to the jar** first, then `watch/models/` **on the classpath**.
 | `<species key>.glb` | that one species (see §1 for keys) |
 | `<family key>.glb` | all 49 species of that family |
 | `characters/ranger.glb` | **the forest ranger** who stands outside every trading post |
-| `characters/walker.glb` | **a player** — the first of the two figures you can walk as. See §17 |
+| `characters/walker.glb` | **a player's body** — the first of the two figures you can walk as. A vest and a pair of shorts; the clothes are worn pieces. See §17 |
 | `characters/wayfarer.glb` | **the other one.** See §17 |
 | `cosmetics/<figure>/<piece key>.glb` | **one thing to wear, cut to one figure** — a hat, a cape, a pair of boots. See §16 |
 | `cosmetics/<piece key>.glb` | the same, for a piece that fits anybody. Looked at second |
@@ -569,7 +569,8 @@ watch/models/cosmetics/<figure>/<piece key>.glb    cut to that figure
 watch/models/cosmetics/<piece key>.glb             fits anybody
 ```
 
-The keys are the ones in `Cosmetics.java`, and there are eighteen of them:
+The keys are the ones in `Cosmetics.java`, and there are twenty-eight of them in
+nine slots. **Eighteen are bought off a keeper's rail:**
 
 ```
 wool_mittens      knitted_beanie   canvas_gaiters   wool_scarf
@@ -579,9 +580,30 @@ river_waders      moth_veil        fur_collar       oilskin_cape
 antler_circlet    heron_cloak
 ```
 
-One file replaces one piece. Everything else on the rail keeps whatever it had,
-so you can do these one at a time — and the game will happily draw a modelled hat
-over a boxed scarf.
+**Six are the standard kit** — the clothes everybody walks out in, owned from the
+first step, on no rail and free:
+
+```
+field_coat        field_trousers   walking_boots
+field_pack        walking_hat      neckerchief
+```
+
+**And four are hair**, because the body underneath is bald:
+
+```
+swept_hair        long_plait       cropped_hair     topknot
+```
+
+The last ten used to be *geometry*: the coat, the trousers, the boots, the pack,
+the hat and the hair were modelled into `characters/<figure>.glb` and could not
+be taken off, which meant everything on the rail was worn *over* clothes rather
+than instead of them. They are ordinary pieces now — they come off, they swap,
+and their colour is the player's like any other's. What is left in the character
+file is a body in a vest and a pair of shorts.
+
+One file replaces one piece. Everything else keeps whatever it had, so you can do
+these one at a time — and the game will happily draw a modelled hat over a boxed
+scarf.
 
 ### Two folders, and which one you want
 
@@ -718,10 +740,22 @@ are both answers rather than accidents, so a hat modelled at 1.62 m arrives at
 1.62 m. (It does scale with the wearer — a crouching walker's cape crouches — but
 not with your file.)
 
-### Animation
+### Animation — you almost certainly want none
 
-**This is the part worth doing.** Name your Blender actions after the states in
-§4 and they play when the wearer does that thing:
+**A worn piece is carried by the body it is worn on.** The figure plays the clip
+its own artist authored, the engine asks it where each of its joints went, and
+every triangle of every garment is moved along with the bone it is rigged to.
+So a hat bobs with the head, a boot walks with the foot in it, a coat sits down
+in a boat, and **you do not have to animate anything at all**. The whole wardrobe
+this game ships has no clips in it.
+
+That was not always true and the bug was visible: posed by the procedural
+stand-in while the body played an authored walk, a hat did not rise at all while
+the head under it moved 50 mm a stride. `SceneModel.Worn` is the fix and
+`PlayerFiguresTest.aHatBobsWithTheHeadUnderIt` is what holds it.
+
+If you do want a clip — a cloak with a swing of its own — name your Blender
+actions after the states in §4 and they play when the wearer does that thing:
 
 | Action | Plays when |
 |---|---|
@@ -729,14 +763,12 @@ not with your file.)
 | `walk` | walking |
 | `run` | sprinting |
 
-Three, because three is what a person's legs do. Everything else falls back to
-the procedural humanoid pose, so a cloak with **no animation at all still moves**
-— it swings with the spine it is rigged to. Ship `walk` first if you ship one:
-that is the state a cloak most wants an authored clip for.
-
-The clip is driven by the **wearer's gait clock**, so a cloak's `walk` is in step
-with the legs underneath it by construction. Everything in §13 applies unchanged:
-bake to keyframes on the bones, no IK, no shape keys, `LINEAR` or `STEP`.
+**It composes rather than replaces.** Your clip runs and the body's motion is
+applied on top, which is the honest order: a cloak's swing is movement relative
+to the shoulders it hangs from, not instead of them. So author only the extra —
+a hem lifting, a tail lagging — and leave the walking to the walker. Everything
+in §13 applies unchanged: bake to keyframes on the bones, no IK, no shape keys,
+`LINEAR` or `STEP`.
 
 ### Budget, and the two limits
 
@@ -749,21 +781,30 @@ bake to keyframes on the bones, no IK, no shape keys, `LINEAR` or `STEP`.
 Six of these can be on one person at once and eight people can be in one wood, so
 a 900-triangle cape is 43,000 triangles of coat in a clearing. Keep them small.
 
-Three things a modelled piece does **not** do, all on purpose:
+### The colour is the player's
 
-- **A swimmer and a rower keep the boxes.** Those two are posed by numbers no
-  glTF clip knows — a spine laid along the way somebody is diving, a body folded
-  onto a thwart — so a modelled piece falls back rather than standing bolt
-  upright in the middle of a lake. Your hat changes shape when you dive. That is
-  the honest version of the alternatives.
-- **Your own hands in first person keep the boxes too**, for the same reason: the
-  view model is built in the camera's frame rather than the world's.
-- **It is not recoloured.** An animal's boxes are painted from its species' skin
-  sheet so that one file can dress forty-nine; a cosmetic is one thing and wears
-  the colours you gave its materials. The two pieces the game tints to the
-  wearer's own coat — the oilskin hood and the cape — stop being tinted the
-  moment they are modelled, so if you want a cape that still reads as *that
-  player's* across a valley, leave some of the coat showing.
+**Every piece can be dyed**, from the wardrobe screen, with three sliders. What
+moves is the piece's **base colour and its own shades**; the trim, the buckles,
+the brass and the lenses stay exactly as you painted them.
+
+You do not label anything for this. The rule is "a scalar multiple of the
+commonest colour in the mesh", and it works because of how §12 asks you to paint:
+a garment gets a main, a main darkened, a main lightened, a trim and a trim
+darkened, and the three mains are one colour scaled. `SceneModel` finds the
+commonest colour, works out which triangles are that colour times something, and
+moves those. Two consequences worth designing around:
+
+- **give the base colour to most of the piece**, or the dye will move whatever
+  you did give the most of;
+- **make the trim a colour of its own** rather than the main at some fraction —
+  a trim that is exactly `main × 0.5` will be dyed with it, correctly and
+  unhelpfully.
+
+One thing a modelled piece still does not do: **your own hands in first person
+keep the boxes.** The view model is built in the camera's frame rather than the
+world's, so there is nothing there for a world-space garment to be carried by.
+Everywhere else — standing, walking, running, swimming, rowing — a modelled
+piece is worn.
 
 ### Checklist
 
@@ -791,21 +832,37 @@ correctly.
 
 | Figure | File | Who they are |
 |---|---|---|
-| **Walker** | `characters/walker.glb` | Square in the shoulder, campaign hat, field coat, a beard. The one this game has always drawn |
-| **Wayfarer** | `characters/wayfarer.glb` | Slighter in the shoulder, a waist cut above the belt, soft felt hat, long coat, hair in a plait |
+| **Walker** | `characters/walker.glb` | Square in the shoulder, a beard. The one this game has always drawn |
+| **Wayfarer** | `characters/wayfarer.glb` | Slighter in the shoulder, a waist cut above the belt, longer in the leg |
 
-A figure picks two files and nothing else: the body above, and the wardrobe cut
-to it in `cosmetics/<key>/` (§16). **Nothing else about a walker changes with
-it** — not the height, not the reach, not the speed, not the eye. Both are 1.78 m
-to the crown and `WalkerModel.HEIGHT` is still one number, because the moment one
-of them were faster this would stop being a thing you pick because you like it.
+### A character file is a body, not an outfit
+
+**This is the thing that changed and everything else in §17 follows from it.**
+These used to be finished people — a field coat, trousers, boots, a pack and a
+hat, modelled in — and the one thing a player could not do was take the coat off.
+What is in a character file now is a body: a head with no hair on it, bare arms
+and legs, and a vest and a pair of shorts. Everything that was clothing is a
+piece in `cosmetics/<figure>/`, owned from the first step and worn by default,
+so it comes off, swaps and recolours like anything else (§16).
+
+A body is **not a nude**, and does not need to be hidden by anything: undressed
+is a level of undress a player who takes everything off should be able to arrive
+at, and this game draws at a level of detail where a vest is plenty.
+
+A figure therefore picks two things: the body above, and the wardrobe cut to it.
+**Nothing else about a walker changes with it** — not the height, not the reach,
+not the speed, not the eye. Both are 1.78 m to the crown and
+`WalkerModel.HEIGHT` is still one number, because the moment one of them were
+faster this would stop being a thing you pick because you like it.
 
 Either file replaces the figure in §5's boxes — in third person, for every other
 player in the party, and for anybody you pass in a clearing. Both are authored
 exactly like the ranger in §15: **+Z up, facing −Y, feet on `Z = 0`**, materials
-rather than textures, separate overlapping pieces one per bone, §10's bone names,
-under about 1200 triangles. They are built by `tools/blender/ranger.py` and
-`tools/blender/wayfarer.py`.
+rather than textures, separate overlapping pieces one per bone, §10's bone names.
+A body is about 470 triangles and a full outfit about 900 more, so a dressed
+walker costs roughly what the old modelled-in one did — the split did not make
+anybody more expensive, it made most of them cheaper. They are built by
+`tools/blender/bodies.py`.
 
 **Adding a third** is a row in `Figure.java`, a body `.glb` under that key, and
 one run of `tools/blender/cosmetics.py` for its wardrobe. It is not a code change
@@ -890,6 +947,14 @@ Two things that bite:
   is holding station and swim a full one when they are going somewhere; a clip
   is a clip, so a modelled swimmer always swims. Worth knowing, not worth a
   second clip.
+
+### The clothes come with you
+
+A swimmer and a rower used to keep their boxes — their poses are numbers no
+garment's own clip could know — and they are dressed now. The body hands over
+where each of its joints went and the clothes are carried there, so there is
+nothing left to fall back to. It matters more than it reads: a coat is a worn
+piece, and a swimmer without one would be a swimmer in their underwear.
 
 ### Cosmetics are fitted to a figure, and yours is not one of them
 

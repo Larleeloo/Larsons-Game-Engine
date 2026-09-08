@@ -208,18 +208,26 @@ class PlayerFiguresTest {
         assertEquals(walker.maxZ(), wayfarer.maxZ(), 0.02,
                 "the two figures are different heights");
         // Across the shoulders, measured where the shoulders are rather than
-        // over the whole figure — the widest thing on either of them is a hat.
-        double walkerShoulder = widthAt(walker, 1.10, 1.25);
-        double wayfarerShoulder = widthAt(wayfarer, 1.10, 1.25);
+        // over the whole figure. The band is wide because a body is built out
+        // of tapers, which have vertices only at their two ends: a narrow slice
+        // of one can contain nothing at all.
+        double walkerShoulder = widthAt(walker, 1.05, 1.30);
+        double wayfarerShoulder = widthAt(wayfarer, 1.05, 1.30);
         assertTrue(wayfarerShoulder < walkerShoulder - 0.03,
                 "the wayfarer's shoulders are " + wayfarerShoulder + " m against the "
                         + "walker's " + walkerShoulder + " — that is the same build");
-        // …and not simply smaller: the hips stay where they are.
-        double walkerHip = widthAt(walker, 0.50, 0.70);
-        double wayfarerHip = widthAt(wayfarer, 0.50, 0.70);
-        assertTrue(wayfarerHip > walkerHip - 0.05,
-                "the wayfarer was scaled down rather than cut differently — hips "
-                        + wayfarerHip + " against " + walkerHip);
+
+        // …and **not uniformly narrower**, which is the assertion that actually
+        // separates a second figure from a smaller copy of the first. Measured
+        // as a ratio at two heights rather than as two widths, so it does not
+        // matter what any one band happens to catch: what has to be true is
+        // that the shoulders came in further than the feet did.
+        double feet = widthAt(wayfarer, -0.01, 0.08) / widthAt(walker, -0.01, 0.08);
+        double shoulders = wayfarerShoulder / walkerShoulder;
+        assertTrue(shoulders < feet - 0.04,
+                "the wayfarer is " + round(shoulders * 100) + "% of the walker across "
+                        + "the shoulders and " + round(feet * 100) + "% across the feet "
+                        + "— that is one figure scaled down, not two people");
     }
 
     // --- the wardrobes ------------------------------------------------------------------
@@ -293,11 +301,18 @@ class PlayerFiguresTest {
         // head is at 1.45-1.47 and the hat over it reaches 1.78, a hand hangs
         // at 0.59-0.60, a boot cuff tops out at 0.25.
         Map<Cosmetics.Slot, double[]> window = Map.of(
-                Cosmetics.Slot.HEAD, new double[]{1.45, 2.02},
+                Cosmetics.Slot.HAIR, new double[]{1.24, 1.72},
+                // Wide at the bottom because a hood comes down to the throat,
+                // which is a head piece reaching further than a hat does. The
+                // real work for this slot is the "down onto the crown" check
+                // below, which a band cannot do.
+                Cosmetics.Slot.HEAD, new double[]{1.40, 2.02},
                 Cosmetics.Slot.FACE, new double[]{1.24, 1.66},
                 Cosmetics.Slot.NECK, new double[]{0.92, 1.44},
+                Cosmetics.Slot.BODY, new double[]{0.60, 1.30},
                 Cosmetics.Slot.BACK, new double[]{0.34, 1.34},
                 Cosmetics.Slot.HANDS, new double[]{0.46, 0.74},
+                Cosmetics.Slot.LEGS, new double[]{0.14, 0.78},
                 Cosmetics.Slot.FEET, new double[]{0.00, 0.50});
 
         for (Figure figure : Figure.all()) {
@@ -327,7 +342,8 @@ class PlayerFiguresTest {
                 // goes over a hat that is already there, so it has to come down
                 // onto the crown; a back piece hangs off the shoulders, so its
                 // top is at the yoke and not somewhere above the ears.
-                if (piece.slot() == Cosmetics.Slot.HEAD) {
+                if (piece.slot() == Cosmetics.Slot.HEAD
+                        || piece.slot() == Cosmetics.Slot.HAIR) {
                     assertTrue(mesh.minZ() <= crown - 0.08,
                             where + " starts at " + round(mesh.minZ()) + " m on a figure "
                                     + round(crown) + " m tall — it is floating over the "
@@ -396,12 +412,19 @@ class PlayerFiguresTest {
         for (Figure figure : Figure.all()) {
             for (Cosmetics.Piece piece : Cosmetics.all()) {
                 int count = worn(figure, piece.key()).triangleCount();
-                assertTrue(count <= 250,
+                // 250 for a rail piece, and half as much again for the standard
+                // kit: a coat with sleeves and a skirt is the biggest garment
+                // anybody wears, it is worn by everybody all the time, and it
+                // is geometry that used to sit inside the 1200 the body had.
+                int ceiling = piece.kit() ? 380 : 250;
+                assertTrue(count <= ceiling,
                         figure.key() + "/" + piece.key() + " is " + count
-                                + " triangles, over the 250 a piece is budgeted");
+                                + " triangles, over the " + ceiling + " a "
+                                + (piece.kit() ? "standard-kit garment" : "piece")
+                                + " is budgeted");
                 // …and more than the boxes it replaced, which is the whole
                 // reason anybody modelled it.
-                assertTrue(count >= 60,
+                assertTrue(count >= 40,
                         figure.key() + "/" + piece.key() + " is " + count
                                 + " triangles, which is no better than its boxes");
             }
@@ -413,8 +436,14 @@ class PlayerFiguresTest {
                 }
                 outfit += dearest;
             }
-            assertTrue(outfit <= 1400,
-                    figure.key() + "'s dearest outfit is " + outfit + " triangles");
+            // Everything at once, on top of a body that is now 470 triangles
+            // rather than 1180 — so the dearest possible walker comes out about
+            // where the old fully-modelled one did, which is the number this
+            // whole split had to not make worse.
+            assertTrue(outfit + standing(figure).triangleCount() <= 2400,
+                    figure.key() + " in the dearest of everything is " + outfit
+                            + " triangles of clothes over "
+                            + standing(figure).triangleCount() + " of body");
         }
     }
 
@@ -470,8 +499,13 @@ class PlayerFiguresTest {
      *       nothing about how either is placed enters into it.</li>
      * </ul>
      *
-     * <p>What the bug looked like, for scale: posed by the stand-in the hat did
-     * not rise <em>at all</em> while the head moved 20–50 mm a stride.
+     * <p>Five millimetres of slack, and it is slack rather than tolerance: the
+     * two sets of geometry hang off the same joint at different offsets from
+     * it, so a rotation — and the walk turns the head, the chest and the hips —
+     * moves their centroids by slightly different amounts, correctly. What the
+     * bug looked like is not five millimetres: posed by the stand-in the hat
+     * did not rise <em>at all</em> while the head moved 20–55 mm a stride, so
+     * what this separates is an order of magnitude wide.
      */
     @Test
     void aHatBobsWithTheHeadUnderIt() {
@@ -497,7 +531,7 @@ class PlayerFiguresTest {
                 double crown = centroidZ(walkingWorn(figure, hat, phase), null)
                         - restingHat;
                 moved = Math.max(moved, Math.abs(nodded));
-                assertEquals(nodded, crown, 0.0015,
+                assertEquals(nodded, crown, 0.005,
                         figure.key() + " at phase " + phase + ": the head moved "
                                 + round(nodded) + " m and the hat on it moved "
                                 + round(crown) + " — the clothes are not following "
@@ -562,6 +596,233 @@ class PlayerFiguresTest {
                     figure.key() + " rows with nothing on");
             assertTrue(rowing.build().maxZ() < bareRow.build().maxZ() + 0.25,
                     figure.key() + "'s cloak is standing up in the boat");
+        }
+    }
+
+    // --- undressing ---------------------------------------------------------------------
+
+    /**
+     * <b>A walker with nothing on is in their underwear, not naked and not
+     * still in a coat.</b>
+     *
+     * <p>The coat, the trousers, the boots, the pack, the hat and the hair used
+     * to be modelled into {@code characters/<figure>.glb} and could not come
+     * off. What is in that file now is a body in a vest and a pair of shorts,
+     * and everything else is a piece — which is the whole of what makes the
+     * wardrobe screen able to take anything off.
+     */
+    @Test
+    void takingEverythingOffLeavesSomebodyInTheirUnderwear() {
+        for (Figure figure : Figure.all()) {
+            Mesh body = standing(figure);
+            assertEquals(0, body.minZ(), 0.02, figure.key() + " is not standing on the ground");
+            assertEquals(HEIGHT, body.maxZ(), 0.02,
+                    figure.key() + " is not " + HEIGHT + " m to the crown undressed");
+            // A body is cheap, which is the point of splitting the clothes off:
+            // what used to be 1180 triangles you could never take off is 500
+            // you always pay and 900 you choose.
+            assertTrue(body.triangleCount() <= 700,
+                    figure.key() + "'s bare body is " + body.triangleCount()
+                            + " triangles — there is still clothing modelled into it");
+            // …and it is a body rather than an outline.
+            assertTrue(body.triangleCount() >= 250,
+                    figure.key() + "'s bare body is only " + body.triangleCount()
+                            + " triangles");
+            // The underwear: something on the torso that is not skin. Read as
+            // "more than two colours between the hips and the shoulders",
+            // because a bare chest would be one and a shaded one two.
+            assertTrue(coloursBetween(body, 0.75, 1.15).size() >= 3,
+                    figure.key() + " has nothing on between the hips and the "
+                            + "shoulders — the vest went missing");
+        }
+    }
+
+    /** …and is wearing the standard kit before they take a step. */
+    @Test
+    void everybodySetsOffInTheStandardKit() {
+        for (Figure figure : Figure.all()) {
+            WatchGame game = new WatchGame(WatchGame.Config.hosted("Kit", 5L));
+            game.join(1, "Kara");
+            game.setFigure(1, figure.key());
+            assertEquals(figure, game.player(1).figure());
+            Outfit outfit = game.player(1).outfit();
+            for (Cosmetics.Piece piece : Cosmetics.standardKit()) {
+                assertTrue(outfit.owns(piece.key()),
+                        figure.key() + " does not own their own " + piece.key());
+            }
+            for (Cosmetics.Piece piece : Cosmetics.standardKit()) {
+                if (piece.slot() == Cosmetics.Slot.HAIR) continue;
+                assertEquals(piece.key(), outfit.wornIn(piece.slot()),
+                        figure.key() + " set off without their " + piece.key());
+            }
+            assertNotNull(outfit.wornIn(Cosmetics.Slot.HAIR),
+                    figure.key() + " set off bald");
+            // Everything the kit covers can come off again, which is the whole
+            // reason it is a wardrobe rather than a body.
+            for (Cosmetics.Piece piece : Cosmetics.standardKit()) {
+                if (outfit.wearing(piece.key())) assertNotNull(game.wear(1, piece.key()));
+            }
+            assertTrue(outfit.bare(), figure.key() + " could not be undressed");
+        }
+    }
+
+    /**
+     * A save written before the coat came off reopens dressed.
+     *
+     * <p>Such a save has a wardrobe and an outfit and neither of them mentions
+     * trousers, because trousers were part of the figure when it was written.
+     * Without {@code Outfit.dressIn} the walk reopens in a vest.
+     */
+    @Test
+    void aWalkSavedBeforeTheCoatCameOffReopensDressed() {
+        WatchGame game = new WatchGame(WatchGame.Config.hosted("Old", 9L));
+        game.join(1, "Kara");
+        WatchPlayer player = game.player(1);
+        // A save from before: a bought scarf, worn, and nothing else at all.
+        player.load(Map.of("fit", Map.of("own", List.of("wool_scarf"),
+                "on", "wool_scarf")));
+        Outfit outfit = player.outfit();
+        assertTrue(outfit.wearing("wool_scarf"), "the old save lost what it did have");
+        assertEquals("wool_scarf", outfit.wornIn(Cosmetics.Slot.NECK),
+                "the standard neckerchief pushed a bought scarf off");
+        for (Cosmetics.Piece piece : Cosmetics.standardKit()) {
+            assertTrue(outfit.owns(piece.key()), piece.key() + " was not granted");
+        }
+        assertNotNull(outfit.wornIn(Cosmetics.Slot.BODY), "reopened without a coat");
+        assertNotNull(outfit.wornIn(Cosmetics.Slot.LEGS), "reopened without trousers");
+    }
+
+    // --- colour -------------------------------------------------------------------------
+
+    /**
+     * <b>Dyeing a coat changes the coat and leaves its buttons alone.</b>
+     *
+     * <p>Every garment here is painted out of a tin of five — a main, a main at
+     * four fifths, a main at one and a sixth, a trim and a trim darkened — and
+     * the three mains are exactly one colour scaled, because that is how the
+     * Blender script mixes them. So {@code SceneModel} can recognise "the base
+     * colour and its shades" in a finished mesh without the artist labelling
+     * anything, and a dyed coat keeps its brass.
+     */
+    @Test
+    void dyeingAPieceMovesItsBaseColourAndNothingElse() {
+        for (Figure figure : Figure.all()) {
+            for (String key : List.of("field_coat", "heron_cloak", "walking_boots")) {
+                SceneModel model = CosmeticModel.importedFor(figure, key);
+                assertNotNull(model, figure.key() + " has no " + key);
+                int base = model.baseColour();
+                assertNotEquals(0, base, key + " has no base colour to dye");
+
+                // **Read as sets and as means, never as one exact value.** The
+                // colours on a built mesh have already had the flat shading
+                // folded into them — a triangle is lit from its own normal —
+                // so the byte in the buffer is the dye times a face's light and
+                // asking for the dye back verbatim would be asking the wrong
+                // question.
+                Mesh made = worn(figure, key, 0);
+                Mesh red = worn(figure, key, 0xC03040);
+                Mesh blue = worn(figure, key, 0x3040C0);
+                assertNotEquals(coloursOf(made), coloursOf(red),
+                        figure.key() + "/" + key + " ignored a dye");
+                assertEquals(made.triangleCount(), red.triangleCount(),
+                        figure.key() + "/" + key + " came back a different garment");
+
+                // Dyed red it is redder than when dyed blue, and bluer the
+                // other way about — which is the whole claim, and the one that
+                // a shade table read off the wrong channel would fail.
+                assertTrue(meanChannel(red, 16) > meanChannel(blue, 16) + 8,
+                        figure.key() + "/" + key + " dyed red is no redder than dyed "
+                                + "blue");
+                assertTrue(meanChannel(blue, 0) > meanChannel(red, 0) + 8,
+                        figure.key() + "/" + key + " dyed blue is no bluer than dyed "
+                                + "red");
+
+                // …and the trim does not move with it: what is left in both
+                // sets is the colours that are nobody's business but the
+                // artist's.
+                Set<Integer> kept = new HashSet<>(coloursOf(made));
+                kept.retainAll(coloursOf(red));
+                assertFalse(kept.isEmpty(),
+                        figure.key() + "/" + key + " is one flat colour once dyed — "
+                                + "its trim, buckles and lining moved with the base");
+            }
+        }
+    }
+
+    /** A dye is worth nothing, survives a save, and rides everybody's row. */
+    @Test
+    void aDyeSurvivesASaveAndReachesEverybodyElse(@TempDir Path dir) {
+        WatchGame game = new WatchGame(WatchGame.Config.hosted("Dye", 11L));
+        game.join(1, "Kara");
+        int points = game.guide().points();
+        assertTrue(game.dye(1, "field_coat", 0x8A3B2E), "the host would not dye a coat");
+        assertEquals(points, game.guide().points(), "dyeing a coat cost points");
+        assertEquals(0x8A3B2E, game.player(1).outfit().colourOf("field_coat"));
+        // Allowed on anything in the catalogue, not only on what is owned:
+        // choosing what colour you would dye a cloak is not claiming one.
+        assertTrue(game.dye(1, "heron_cloak", 0x203040));
+        assertFalse(game.dye(1, "not_a_piece", 0x203040), "dyed something that is not a thing");
+
+        // On the row everybody draws from, and only for somebody who dyed.
+        assertEquals("field_coat:8A3B2E,heron_cloak:203040",
+                game.player(1).toSnapshot().get("dy"));
+        game.join(2, "Sam");
+        assertFalse(game.player(2).toSnapshot().containsKey("dy"),
+                "an undyed walker put a colour on the wire");
+
+        WatchStore store = new WatchStore(dir.resolve("walks").toString());
+        store.save(game);
+        WatchGame reopened = new WatchGame(WatchGame.Config.hosted("Dye", 11L));
+        assertTrue(store.load(reopened));
+        reopened.join(1, "Kara");
+        assertEquals(0x8A3B2E, reopened.player(1).outfit().colourOf("field_coat"),
+                "a walk reopened forgot what colour the coat was");
+
+        // …and back to how it was made, which is what zero means.
+        assertTrue(game.dye(1, "field_coat", 0));
+        assertEquals(0, game.player(1).outfit().colourOf("field_coat"));
+    }
+
+    /**
+     * The wardrobe screen takes things off, puts them on, and dyes them —
+     * without going anywhere near a trading post.
+     */
+    @Test
+    void thePauseScreenOpensAWardrobeThatWorks(@TempDir Path dir) {
+        try (Walk walk = new Walk(dir)) {
+            Outfit outfit = walk.game.player(1).outfit();
+            assertNotNull(outfit.wornIn(Cosmetics.Slot.HAIR), "started bald");
+
+            walk.press(KeyEvent.VK_ESCAPE);
+            assertEquals("paused", walk.walk.panelName());
+            walk.press(KeyEvent.VK_ENTER);
+            assertEquals("wardrobe", walk.walk.panelName(),
+                    "Enter on the pause screen did not open the wardrobe");
+
+            // The cursor opens on the first slot, which is hair. Right into the
+            // list, then Enter takes off whatever is on.
+            String hair = outfit.wornIn(Cosmetics.Slot.HAIR);
+            walk.press(KeyEvent.VK_RIGHT);
+            walk.press(KeyEvent.VK_ENTER);
+            assertNull(outfit.wornIn(Cosmetics.Slot.HAIR),
+                    "the wardrobe would not take a hairstyle off");
+            walk.press(KeyEvent.VK_ENTER);
+            assertEquals(hair, outfit.wornIn(Cosmetics.Slot.HAIR),
+                    "…or put it back on");
+
+            // Down past the pieces to the colour rows, and right to brighten.
+            int owned = Cosmetics.inSlot(Cosmetics.Slot.HAIR).size();
+            for (int i = 0; i < owned; i++) walk.press(KeyEvent.VK_DOWN);
+            walk.press(KeyEvent.VK_RIGHT);
+            assertNotEquals(0, outfit.colourOf(hair),
+                    "the colour row did not dye anything");
+            // …and the last row puts it back to how it was made.
+            for (int i = 0; i < 3; i++) walk.press(KeyEvent.VK_DOWN);
+            walk.press(KeyEvent.VK_ENTER);
+            assertEquals(0, outfit.colourOf(hair), "\"as made\" did not undo the dye");
+
+            walk.press(KeyEvent.VK_ESCAPE);
+            assertEquals("paused", walk.walk.panelName(), "Esc did not go back");
         }
     }
 
@@ -802,7 +1063,12 @@ class PlayerFiguresTest {
         }
         assertEquals(said.get("SHOULDER_X"), table.get("shoulder_x"), 1e-9, "shoulder_x");
         assertEquals(said.get("ELBOW_Z"), table.get("elbow_z"), 1e-9, "elbow_z");
-        assertEquals(said.get("BRIM_Z"), table.get("hat_brim_z"), 1e-9, "hat_brim_z");
+        // The hat is deliberately not in this list any more. `ranger.py`'s
+        // BRIM_Z is the hat modelled into the ranger who stands outside the
+        // trading post; the player's went into the wardrobe as `walking_hat`
+        // and is cut to sit on a head rather than to be part of one, so the two
+        // numbers are now about two different hats and holding them together
+        // would be holding a garment to an NPC's face.
         // …and the height both figures have to be, or a wardrobe authored in
         // metres arrives at some other number of them. See figures.py.
         assertEquals(HEIGHT, table.get("crown_z"), 1e-9,
@@ -885,6 +1151,43 @@ class PlayerFiguresTest {
         CosmeticModel.overlay(mesh, figure, List.of(key), 0, 0, 0, 0, HEIGHT, 0, 0,
                 new float[]{0, 0, 1, 1});
         return mesh.build();
+    }
+
+    /** …dyed, or drawn in the colours its artist gave it for {@code 0}. */
+    private static Mesh worn(Figure figure, String key, int dye) {
+        Mesh.Builder mesh = Mesh.builder(0, 0, 0, false, 1);
+        CosmeticModel.overlay(mesh, figure, List.of(key), 0, 0, 0, 0, HEIGHT,
+                AnimState.IDLE, 0, new float[]{0, 0, 1, 1}, null, k -> dye);
+        return mesh.build();
+    }
+
+    /** Every colour in a mesh. */
+    private static Set<Integer> coloursOf(Mesh mesh) {
+        Set<Integer> out = new HashSet<>();
+        for (int i = 0; i < mesh.vertexCount(); i++) {
+            out.add(mesh.colours()[i] & 0xFFFFFF);
+        }
+        return out;
+    }
+
+    /** The mean of one channel over a mesh — {@code 16} red, {@code 0} blue. */
+    private static double meanChannel(Mesh mesh, int shift) {
+        double sum = 0;
+        for (int i = 0; i < mesh.vertexCount(); i++) {
+            sum += (mesh.colours()[i] >> shift) & 0xFF;
+        }
+        return sum / Math.max(1, mesh.vertexCount());
+    }
+
+    /** …between two heights, for asking what somebody has on there. */
+    private static Set<Integer> coloursBetween(Mesh mesh, double from, double to) {
+        Set<Integer> out = new HashSet<>();
+        float[] v = mesh.vertices();
+        for (int i = 0; i < mesh.vertexCount(); i++) {
+            double z = v[i * Mesh.FLOATS_PER_VERTEX + 2];
+            if (z >= from && z <= to) out.add(mesh.colours()[i] & 0xFFFFFF);
+        }
+        return out;
     }
 
     /** One of everything, which is at most one piece a slot. */

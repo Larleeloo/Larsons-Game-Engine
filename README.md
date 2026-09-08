@@ -3683,17 +3683,24 @@ camera's own basis so they follow the view exactly, with a reach gesture when
 you pick something and whatever you are carrying in the right one.
 
 **And there are two of them to be** ([`Figure`](src/main/java/com/larsons/engine/watch/Figure.java)):
-the walker this game has always drawn — square in the shoulder, campaign hat,
-field coat — and the **wayfarer**, slighter through the shoulder with a waist cut
-above the belt, a soft felt hat and a plait over one shoulder. Both are modelled
-in Blender, both carry the five clips a walker is ever drawn in, and both are
-1.78 m to the crown. You pick one on the New Walk screen before setting off and
-change it from the pause screen mid-walk (<kbd>Esc</kbd>, then ←/→); it is saved,
-and it rides everybody's snapshot row so a party spread across a valley sees each
-other correctly. **Nothing else about a walker changes with it** — not the
-height, not the reach, not the speed — for the same reason nothing on the clothes
-rail has a stat on it. Adding a third is a row in that file, a `.glb`, and one run
-of a script.
+the walker this game has always drawn — square in the shoulder, with a beard —
+and the **wayfarer**, slighter through the shoulder with a waist cut above the
+belt and longer in the leg. Both are modelled in Blender, both carry the five
+clips a walker is ever drawn in, and both are 1.78 m to the crown. You pick one
+on the New Walk screen before setting off and change it from the pause screen
+mid-walk (<kbd>Esc</kbd>, then ←/→); it is saved, and it rides everybody's
+snapshot row so a party spread across a valley sees each other correctly.
+**Nothing else about a walker changes with it** — not the height, not the reach,
+not the speed — for the same reason nothing on the clothes rail has a stat on it.
+Adding a third is a row in that file, a `.glb`, and one run of a script.
+
+**A character file is a body, not an outfit.** These used to be finished people
+with a coat, trousers, boots, a pack and a hat modelled in, and the one thing a
+player could not do was take the coat off. What is in one now is a head with no
+hair on it, bare arms and legs, and a vest and a pair of shorts; everything that
+was clothing is a worn piece, owned from the first step and worn by default. So
+the wardrobe screen can undress you, and there are four **hairstyles** because
+the body underneath is bald.
 
 You can also **dress that person up**
 ([`CosmeticModel`](src/main/java/com/larsons/engine/watch/render/CosmeticModel.java)).
@@ -3707,16 +3714,35 @@ face slots go on through the same call that already puts the ordinary hat on —
 which is why your boater is still on your head when you are swimming face-down
 across a lake.
 
+Everything is worked from the **pause screen** — every slot, everything you own
+to put in it, on and off, wherever you are standing. A trading post is where you
+*buy* a coat and no longer the only place you can take one off, which it had to
+stop being the moment the coat itself became a worn piece. And **every piece can
+be dyed**, with three sliders: what moves is its base colour and its own shades,
+so a dyed coat keeps its brass buttons. The rule is "a scalar multiple of the
+commonest colour in the mesh", which needs no labelling from the artist and works
+because of how §12 already asks them to paint.
+
 **And every one of them is modelled in Blender** — twice, once per figure, which
-is thirty-six files. Drop `watch/models/cosmetics/<figure>/<piece key>.glb`
+is fifty-six files. Drop `watch/models/cosmetics/<figure>/<piece key>.glb`
 beside the jar or on the classpath and it is worn instead of whatever was there,
 the same drop-in the ranger and the 1323 animals already have, failing the same
 soft way if the file is broken. A worn model is a *rigged garment*: authored in
 place on a body, bound to the same bone names a character uses, so it follows the
-joint it hangs on, spans two of them if it needs to, and can **play its own
-animation** — name a Blender action `walk` and it runs on the wearer's own gait
-clock, in step with the legs underneath it. A piece with no clip still moves,
-which is why the shipped wardrobe ships none.
+joint it hangs on and spans two of them if it needs to.
+
+**And the body carries it.** A garment and the figure under it are two models
+with two rigs drawn by two calls, and left to themselves each animated on its
+own: the body played its authored walk — root dropped to put the lower boot on
+the floor, chest leaning, head nodding — and the garment, having no clip, was
+posed by a procedural stand-in. Standing still nobody could see it; at a run the
+head came 50 mm out from under the hat, once a stride. So the body is asked where
+its joints went ([`SceneModel.Worn`](src/main/java/com/larsons/engine/watch/model/SceneModel.java))
+and every triangle is carried along with the bone it is rigged to. An artist
+never has to animate a garment — the whole shipped wardrobe has no clips — and
+one who wants a cloak to swing authors only the swing, because a clip composes
+with the body rather than replacing it. It is also what dressed the swimmer and
+the rower, whose poses no garment's own clip could ever have known.
 
 **Why twice.** A worn piece is the one model in this game that is never measured
 and never rescaled — the metre an artist puts a hat at is the metre it is worn at,

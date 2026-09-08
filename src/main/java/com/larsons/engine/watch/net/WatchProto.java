@@ -50,6 +50,7 @@ import java.util.Map;
  *   client → server   {"t":"buyfit","s":shopId,"k":"wool_scarf"}   (off the rail)
  *   client → server   {"t":"wear","k":"wool_scarf"}   (on if off, off if on)
  *   client → server   {"t":"figure","k":"wayfarer"}   (which body to be drawn as)
+ *   client → server   {"t":"dye","k":"field_coat","c":9059118}   (0 = as made)
  *
  *   client → server   {"t":"chart","r":512}           (a map of what I can see)
  *   client → server   {"t":"rename","c":mapId,"n":"North Wood"}
@@ -458,6 +459,22 @@ public final class WatchProto {
     public static Map<String, Object> figure(String key) {
         Map<String, Object> m = msg("figure");
         m.put("k", key);
+        return m;
+    }
+
+    /**
+     * Dye a piece, or put it back to how it was made with {@code 0}.
+     *
+     * <p>A host verb for {@link #wear}'s reason: what colour somebody's coat is
+     * goes out on their snapshot row to everybody, so it has to be the host's
+     * copy that changes. Unlike wearing, it is allowed on anything in the
+     * catalogue rather than only on what is owned — choosing what colour you
+     * would dye a cloak is not claiming one.
+     */
+    public static Map<String, Object> dye(String key, int rgb) {
+        Map<String, Object> m = msg("dye");
+        m.put("k", key);
+        m.put("c", rgb & 0xFFFFFF);
         return m;
     }
 

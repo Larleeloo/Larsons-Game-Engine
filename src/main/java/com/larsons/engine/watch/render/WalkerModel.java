@@ -339,6 +339,22 @@ public final class WalkerModel {
                               double z, double yaw, boolean crouching, double phase,
                               double speed, Leap leap, int tint, List<String> worn,
                               double clock) {
+        walker(mesh, who, x, y, z, yaw, crouching, phase, speed, leap, tint, worn,
+                clock, CosmeticModel.Dyes.AS_MADE);
+    }
+
+    /**
+     * …and in whatever colours this walker has dyed their clothes.
+     *
+     * <p>Beside {@code worn} rather than inside it because the two answer to
+     * different owners: what is on comes off a snapshot row and is the host's,
+     * and what colour it is comes off the same row and is equally the host's,
+     * but a portrait and a first-person hand want one without the other.
+     */
+    public static void walker(Mesh.Builder mesh, Figure who, double x, double y,
+                              double z, double yaw, boolean crouching, double phase,
+                              double speed, Leap leap, int tint, List<String> worn,
+                              double clock, CosmeticModel.Dyes dyes) {
         float[] uv = new float[4];
         WatchMaterials.uv(WatchMaterial.PLANK, uv);
         // Anything somebody has modelled in Blender is a rigged figure of its
@@ -373,7 +389,7 @@ public final class WalkerModel {
             // once a stride, and a hat that agreed about the pose but not about
             // *which* clip would do it at every threshold.
             CosmeticModel.overlay(mesh, who, worn, x, y, z, yaw, height, state, at, uv,
-                    figure.wornAt(state, at, height, SceneModel.Lean.UPRIGHT));
+                    figure.wornAt(state, at, height, SceneModel.Lean.UPRIGHT), dyes);
             return;
         }
 
@@ -687,6 +703,14 @@ public final class WalkerModel {
     public static void rower(Mesh.Builder mesh, Figure who, double x, double y,
                              double waterZ, double yaw, double bob, double stroke,
                              int tint, List<String> worn) {
+        rower(mesh, who, x, y, waterZ, yaw, bob, stroke, tint, worn,
+                CosmeticModel.Dyes.AS_MADE);
+    }
+
+    /** …in the colours they dyed them. */
+    public static void rower(Mesh.Builder mesh, Figure who, double x, double y,
+                             double waterZ, double yaw, double bob, double stroke,
+                             int tint, List<String> worn, CosmeticModel.Dyes dyes) {
         float[] uv = new float[4];
         WatchMaterials.uv(WatchMaterial.PLANK, uv);
         int coat = tint;
@@ -722,7 +746,8 @@ public final class WalkerModel {
             // did, so there is nothing left to fall back to.
             CosmeticModel.overlay(mesh, who, worn, seatX, seatY, boards, yaw, HEIGHT,
                     AnimState.ROW, at, uv,
-                    figure.wornAt(AnimState.ROW, at, HEIGHT, SceneModel.Lean.UPRIGHT));
+                    figure.wornAt(AnimState.ROW, at, HEIGHT, SceneModel.Lean.UPRIGHT),
+                    dyes);
             return;
         }
 
@@ -918,6 +943,15 @@ public final class WalkerModel {
                                double z, double yaw, double bodyPitch, double drive,
                                double phase, boolean surfaced, int tint,
                                List<String> worn) {
+        swimmer(mesh, who, x, y, z, yaw, bodyPitch, drive, phase, surfaced, tint,
+                worn, CosmeticModel.Dyes.AS_MADE);
+    }
+
+    /** …in the colours they dyed them. */
+    public static void swimmer(Mesh.Builder mesh, Figure who, double x, double y,
+                               double z, double yaw, double bodyPitch, double drive,
+                               double phase, boolean surfaced, int tint,
+                               List<String> worn, CosmeticModel.Dyes dyes) {
         float[] uv = new float[4];
         WatchMaterials.uv(WatchMaterial.PLANK, uv);
         int coat = tint;
@@ -951,7 +985,7 @@ public final class WalkerModel {
             // longer has to be left off.
             CosmeticModel.overlay(mesh, who, worn, x, y, z, yaw, HEIGHT,
                     AnimState.SWIM, at, uv,
-                    figure.wornAt(AnimState.SWIM, at, HEIGHT, lean));
+                    figure.wornAt(AnimState.SWIM, at, HEIGHT, lean), dyes);
             return;
         }
 

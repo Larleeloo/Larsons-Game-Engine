@@ -360,13 +360,42 @@ public final class CosmeticModel {
                                double x, double y, double z, double yaw, double height,
                                AnimState state, double phase, float[] uv,
                                SceneModel.Worn carry) {
+        overlay(mesh, figure, worn, x, y, z, yaw, height, state, phase, uv, carry,
+                Dyes.AS_MADE);
+    }
+
+    /**
+     * What colour a wearer has had each of their pieces dyed.
+     *
+     * <p>An interface rather than a map because the answer comes from three
+     * different places — a player's own {@link com.larsons.engine.watch.Outfit},
+     * a row off somebody else's snapshot, and nothing at all for a portrait —
+     * and none of them wants to build a map per frame to be asked six
+     * questions.
+     */
+    @FunctionalInterface
+    public interface Dyes {
+
+        /** The colour for a key, or {@code 0} for the colours it was made in. */
+        int colourOf(String key);
+
+        /** Nobody has dyed anything, which is most walkers most of the time. */
+        Dyes AS_MADE = key -> 0;
+    }
+
+    /** The same again, in whatever colours the wearer chose. */
+    public static void overlay(Mesh.Builder mesh, Figure figure, List<String> worn,
+                               double x, double y, double z, double yaw, double height,
+                               AnimState state, double phase, float[] uv,
+                               SceneModel.Worn carry, Dyes dyes) {
         if (worn == null || worn.isEmpty()) return;
         double scale = height / WalkerModel.HEIGHT;
         for (String key : worn) {
             SceneModel model = importedFor(figure, key);
             if (model == null) continue;
             model.mesh(mesh, x, y, z, yaw + SceneModel.PERSON_TURN, state, phase,
-                    scale, uv, 0, null, SceneModel.Lean.UPRIGHT, carry);
+                    scale, uv, 0, null, SceneModel.Lean.UPRIGHT, carry,
+                    dyes == null ? 0 : dyes.colourOf(key));
         }
     }
 

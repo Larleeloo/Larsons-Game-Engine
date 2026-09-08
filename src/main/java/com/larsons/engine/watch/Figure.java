@@ -62,7 +62,7 @@ public enum Figure {
      * that builds the ranger outside the trading post, which is why the two of
      * them look like they work for the same outfit.
      */
-    WALKER("walker", "Walker",
+    WALKER("walker", "Walker", "swept_hair",
             "Square in the shoulder, campaign hat, field coat. The one this "
                     + "game has always drawn."),
 
@@ -80,7 +80,7 @@ public enum Figure {
      * gains 25 mm of length, and the legs take 25 mm off the torso. Scaled
      * down instead, it would have been a child.
      */
-    WAYFARER("wayfarer", "Wayfarer",
+    WAYFARER("wayfarer", "Wayfarer", "long_plait",
             "Slighter in the shoulder, soft hat, long coat, hair in a plait.");
 
     /** What a walker is when nobody has said otherwise, and what a save without
@@ -92,11 +92,13 @@ public enum Figure {
 
     private final String key;
     private final String label;
+    private final String hair;
     private final String note;
 
-    Figure(String key, String label, String note) {
+    Figure(String key, String label, String hair, String note) {
         this.key = key;
         this.label = label;
+        this.hair = hair;
         this.note = note;
     }
 
@@ -114,6 +116,19 @@ public enum Figure {
 
     /** One line under the row, for a menu that has room for it. */
     public String note() { return note; }
+
+    /**
+     * The hairstyle this figure sets off in.
+     *
+     * <p>The body is bald — hair is a worn piece like everything else, so that
+     * it can be changed — and somebody has to say which of the four a walker
+     * starts in. It is here rather than in {@link Cosmetics} because it is the
+     * one thing about the standard kit that differs between the two of them,
+     * and it is a fact about a <em>person</em> rather than about a garment.
+     * Everybody owns all four from the start; this only picks the one that is
+     * already on.
+     */
+    public String hair() { return hair; }
 
     /**
      * The model this figure is drawn from — {@code characters/<key>}.

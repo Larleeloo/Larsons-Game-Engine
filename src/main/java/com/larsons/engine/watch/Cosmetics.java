@@ -80,18 +80,24 @@ public final class Cosmetics {
      * never has to resolve two things overlapping.
      */
     public enum Slot {
-        /** On the crown of the hat the figure is already wearing. */
-        HEAD("Head", "over the hat"),
+        /** The hair on their head, or none of it. */
+        HAIR("Hair", "on the head"),
+        /** A hat, over the hair. */
+        HEAD("Head", "on the head"),
         /** On the front of the face, under whatever is on the head. */
         FACE("Face", "on the face"),
         /** Round the neck and over the shoulders. */
         NECK("Neck", "at the throat"),
-        /** Over the satchel, down the back. */
-        BACK("Back", "over the pack"),
+        /** The coat, over the body. */
+        BODY("Body", "over the vest"),
+        /** Over the coat, down the back. */
+        BACK("Back", "across the back"),
         /** Over both hands. */
         HANDS("Hands", "on the hands"),
-        /** Over both boots. */
-        FEET("Feet", "over the boots");
+        /** The trousers, on both legs. */
+        LEGS("Legs", "on the legs"),
+        /** Over both feet. */
+        FEET("Feet", "on the feet");
 
         private final String label;
         private final String where;
@@ -127,17 +133,49 @@ public final class Cosmetics {
      * @param note   one line for the row under it
      */
     public record Piece(String key, String name, Slot slot, int price, int rgb, int trim,
-                        boolean tinted, String note) {
+                        boolean tinted, boolean kit, String note) {
 
         /** What the shop row prints on the right, while it is still for sale. */
-        public String priceLine() { return price + (price == 1 ? " pt" : " pts"); }
+        public String priceLine() {
+            return kit ? "standard" : price + (price == 1 ? " pt" : " pts");
+        }
 
         /** The same piece at a keeper's own prices. */
         Piece at(double markup) {
             return new Piece(key, name, slot, Math.max(1, (int) Math.round(price * markup)),
-                    rgb, trim, tinted, note);
+                    rgb, trim, tinted, kit, note);
         }
     }
+
+    /**
+     * The clothes everybody walks out in — <b>and the reason a walker can be
+     * undressed at all.</b>
+     *
+     * <p>These were geometry until somebody wanted the coat off. The figure's
+     * own coat, trousers, boots, pack, hat and neckerchief were modelled into
+     * {@code characters/<figure>.glb} and could not be removed, which meant
+     * every garment on a rail was worn <em>over</em> clothes rather than instead
+     * of them: a beanie pulled over a campaign hat, a cape over a pack. What is
+     * in that file now is a body in a vest and a pair of shorts, and these six
+     * are ordinary worn pieces.
+     *
+     * <p>What makes them different from the rail is only this: <b>everybody owns
+     * them, nobody buys them, and they are on no keeper's rail.</b> They cost
+     * nothing because charging somebody for their own trousers is not a
+     * shopping ladder, it is a toll. Everything else about them is a cosmetic —
+     * they come off, they swap, and their colour is the player's like any
+     * other's.
+     */
+    public static List<Piece> standardKit() { return KIT; }
+
+    /**
+     * Hair, which is also a worn piece.
+     *
+     * <p>The body under it is bald, so a walker in nothing at all has a
+     * haircut somebody may want anyway. Free for the same reason the kit is:
+     * hair is not loot.
+     */
+    public static List<Piece> hairstyles() { return inSlot(Slot.HAIR); }
 
     /**
      * The catalogue, at list price and in the order a rail shows it — cheapest
@@ -150,6 +188,10 @@ public final class Cosmetics {
     private static final Map<String, Piece> CATALOGUE = build();
 
     private static final List<Piece> ALL = List.copyOf(CATALOGUE.values());
+
+    private static final List<Piece> KIT = ALL.stream().filter(Piece::kit).toList();
+
+    private static final List<Piece> SOLD = ALL.stream().filter(p -> !p.kit()).toList();
 
     /** How many pieces one keeper hangs on their rail. */
     private static final int RAIL_MIN = 3, RAIL_MAX = 5;
@@ -205,7 +247,9 @@ public final class Cosmetics {
         for (String key : localTo(biome)) {
             if (CATALOGUE.containsKey(key) && !pool.contains(key)) pool.add(key);
         }
-        for (Piece piece : ALL) {
+        // Off SOLD rather than ALL: a keeper who hung the standard kit on their
+        // rail would be selling somebody the trousers they are standing in.
+        for (Piece piece : SOLD) {
             if (!pool.contains(piece.key())) pool.add(piece.key());
         }
         List<Piece> chosen = new ArrayList<>();
@@ -266,6 +310,35 @@ public final class Cosmetics {
     private static Map<String, Piece> build() {
         Map<String, Piece> map = new LinkedHashMap<>();
 
+        // --- the standard kit, which is what a figure used to be --------------
+        //
+        // Free, on no rail, owned by everybody from the first step. See
+        // standardKit(). The colours are the field coat's own, and they are
+        // what the Blender script paints them — PlayerFiguresTest holds the two
+        // files against each other, because Blender cannot read Java.
+        kit(map, "field_coat", "Field Coat", Slot.BODY, 0x3C5240, 0x4A6450,
+                "Waxed cotton, four pockets, cut long. What everybody walks out in.");
+        kit(map, "field_trousers", "Field Trousers", Slot.LEGS, 0x6B6247, 0x5E563F,
+                "Heavy twill with a pocket on the thigh. They will outlast you.");
+        kit(map, "walking_boots", "Walking Boots", Slot.FEET, 0x4A3626, 0x5C4433,
+                "Broken in by somebody else and grateful for it.");
+        kit(map, "field_pack", "Field Pack", Slot.BACK, 0x4A3626, 0xB8A050,
+                "The satchel, a bedroll under it, and the straps that carry both.");
+        kit(map, "walking_hat", "Walking Hat", Slot.HEAD, 0x2E4033, 0xA8442E,
+                "Yours is the one you set out in. It has a shape now.");
+        kit(map, "neckerchief", "Neckerchief", Slot.NECK, 0xA8442E, 0x8A3626,
+                "Knotted high. The one thing on the uniform that is your colour.");
+
+        // --- hair -------------------------------------------------------------
+        kit(map, "swept_hair", "Swept Hair", Slot.HAIR, 0x4A3220, 0x5C4028,
+                "A fringe on the brow and the rest pushed back out of it.");
+        kit(map, "long_plait", "Long Plait", Slot.HAIR, 0x6B3A22, 0x54301C,
+                "Gathered at the nape and brought forward over one shoulder.");
+        kit(map, "cropped_hair", "Cropped Hair", Slot.HAIR, 0x4A3220, 0x3A2718,
+                "Short back and sides. Nothing to catch on a branch.");
+        kit(map, "topknot", "Topknot", Slot.HAIR, 0x3A2A1E, 0x50382A,
+                "Up and out of the way, with a pin through it.");
+
         // --- what somebody would put on first ---------------------------------
         piece(map, "wool_mittens", "Wool Mittens", Slot.HANDS, 16, 0xB4553F, 0xE0D2B8,
                 "Knitted on somebody's porch. One size, and it is not yours.");
@@ -319,6 +392,12 @@ public final class Cosmetics {
         // A piece with no colour of its own is a piece drawn in the wearer's:
         // the two big ones, and the sentinel is what keeps that fact in the one
         // table rather than in a list of keys somewhere else. See Piece.tinted.
-        map.put(key, new Piece(key, name, slot, price, rgb, trim, rgb == 0, note));
+        map.put(key, new Piece(key, name, slot, price, rgb, trim, rgb == 0, false, note));
+    }
+
+    /** One of the standard kit: free, on no rail, and everybody's from the start. */
+    private static void kit(Map<String, Piece> map, String key, String name, Slot slot,
+                            int rgb, int trim, String note) {
+        map.put(key, new Piece(key, name, slot, 0, rgb, trim, false, true, note));
     }
 }

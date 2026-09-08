@@ -229,6 +229,29 @@ public final class SceneModel {
         }
     }
 
+    /**
+     * Which triangles are the model's <b>base colour</b>, and how far off it —
+     * what a player recolouring a garment is allowed to change.
+     *
+     * <p>One entry per triangle per piece, in thousandths: {@code 1000} for a
+     * triangle painted in the base colour itself, {@code 800} for one painted
+     * in a shade at four fifths of it, and {@code -1} for one that is not in
+     * that family at all.
+     *
+     * <p><b>The rule is "a scalar multiple of the commonest colour".</b> Every
+     * garment in this game is painted out of a tin of five — a main, a main at
+     * 0.80, a main at 1.14, a trim and a trim at 0.78 — and the three mains are
+     * exactly one colour scaled, because that is how {@code ShopModel.shade}
+     * makes a second tone and how {@code cosmetics.py} mixes its palette. So
+     * "the base colour and its shades" is a thing that can be recognised in a
+     * finished mesh rather than a thing an artist has to label, and dyeing a
+     * coat rust leaves its brass buttons brass.
+     */
+    private final int[][] family;
+
+    /** The colour {@link #family} is measured against — the commonest one. */
+    private final int base;
+
     private final String name;
     private final AnimalModel.PoseSource ownPoses;
     private final Bone[] bones;
@@ -249,6 +272,8 @@ public final class SceneModel {
         this.ownPoses = (state, joint, phase) -> ModelRig.poseOf(kind, state, joint, phase);
         this.bones = bones;
         this.pieces = pieces;
+        this.base = commonest(pieces);
+        this.family = shadesOf(pieces, base);
         this.clips = clips;
         this.rest = rest;
         this.unit = unit;
@@ -329,6 +354,82 @@ public final class SceneModel {
 
         return new SceneModel(raw.name(), kind, bones, List.copyOf(pieces), clips, rest,
                 unit, floor, spanU * unit, Math.max(spanF, spanR) * unit, raw.triangles());
+    }
+
+    /**
+     * The colour most of this model is painted in — what a player is choosing
+     * when they dye it, and what the swatch on the wardrobe screen shows.
+     */
+    public int baseColour() { return base; }
+
+    /** The colour a triangle painted in {@code was} becomes when dyed {@code to}. */
+    private static int recoloured(int shade, int was, int to) {
+        if (shade < 0) return was;
+        return (clamp(((to >> 16) & 0xFF) * shade / 1000) << 16)
+                | (clamp(((to >> 8) & 0xFF) * shade / 1000) << 8)
+                | clamp((to & 0xFF) * shade / 1000);
+    }
+
+    private static int clamp(int channel) {
+        return channel < 0 ? 0 : Math.min(255, channel);
+    }
+
+    /** The colour the most triangles of a model are painted in. */
+    private static int commonest(List<RawModel.Piece> pieces) {
+        Map<Integer, Integer> tally = new LinkedHashMap<>();
+        for (RawModel.Piece piece : pieces) {
+            for (int colour : piece.colours()) {
+                tally.merge(colour, 1, Integer::sum);
+            }
+        }
+        int best = 0, most = 0;
+        for (Map.Entry<Integer, Integer> e : tally.entrySet()) {
+            if (e.getValue() > most) {
+                most = e.getValue();
+                best = e.getKey();
+            }
+        }
+        return best;
+    }
+
+    /**
+     * How far off the base colour every triangle is, or {@code -1} for one
+     * painted out of a different tin entirely. See {@link #family}.
+     *
+     * <p>The scale is read off whichever channel of the base is brightest,
+     * because that is the one with the most precision in it, and then checked
+     * against all three: a colour that only agrees on one channel is a
+     * different colour that happens to share a red.
+     */
+    private static int[][] shadesOf(List<RawModel.Piece> pieces, int base) {
+        int[] channels = {(base >> 16) & 0xFF, (base >> 8) & 0xFF, base & 0xFF};
+        int widest = 0;
+        for (int i = 1; i < 3; i++) {
+            if (channels[i] > channels[widest]) widest = i;
+        }
+        int[][] out = new int[pieces.size()][];
+        for (int p = 0; p < pieces.size(); p++) {
+            int[] colours = pieces.get(p).colours();
+            int[] shades = new int[colours.length];
+            for (int t = 0; t < colours.length; t++) {
+                shades[t] = shadeOf(colours[t], channels, widest);
+            }
+            out[p] = shades;
+        }
+        return out;
+    }
+
+    private static int shadeOf(int colour, int[] base, int widest) {
+        if (base[widest] < 8) return -1;
+        int[] got = {(colour >> 16) & 0xFF, (colour >> 8) & 0xFF, colour & 0xFF};
+        int shade = got[widest] * 1000 / base[widest];
+        // Off by two per channel, which is what a scale in bytes costs: the
+        // shades are made by multiplying and truncating, twice — once in the
+        // Blender script and once when the importer converts out of linear.
+        for (int i = 0; i < 3; i++) {
+            if (Math.abs(got[i] - base[i] * shade / 1000) > 2) return -1;
+        }
+        return shade;
     }
 
     /** What the file called itself. */
@@ -440,6 +541,23 @@ public final class SceneModel {
                      AnimState state, double phase, double scale, float[] uv,
                      double headTurn, AnimalModel.PoseSource fallback, Lean lean,
                      Worn worn) {
+        mesh(mesh, x, y, z, yaw, state, phase, scale, uv, headTurn, fallback, lean,
+                worn, 0);
+    }
+
+    /**
+     * {@link #mesh} in a colour the player chose.
+     *
+     * @param dye the colour to draw this model's {@linkplain #baseColour base}
+     *            in, or {@code 0} for the colours its artist gave it. Only the
+     *            base and its own shades move; a trim, a buckle and a lens stay
+     *            exactly as they were, which is what stops a dyed coat coming
+     *            out as one flat shape. See {@link #family}
+     */
+    public void mesh(Mesh.Builder mesh, double x, double y, double z, double yaw,
+                     AnimState state, double phase, double scale, float[] uv,
+                     double headTurn, AnimalModel.PoseSource fallback, Lean lean,
+                     Worn worn, int dye) {
         AnimalModel.PoseSource poses = fallback == null ? ownPoses : fallback;
         Take take = clips.get(state);
         double[][] globals = take == null ? rest : sample(take, phase);
@@ -447,7 +565,9 @@ public final class SceneModel {
         double[] point = new double[3];
         double[] a = new double[3], b = new double[3], c = new double[3];
 
-        for (RawModel.Piece piece : pieces) {
+        for (int p = 0; p < pieces.size(); p++) {
+            RawModel.Piece piece = pieces.get(p);
+            int[] shades = dye == 0 ? null : family[p];
             Bone bone = bones[piece.node()];
             double[] carry = worn == null ? null
                     : worn.forBone(bone.name(), bone.joint());
@@ -475,7 +595,8 @@ public final class SceneModel {
                         x + a[0] * cos - a[1] * sin, y + a[0] * sin + a[1] * cos, z + a[2],
                         x + b[0] * cos - b[1] * sin, y + b[0] * sin + b[1] * cos, z + b[2],
                         x + c[0] * cos - c[1] * sin, y + c[0] * sin + c[1] * cos, z + c[2],
-                        uv, colours[t]);
+                        uv, shades == null ? colours[t]
+                                : recoloured(shades[t], colours[t], dye));
             }
         }
     }

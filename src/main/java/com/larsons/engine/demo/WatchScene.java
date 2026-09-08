@@ -23,6 +23,7 @@ import com.larsons.engine.watch.Fishing;
 import com.larsons.engine.watch.Forage;
 import com.larsons.engine.watch.Litter;
 import com.larsons.engine.watch.Lure;
+import com.larsons.engine.watch.Outfit;
 import com.larsons.engine.watch.Recipes;
 import com.larsons.engine.watch.Satchel;
 import com.larsons.engine.watch.Shops;
@@ -55,7 +56,9 @@ import com.larsons.engine.watch.net.WatchSession;
 import com.larsons.engine.watch.render.AnimalPortrait;
 import com.larsons.engine.watch.render.BoardImage;
 import com.larsons.engine.watch.render.BoatModel;
+import com.larsons.engine.watch.model.SceneModel;
 import com.larsons.engine.watch.render.ChartImage;
+import com.larsons.engine.watch.render.CosmeticModel;
 import com.larsons.engine.watch.render.FloraMesher;
 import com.larsons.engine.watch.render.Gait;
 import com.larsons.engine.watch.render.HouseModel;
@@ -305,7 +308,7 @@ public class WatchScene extends AbstractScene {
     private static final long HOMES_KEY = Long.MIN_VALUE + 3;
 
     /** Which overlay is up, if any. */
-    private enum Panel { NONE, SATCHEL, HOMES, SHOP, MAP, BOUNTY, PAUSED }
+    private enum Panel { NONE, SATCHEL, HOMES, SHOP, MAP, BOUNTY, PAUSED, WARDROBE }
 
     private final GameContext ctx;
 
@@ -846,6 +849,22 @@ public class WatchScene extends AbstractScene {
      * should win, because the last thing that happened is somebody choosing it.
      */
     private Figure opening;
+
+    // --- the wardrobe screen ----------------------------------------------------------
+    //
+    // Two columns, the same shape as the shop's: a slot on the left and what
+    // this player owns to put in it on the right, with three colour rows under
+    // that. See updateWardrobe.
+
+    /** Which slot the cursor is on, and which row of the right column. */
+    private int slotIndex;
+    private int pieceIndex;
+
+    /** Whether the cursor is in the right column. */
+    private boolean wardrobePieces;
+
+    /** How far a colour row moves per press, and per press with a modifier. */
+    private static final int DYE_STEP = 8, DYE_LEAP = 40;
 
     public WatchScene(GameContext ctx) {
         this.ctx = ctx;
@@ -2794,6 +2813,14 @@ public class WatchScene extends AbstractScene {
         // would abandon the map as well.
         boolean back = KeyBinds.pressed(input, GameAction.MENU_BACK)
                 || KeyBinds.pressed(input, GameAction.PAUSE);
+        // …and the wardrobe was opened *from* the pause screen, so Escape there
+        // goes back one rather than all the way out. It is the only screen in
+        // this scene reached from another one, which is why this is the only
+        // exception.
+        if (back && panel == Panel.WARDROBE && !typingText()) {
+            panel = Panel.PAUSED;
+            return;
+        }
         if (back && !typingText()) {
             panel = Panel.NONE;
             mapPanel.close();
@@ -2807,6 +2834,7 @@ public class WatchScene extends AbstractScene {
             case MAP -> updateMap(input);
             case BOUNTY -> updateBounty(input);
             case PAUSED -> updatePaused(input);
+            case WARDROBE -> updateWardrobe(input);
             case NONE -> { }
         }
     }
@@ -3656,9 +3684,153 @@ public class WatchScene extends AbstractScene {
             leave();
             return;
         }
+        if (KeyBinds.pressed(input, GameAction.MENU_SELECT)) {
+            panel = Panel.WARDROBE;
+            return;
+        }
         if (KeyBinds.pressed(input, GameAction.MENU_LEFT)
                 || KeyBinds.pressed(input, GameAction.MENU_RIGHT)) {
             chooseFigure(figure().next());
+        }
+    }
+
+    // --- the wardrobe -----------------------------------------------------------------
+
+    /**
+     * Everything this player owns, to take on and off — <b>and the reason the
+     * clothes rail is no longer the only way to get dressed.</b>
+     *
+     * <p>A wardrobe used to be workable only at a keeper's counter, which was a
+     * decision about where the rows were drawn rather than about what was
+     * allowed: {@code WatchGame.wear} has never cared where anybody is
+     * standing. It matters now because the coat and the trousers are worn
+     * pieces too, so "take off what you are wearing" has to be reachable from
+     * wherever you are, and because a colour is a thing you fiddle with rather
+     * than a thing you buy.
+     *
+     * <p>Two columns, the shop's shape: a slot on the left and what is owned to
+     * fill it on the right, with the three colour rows under that. Left and
+     * right change column on a piece row and change a <em>channel</em> on a
+     * colour row, which is one rule to learn and is written on the screen.
+     */
+    private void updateWardrobe(InputManager input) {
+        Cosmetics.Slot[] slots = Cosmetics.Slot.values();
+        slotIndex = Math.floorMod(slotIndex, slots.length);
+        Cosmetics.Slot slot = slots[slotIndex];
+        List<Cosmetics.Piece> owned = ownedIn(slot);
+        int rows = owned.size() + DYE_ROWS;
+
+        int step = 0;
+        if (KeyBinds.pressed(input, GameAction.MENU_DOWN)) step = 1;
+        if (KeyBinds.pressed(input, GameAction.MENU_UP)) step = -1;
+        if (step != 0) {
+            if (wardrobePieces) {
+                pieceIndex = Math.floorMod(pieceIndex + step, Math.max(1, rows));
+            } else {
+                slotIndex = Math.floorMod(slotIndex + step, slots.length);
+                pieceIndex = 0;
+                return;
+            }
+        }
+
+        boolean left = KeyBinds.pressed(input, GameAction.MENU_LEFT);
+        boolean right = KeyBinds.pressed(input, GameAction.MENU_RIGHT);
+        int channel = wardrobePieces ? pieceIndex - owned.size() : -1;
+        if (channel >= 0 && channel < 3 && (left || right)) {
+            // A colour row: left and right are the slider rather than the
+            // column, which is the one thing about this screen worth a line of
+            // help text and it has one.
+            nudgeDye(slot, channel, (right ? 1 : -1)
+                    * (input.isKeyDown(java.awt.event.KeyEvent.VK_SHIFT)
+                            ? DYE_LEAP : DYE_STEP));
+            return;
+        }
+        if (right && !wardrobePieces) {
+            wardrobePieces = true;
+            pieceIndex = 0;
+            return;
+        }
+        if (left && wardrobePieces) {
+            wardrobePieces = false;
+            return;
+        }
+
+        if (!KeyBinds.pressed(input, GameAction.MENU_SELECT)) return;
+        if (!wardrobePieces) {
+            wardrobePieces = true;
+            pieceIndex = 0;
+            return;
+        }
+        if (pieceIndex < owned.size()) {
+            wearPiece(owned.get(pieceIndex).key());
+        } else if (channel == 3) {
+            String on = view().outfit().wornIn(slot);
+            if (on != null) sendDye(on, 0);
+        }
+    }
+
+    /** Rows under the pieces: three channels and a way back to how it was made. */
+    private static final int DYE_ROWS = 4;
+
+    /** Everything this player owns that goes in one slot, catalogue order. */
+    private List<Cosmetics.Piece> ownedIn(Cosmetics.Slot slot) {
+        List<Cosmetics.Piece> out = new ArrayList<>();
+        Outfit outfit = view().outfit();
+        for (Cosmetics.Piece piece : Cosmetics.inSlot(slot)) {
+            if (outfit.owns(piece.key())) out.add(piece);
+        }
+        return out;
+    }
+
+    /** Put something on, or take it off — through whoever owns this walk. */
+    private void wearPiece(String key) {
+        if (session == null) return;
+        if (session.local() != null) {
+            String line = session.local().wear(session.selfId(), key);
+            if (line != null) say(line);
+        } else if (session.client() != null) {
+            session.client().sendWear(key);
+        }
+    }
+
+    /** Move one channel of whatever is worn in a slot. */
+    private void nudgeDye(Cosmetics.Slot slot, int channel, int by) {
+        String key = view().outfit().wornIn(slot);
+        if (key == null) return;
+        int rgb = dyeOf(key);
+        int shift = 16 - channel * 8;
+        int was = (rgb >> shift) & 0xFF;
+        int now = Math.max(0, Math.min(255, was + by));
+        // Never zero: a colour of zero is the sentinel for "as its artist made
+        // it", so a coat dyed all the way to black would spring back to green.
+        // One count of red is a black nobody can tell from black.
+        int dyed = (rgb & ~(0xFF << shift)) | (now << shift);
+        sendDye(key, dyed == 0 ? 1 : dyed);
+    }
+
+    /**
+     * What colour a piece is being drawn in — the dye if there is one, and the
+     * colour its artist gave it if there is not.
+     *
+     * <p>The second half is what makes the sliders usable: opening the screen on
+     * an undyed coat and pressing right has to brighten <em>that green</em>
+     * rather than jumping to a value out of black.
+     */
+    private int dyeOf(String key) {
+        int chosen = view().outfit().colourOf(key);
+        if (chosen != 0) return chosen;
+        SceneModel model = CosmeticModel.importedFor(figure(), key);
+        if (model != null && model.baseColour() != 0) return model.baseColour();
+        Cosmetics.Piece piece = Cosmetics.byKey(key);
+        return piece == null || piece.rgb() == 0 ? 0x808080 : piece.rgb();
+    }
+
+    private void sendDye(String key, int rgb) {
+        if (session == null) return;
+        if (session.local() != null) {
+            session.local().dye(session.selfId(), key, rgb);
+        } else if (session.client() != null) {
+            session.client().sendDye(key, rgb);
         }
     }
 
@@ -3838,6 +4010,7 @@ public class WatchScene extends AbstractScene {
                     viewportHeight);
             case BOUNTY -> drawBounty(target);
             case PAUSED -> drawPaused(target);
+            case WARDROBE -> drawWardrobe(target);
             case NONE -> { }
         }
         // The last two, and deliberately over the panels as well.
@@ -4563,6 +4736,9 @@ public class WatchScene extends AbstractScene {
         // out of any local state, so somebody who put a hat on two valleys away
         // is wearing it here on the next tick.
         List<String> worn = walker.wornKeys();
+        // …and in whatever colours they dyed it, off the same row, so somebody
+        // who redyed their coat two valleys away is in it here on the next tick.
+        CosmeticModel.Dyes dyes = walker.dyeing();
 
         // Where the eye of the figure just drawn is, so a raised glass can be
         // put at it. A rower's is over the thwart they are sitting on, which is
@@ -4579,7 +4755,7 @@ public class WatchScene extends AbstractScene {
                 double waterZ = step.z() + Boats.DECK;
                 double bob = bobOf(walker.boatId());
                 WalkerModel.rower(mesh, walker.figure(), x, y, waterZ, step.yaw(),
-                        bob, step.phase(), coat, worn);
+                        bob, step.phase(), coat, worn, dyes);
                 eyeAlong += BoatModel.SEAT_ALONG;
                 eyeZ = BoatModel.thwartZ(waterZ, bob) + WalkerModel.ROWER_EYE;
             }
@@ -4588,7 +4764,7 @@ public class WatchScene extends AbstractScene {
                         walker.submerged());
                 WalkerModel.swimmer(mesh, walker.figure(), x, y, step.z(), step.yaw(),
                         bodyPitch, WalkerModel.swimDrive(step.speed()), step.phase(),
-                        !walker.submerged(), coat, worn);
+                        !walker.submerged(), coat, worn, dyes);
                 double[] eye = new double[2];
                 WalkerModel.swimEye(bodyPitch, eye);
                 eyeAlong += eye[0];
@@ -4603,7 +4779,7 @@ public class WatchScene extends AbstractScene {
                         // small range first: an id is an int, and an id times
                         // a third of a second is a clock big enough to have
                         // lost the fraction the idle is made of.
-                        drawClock + Math.floorMod(walker.id(), 19) * 0.37);
+                        drawClock + Math.floorMod(walker.id(), 19) * 0.37, dyes);
                 eyeZ = step.z() + (walker.crouching() ? 1.10 : 1.68);
             }
         }
@@ -4642,15 +4818,17 @@ public class WatchScene extends AbstractScene {
         // is what this screen last asked for, which is the answer before any
         // snapshot has confirmed it.
         List<String> worn = view().outfit().wornKeys();
+        CosmeticModel.Dyes dyes = view().outfit()::colourOf;
         Figure me = figure();
         switch (cycleNow()) {
             case STROKE -> WalkerModel.rower(mesh, me, px - ox, py - oy,
-                    pz + Boats.DECK, yaw, bobOf(boatId), rowPhase, coat, worn);
+                    pz + Boats.DECK, yaw, bobOf(boatId), rowPhase, coat, worn, dyes);
             case SWIM -> WalkerModel.swimmer(mesh, me, px - ox, py - oy, pz, yaw,
                     WalkerModel.swimPitch(animSpeed, pitch, submerged),
-                    WalkerModel.swimDrive(animSpeed), swimPhase, !submerged, coat, worn);
+                    WalkerModel.swimDrive(animSpeed), swimPhase, !submerged, coat,
+                    worn, dyes);
             case STRIDE -> WalkerModel.walker(mesh, me, px - ox, py - oy, pz, yaw,
-                    crouching, gait, animSpeed, leap(), coat, worn, drawClock);
+                    crouching, gait, animSpeed, leap(), coat, worn, drawClock, dyes);
         }
     }
 
@@ -6490,9 +6668,80 @@ public class WatchScene extends AbstractScene {
         target.drawText("← → — walk as the " + me.next().label(),
                 x + 20, y + 190, HUD_FONT, HUD_ACCENT);
 
-        target.drawText("Esc — carry on", x + 20, y + 220, HUD_FONT, HUD_INK);
-        target.drawText("G — field guide", x + 20, y + 240, HUD_FONT, HUD_INK);
-        target.drawText("L — leave the walk", x + 20, y + 260, HUD_FONT, HUD_WARN);
+        target.drawText("Enter — wardrobe", x + 20, y + 218, HUD_FONT, HUD_ACCENT);
+        target.drawText("Esc — carry on", x + 20, y + 238, HUD_FONT, HUD_INK);
+        target.drawText("G — field guide", x + 20, y + 256, HUD_FONT, HUD_INK);
+        target.drawText("L — leave the walk", x + 20, y + 274, HUD_FONT, HUD_WARN);
+    }
+
+    /**
+     * The wardrobe: every slot, everything owned to put in it, and a colour.
+     *
+     * <p>Drawn rather than built out of {@code ConfigForm} rows for the reason
+     * every other panel in this scene is: they are all one shape — a dark
+     * rectangle, a title, two columns and a hint line — and a screen that
+     * borrowed the lobby's furniture would be the one thing in the walk that
+     * did not look like the walk.
+     */
+    private void drawWardrobe(DrawTarget target) {
+        int w = Math.min(620, viewportWidth - 60);
+        int h = Math.min(400, viewportHeight - 60);
+        int x = (viewportWidth - w) / 2, y = (viewportHeight - h) / 2;
+        target.fillRect(0, 0, viewportWidth, viewportHeight, new Color(0, 0, 0, 150));
+        target.fillRect(x, y, w, h, HUD_PANEL);
+        target.drawRect(x, y, w, h, HUD_ACCENT);
+        target.drawText("Wardrobe", x + 20, y + 32, TITLE_FONT, HUD_INK);
+
+        Cosmetics.Slot[] slots = Cosmetics.Slot.values();
+        Cosmetics.Slot slot = slots[Math.floorMod(slotIndex, slots.length)];
+        Outfit outfit = view().outfit();
+        int split = x + 190;
+
+        for (int i = 0; i < slots.length; i++) {
+            int row = y + 62 + i * 20;
+            String on = outfit.wornIn(slots[i]);
+            Cosmetics.Piece piece = Cosmetics.byKey(on);
+            boolean here = i == slotIndex;
+            target.drawText((here && !wardrobePieces ? "> " : "  ")
+                            + slots[i].label(), x + 20, row, HUD_FONT,
+                    here ? HUD_ACCENT : HUD_DIM);
+            target.drawText(piece == null ? "nothing" : piece.name(), x + 92, row,
+                    HUD_SMALL, piece == null ? HUD_DIM : HUD_INK);
+        }
+
+        List<Cosmetics.Piece> owned = ownedIn(slot);
+        target.drawText(slot.label() + " · " + slot.where(), split, y + 62,
+                HUD_SMALL, HUD_DIM);
+        for (int i = 0; i < owned.size(); i++) {
+            Cosmetics.Piece piece = owned.get(i);
+            boolean here = wardrobePieces && i == pieceIndex;
+            boolean on = piece.key().equals(outfit.wornIn(slot));
+            target.drawText((here ? "> " : "  ") + (on ? "• " : "  ") + piece.name(),
+                    split, y + 86 + i * 20, HUD_FONT,
+                    here ? HUD_ACCENT : on ? HUD_INK : HUD_DIM);
+        }
+
+        // The colour, under the pieces, with a swatch of what it currently is.
+        int base = y + 86 + owned.size() * 20 + 12;
+        String on = outfit.wornIn(slot);
+        int rgb = on == null ? 0 : dyeOf(on);
+        String[] names = {"Red", "Green", "Blue", "As made"};
+        for (int i = 0; i < DYE_ROWS; i++) {
+            boolean here = wardrobePieces && pieceIndex == owned.size() + i;
+            int row = base + i * 20;
+            String value = i == 3 ? "" : String.valueOf((rgb >> (16 - i * 8)) & 0xFF);
+            target.drawText((here ? "> " : "  ") + names[i], split, row, HUD_FONT,
+                    on == null ? HUD_DIM : here ? HUD_ACCENT : HUD_INK);
+            target.drawText(value, split + 96, row, HUD_FONT, HUD_DIM);
+        }
+        if (on != null) {
+            target.fillRect(split + 140, base - 12, 40, 40, new Color(rgb));
+            target.drawRect(split + 140, base - 12, 40, 40, HUD_DIM);
+        }
+
+        target.drawText("↑↓ move · ←→ column, or a colour channel · "
+                        + "Enter puts it on · Esc back",
+                x + 20, y + h - 16, HUD_SMALL, HUD_DIM);
     }
 
     /** Whatever the local player is looking at, for tests and the debug overlay. */

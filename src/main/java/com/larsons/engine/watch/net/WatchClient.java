@@ -154,6 +154,9 @@ public final class WatchClient implements AutoCloseable {
     /** Ask to be drawn as a different figure. */
     public void sendFigure(String key) { send(WatchProto.figure(key)); }
 
+    /** Dye a piece, or put it back to how it was made with {@code 0}. */
+    public void sendDye(String key, int rgb) { send(WatchProto.dye(key, rgb)); }
+
     /** Ask the keeper we are standing at to stamp a fresh page. */
     public void sendStamp(long shopId) { send(WatchProto.stamp(shopId)); }
 

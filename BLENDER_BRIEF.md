@@ -271,7 +271,7 @@ README:
 | File | Replaces |
 |---|---|
 | `characters/ranger.glb` | the ranger |
-| `characters/walker.glb` | **the first player figure**, and every other walker drawn as it — see the models README §17. Same brief as the ranger's, plus `run`, `swim` and `row` clips, and a knee and an elbow to bend them with |
+| `characters/walker.glb` | **the first player's body**, and every other walker drawn as it — see the models README §17. A vest and a pair of shorts: the clothes are worn pieces. Five clips, and a knee and an elbow to bend them with |
 | `characters/wayfarer.glb` | **the second one.** Same brief again; a row in `Figure.java` is what makes a third |
 | `cosmetics/<figure>/<piece key>.glb` | one thing a player wears, cut to one figure — see part 4 |
 | `cosmetics/<piece key>.glb` | the same, for a piece that fits anybody |
@@ -283,21 +283,26 @@ README:
 
 ## 4. Clothes for the player
 
-The eighteen things a trading post sells off its clothes rail are modelled
-already — twice, once for each player figure — and replaceable the same way:
-one `.glb` per piece per figure, under `cosmetics/<figure>/`. **This is the one
-kind of model in this game that is authored *on* something else**, so the brief
-below is shaped differently from the ranger's: you are making a garment, not a
-figure.
+**Everything a player wears is a worn piece** — the eighteen off a trading post's
+clothes rail, the six of standard kit they set out in, and the four hairstyles —
+and all of it is modelled already, twice, once for each figure: one `.glb` per
+piece per figure, under `cosmetics/<figure>/`. **This is the one kind of model in
+this game that is authored *on* something else**, so the brief below is shaped
+differently from the ranger's: you are making a garment, not a figure.
 
-**A garment belongs to a body.** A worn piece is never measured and never
-rescaled — the metre you put a hat at is the metre it is worn at — so the
-eighteen under `cosmetics/walker/` are cut to the walker and the eighteen under
-`cosmetics/wayfarer/` are cut to the wayfarer, and neither set fits the other.
-Decide which you are making before you model anything.
+**A character file is a body.** The coat, the trousers, the boots, the pack, the
+hat and the hair used to be modelled into it and could not come off; what is in
+`characters/<figure>.glb` now is a head with no hair on it, bare limbs, and a
+vest and a pair of shorts. That is what you fit a garment to.
+
+**And a garment belongs to a body.** A worn piece is never measured and never
+rescaled — the metre you put a hat at is the metre it is worn at — so the set
+under `cosmetics/walker/` is cut to the walker and the set under
+`cosmetics/wayfarer/` is cut to the wayfarer, and neither fits the other. Decide
+which you are making before you model anything.
 
 **Before you hand this to anybody, check whether you want the generator
-instead.** `tools/blender/cosmetics.py` builds all thirty-six pieces from one
+instead.** `tools/blender/cosmetics.py` builds all fifty-six pieces from one
 table of measurements in `tools/blender/figures.py`; changing a proportion there
 and re-running is a one-line change where re-modelling by hand is an evening.
 The brief below is for a *new* piece, or for replacing one where the generator's
@@ -323,8 +328,8 @@ contract for a worn piece specifically; the rest is the mesh pipeline it sits on
 **Build the figure first**, so you have a body to fit the garment to:
 
 ```bash
-blender --python tools/blender/ranger.py       # the walker
-blender --python tools/blender/wayfarer.py     # the wayfarer
+blender --python tools/blender/bodies.py -- walker
+blender --python tools/blender/bodies.py -- wayfarer
 ```
 
 Either leaves the figure rigged, standing on `Z = 0`, facing `−Y`, 1.78 m to the
@@ -343,20 +348,28 @@ Then:
 2. **Rig it** to bones named per §10 — `spine` for anything on the body, `head`
    for anything on the head, `hand_l` / `hand_r`, `foot_l` / `foot_r`. A cape is
    `spine`; a hood is `head`; mittens are one piece per hand.
-3. Animate **`walk`** if you animate anything. It is driven by the wearer's own
-   gait clock, so a cloak's swing lands in step with the legs under it. `idle`
-   and `run` are the other two states. A piece with no animation still moves —
-   it follows the bone it is rigged to, which is why the shipped wardrobe has no
-   clips in it at all.
-4. **Delete the figure.** Export only your piece and the armature.
-5. `Ctrl+A → All Transforms`, triangulate, keep it under **250 triangles** — six
-   of these can be on one person and eight people can be in one clearing.
-6. **File → Export → glTF 2.0**, **glTF Binary (.glb)**, *+Y Up*, *Apply
+3. **Do not animate it.** The body carries the clothes: the figure plays its own
+   clip, the engine asks it where each joint went, and your piece is moved along
+   with the bone it is rigged to. Every one of the fifty-six this game ships has
+   no animation at all. If the piece genuinely wants secondary motion — a cloak
+   with a swing — name an action `walk`, `run` or `idle` and author *only the
+   extra*: a clip composes with the body rather than replacing it, so animating
+   the walk itself into a cloak gets you two walks.
+4. **Colour it so it can be dyed.** A player moves the piece's base colour and
+   its own shades with three sliders; the trim, buckles and lenses stay put. So
+   give the base colour to most of the piece, and make the trim a colour of its
+   own rather than the main at some fraction.
+5. **Delete the figure.** Export only your piece and the armature.
+6. `Ctrl+A → All Transforms`, triangulate, keep it under **250 triangles**, or
+   380 for a standard-kit garment — six pieces can be on one person and eight
+   people can be in one clearing.
+7. **File → Export → glTF 2.0**, **glTF Binary (.glb)**, *+Y Up*, *Apply
    Modifiers* on, *Animation* on.
-7. Save to
+8. Save to
    `src/main/resources/watch/models/cosmetics/<figure>/<piece key>.glb`.
 
-The keys are in `Cosmetics.java`:
+The keys are in `Cosmetics.java` — eighteen off the rail, six of standard kit
+and four of hair:
 
 ```
 wool_mittens      knitted_beanie   canvas_gaiters   wool_scarf
@@ -364,6 +377,11 @@ rolled_bedroll    wire_spectacles  feathered_band   glass_lanyard
 leather_gloves    straw_boater     snow_goggles     oilskin_hood
 river_waders      moth_veil        fur_collar       oilskin_cape
 antler_circlet    heron_cloak
+
+field_coat        field_trousers   walking_boots
+field_pack        walking_hat      neckerchief
+
+swept_hair        long_plait       cropped_hair     topknot
 ```
 
 ### Checking it
@@ -379,10 +397,13 @@ all, one line goes to stderr saying why and the old version is drawn instead.
 
 ---8<---
 
-**Two things a worn model does not do**, both documented in §16 and both worth
-knowing before you spend an evening on a cape: a **swimmer and a rower keep the
-boxes** (their poses are numbers no clip knows), and so do **your own hands in
-first person** (the view model is built in the camera's frame, not the world's).
+**One thing a worn model does not do**, documented in §16 and worth knowing
+before you spend an evening on a cape: **your own hands in first person keep the
+boxes**, because the view model is built in the camera's frame rather than the
+world's and there is nothing there for a world-space garment to be carried by. A
+swimmer and a rower used to be on this list and no longer are — the body hands
+over where its joints went, so the clothes go with it into the water and into a
+boat.
 
 ---
 

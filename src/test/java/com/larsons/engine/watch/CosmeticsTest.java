@@ -122,7 +122,12 @@ class CosmeticsTest {
             assertTrue(keys.add(piece.key()), "two pieces answer to " + piece.key());
             assertTrue(names.add(piece.name()), "two pieces called " + piece.name());
             assertNotNull(piece.slot(), piece.key() + " goes nowhere");
-            assertTrue(piece.price() > 0, piece.key() + " is free");
+            // The standard kit is free and is meant to be: charging somebody
+            // for the trousers they are standing in is a toll rather than a
+            // ladder. Everything on a rail has a price. See Cosmetics.kit.
+            assertEquals(piece.kit(), piece.price() == 0,
+                    piece.key() + (piece.kit() ? " is standard kit and is not free"
+                            : " is on a rail and costs nothing"));
             assertFalse(piece.note().isBlank(), piece.key() + " has nothing said about it");
             assertEquals(piece, Cosmetics.byKey(piece.key()));
             assertEquals(piece.slot(), Cosmetics.slotOf(piece.key()));
@@ -137,6 +142,7 @@ class CosmeticsTest {
         // work toward. A flat catalogue is a shopping list, not a want.
         int cheapest = Integer.MAX_VALUE, dearest = 0;
         for (Cosmetics.Piece piece : all) {
+            if (piece.kit()) continue;
             cheapest = Math.min(cheapest, piece.price());
             dearest = Math.max(dearest, piece.price());
         }
@@ -157,16 +163,23 @@ class CosmeticsTest {
     }
 
     /**
-     * Every piece in the catalogue actually draws something.
+     * Every piece on a rail actually draws something, as boxes.
      *
      * <p>The one failure this whole file exists to catch cheaply: somebody adds
      * a row to {@code Cosmetics.build} and not a case to
      * {@code CosmeticModel.draw}, and the shop sells a coat that is invisible on
      * the buyer and blank in its own picture.
+     *
+     * <p><b>The standard kit is deliberately not in here</b>, and neither is
+     * hair. Those are the modelled figure's own clothes, split off so they can
+     * be taken off; the boxes cannot be layered — there is no boxed body in a
+     * vest to layer them over — so a walker drawn as boxes wears the coat and
+     * the hat that have always been modelled into the box figure itself. The
+     * next test says so from the other side.
      */
     @Test
     void everyPieceInTheCatalogueDraws() {
-        for (Cosmetics.Piece piece : Cosmetics.all()) {
+        for (Cosmetics.Piece piece : sold()) {
             Mesh.Builder builder = Mesh.builder(0, 0, 0, false, 1);
             CosmeticModel.alone(builder, piece.key(), 0, 0, 0, 0.4,
                     CosmeticModel.portraitSize(piece.slot()), 0x4A6B33);
@@ -193,6 +206,38 @@ class CosmeticsTest {
         for (Cosmetics.Piece piece : Cosmetics.all()) {
             assertNotNull(ItemPortrait.of(piece.key(), 24, 0x101410),
                     piece.key() + " has no picture for its row");
+        }
+    }
+
+    /**
+     * The standard kit is modelled and only modelled — it has no boxes, and
+     * that is the point rather than an oversight.
+     *
+     * <p>A coat, trousers, boots, a pack, a hat and a hairstyle were part of
+     * the figure until somebody wanted them off. They are pieces now, cut to
+     * each modelled body in {@code cosmetics/<figure>/}. The procedural boxes
+     * cannot be undressed — there is no boxed body in a vest under them — so
+     * with the boxes showing they wear what they always wore, and asking this
+     * class's {@code Sources.NONE} loader for a modelled coat correctly gets
+     * nothing.
+     */
+    @Test
+    void theStandardKitIsModelledRatherThanBoxed() {
+        assertFalse(Cosmetics.standardKit().isEmpty(), "there is no standard kit");
+        for (Cosmetics.Piece piece : Cosmetics.standardKit()) {
+            assertEquals(0, piece.price(), piece.key() + " is standard kit and costs");
+            Mesh.Builder builder = Mesh.builder(0, 0, 0, false, 1);
+            CosmeticModel.alone(builder, piece.key(), 0, 0, 0, 0.4,
+                    CosmeticModel.portraitSize(piece.slot()), 0x4A6B33);
+            assertTrue(builder.build().isEmpty(),
+                    piece.key() + " grew a boxed version — if that is deliberate, it "
+                            + "now has to line up with a box walker who is already "
+                            + "wearing a coat");
+        }
+        // …and there is a hairstyle, because the modelled bodies are bald.
+        assertFalse(Cosmetics.hairstyles().isEmpty(), "nothing to do with your hair");
+        for (Cosmetics.Piece piece : Cosmetics.hairstyles()) {
+            assertTrue(piece.kit(), piece.key() + " is hair somebody has to buy");
         }
     }
 
@@ -229,7 +274,7 @@ class CosmeticsTest {
     @Test
     void wearingSomethingAddsToTheFigureAndReplacesNoneOfIt() {
         Mesh bare = walker(WalkerModel.WEARING_NOTHING);
-        for (Cosmetics.Piece piece : Cosmetics.all()) {
+        for (Cosmetics.Piece piece : sold()) {
             Mesh dressed = walker(List.of(piece.key()));
             assertTrue(dressed.vertexCount() > bare.vertexCount(),
                     "wearing the " + piece.name() + " drew nothing on the figure");
@@ -799,9 +844,16 @@ class CosmeticsTest {
                 seen.add(piece.key());
             }
         }
-        for (Cosmetics.Piece piece : Cosmetics.all()) {
+        for (Cosmetics.Piece piece : sold()) {
             assertTrue(seen.contains(piece.key()),
                     piece.key() + " is in the catalogue and on nobody's rail");
+        }
+        // …and the standard kit turns up on nobody's, which is the other half
+        // of the same statement: a keeper hanging it would be selling somebody
+        // the trousers they are standing in.
+        for (Cosmetics.Piece piece : Cosmetics.standardKit()) {
+            assertFalse(seen.contains(piece.key()),
+                    piece.key() + " is standard kit and somebody is charging for it");
         }
     }
 
@@ -840,7 +892,8 @@ class CosmeticsTest {
         assertNotNull(line, "a refusal should still say something");
         assertTrue(line.toLowerCase().contains("already"), line);
         assertEquals(before, game.guide().points(), "a second hat was paid for");
-        assertEquals(1, game.player(1).outfit().pieces());
+        assertEquals(Cosmetics.standardKit().size() + 1, game.player(1).outfit().pieces(),
+                "a second hat reached the wardrobe");
     }
 
     @Test
@@ -867,9 +920,11 @@ class CosmeticsTest {
         earn(game, 1, 900);
         Cosmetics.Piece piece = shop.rail().get(0);
 
-        // Something the catalogue has and this keeper does not.
+        // Something on somebody else's rail and not on this one. Off `sold`
+        // rather than the whole catalogue: the standard kit is on nobody's rail
+        // by construction, so it would prove the refusal for the wrong reason.
         String elsewhere = null;
-        for (Cosmetics.Piece other : Cosmetics.all()) {
+        for (Cosmetics.Piece other : sold()) {
             if (shop.worn(other.key()) == null) elsewhere = other.key();
         }
         assertNotNull(elsewhere, "this post carries the whole catalogue");
@@ -883,7 +938,8 @@ class CosmeticsTest {
         assertNull(game.buyWorn(1, shop.id(), piece.key()),
                 "somebody four hundred metres away bought a coat");
         assertEquals(before, game.guide().points());
-        assertEquals(0, game.player(1).outfit().pieces());
+        // Nothing bought: the wardrobe is still the standard kit they set off in.
+        assertEquals(Cosmetics.standardKit().size(), game.player(1).outfit().pieces());
     }
 
     @Test
@@ -897,7 +953,8 @@ class CosmeticsTest {
             assertNotNull(game.buyWorn(1, shop.id(), piece.key()),
                     "debug mode could not afford the " + piece.name());
         }
-        assertEquals(shop.rail().size(), game.player(1).outfit().pieces());
+        assertEquals(Cosmetics.standardKit().size() + shop.rail().size(),
+                game.player(1).outfit().pieces());
         assertEquals(0, game.guide().points(), "debug mode spent points it did not have");
     }
 
@@ -927,8 +984,10 @@ class CosmeticsTest {
         assertEquals(before, game.guide().points(), "getting dressed cost points");
 
         // And a piece nobody owns still cannot be put on, wherever they stand.
+        // Off `sold`, because everybody owns the standard kit from the first
+        // step and it would be a poor example of something nobody owns.
         String unowned = null;
-        for (Cosmetics.Piece other : Cosmetics.all()) {
+        for (Cosmetics.Piece other : sold()) {
             if (!other.key().equals(piece.key())) unowned = other.key();
         }
         assertNull(game.wear(1, unowned), "a client dressed itself in something it never bought");
@@ -948,13 +1007,18 @@ class CosmeticsTest {
 
         Map<String, Object> after = player.toSnapshot();
         for (String key : before.keySet()) {
+            // …except what they have on, which is the field this is about: a
+            // walker starts dressed in the standard kit now, so "w" is already
+            // on the row before anything is bought and it is buying that
+            // changes it.
+            if (key.equals("w")) continue;
             assertEquals(before.get(key), after.get(key),
                     "getting dressed changed \"" + key + "\" on the player");
         }
-        // The one field a full outfit is allowed to add.
+        // Nothing new at all, for the same reason.
         Set<String> added = new HashSet<>(after.keySet());
         added.removeAll(before.keySet());
-        assertEquals(Set.of("w"), added,
+        assertEquals(Set.of(), added,
                 "an outfit put " + added + " on a player row");
         assertEquals(1, player.health(), 1e-9);
     }
@@ -982,7 +1046,8 @@ class CosmeticsTest {
         reopened.join(1, "Kara");
 
         Outfit outfit = reopened.player(1).outfit();
-        assertEquals(bought.size(), outfit.pieces(), "the wardrobe did not come back");
+        assertEquals(Cosmetics.standardKit().size() + bought.size(), outfit.pieces(),
+                "the wardrobe did not come back");
         for (String key : bought) assertTrue(outfit.owns(key), key + " was lost");
         assertEquals(worn, outfit.wornKeys(), "a walk reopened put a different coat on");
     }
@@ -1026,9 +1091,13 @@ class CosmeticsTest {
         int me = buyer.view().selfId();
         until("the friend to see it on them",
                 () -> wornBy(friend, me).contains(piece.key()));
-        // …and to know no more than that.
-        assertEquals(0, friend.view().outfit().pieces(),
+        // …and to know no more than that. The friend's own wardrobe is their
+        // own standard kit and nothing else: what somebody else *owns* has
+        // never travelled and still does not.
+        assertEquals(Cosmetics.standardKit().size(), friend.view().outfit().pieces(),
                 "somebody else's wardrobe arrived on the friend's screen");
+        assertFalse(friend.view().outfit().owns(piece.key()),
+                "the buyer's coat turned up in the friend's wardrobe");
 
         buyer.sendWear(piece.key());
         until("taking it off to reach the friend",
@@ -1086,6 +1155,18 @@ class CosmeticsTest {
     }
 
     // --- the plumbing --------------------------------------------------------------------------
+
+    /**
+     * The catalogue less the standard kit — everything a keeper could hang on a
+     * rail, and everything that has a boxed version.
+     */
+    private static List<Cosmetics.Piece> sold() {
+        List<Cosmetics.Piece> out = new ArrayList<>();
+        for (Cosmetics.Piece piece : Cosmetics.all()) {
+            if (!piece.kit()) out.add(piece);
+        }
+        return out;
+    }
 
     private static Mesh walker(List<String> worn) { return walker(worn, 0x4A6B33); }
 
