@@ -413,6 +413,24 @@ public class WatchScene extends AbstractScene {
     private boolean thirdPerson;
 
     /**
+     * How far the third-person camera has been swung round the walker, in
+     * radians, and how far above or below them.
+     *
+     * <p><b>Held right mouse button and move.</b> Without it the camera is
+     * behind you and nothing else, which is a fine camera to walk with and
+     * useless for the one thing a third-person view in this game is actually
+     * for: looking at what you are wearing. You cannot see a scarf from
+     * behind, or a hat's brim, or whether a cape hangs right.
+     *
+     * <p><b>Zero is exactly the old camera</b>, to the millimetre, which is
+     * why this is an offset rather than a second camera. The angle is added to
+     * <em>both</em> where the camera sits around the walker and which way it
+     * looks, so the walker stays in the same place in the frame the whole way
+     * round and there is no cut anywhere.
+     */
+    private double orbitYaw, orbitPitch;
+
+    /**
      * The glass, and where it is actually pointing.
      *
      * <p>{@link #yaw} and {@link #pitch} are where the player has aimed;
@@ -866,6 +884,92 @@ public class WatchScene extends AbstractScene {
     /** How far a colour row moves per press, and per press with a modifier. */
     private static final int DYE_STEP = 8, DYE_LEAP = 40;
 
+    /**
+     * Which colour channel the hand is dragging, or {@code −1}.
+     *
+     * <p>Held across frames because a slider is the one control on this screen
+     * that is <em>dragged</em> rather than clicked: letting go outside the bar
+     * has to keep the last value, and sliding off the end has to clamp rather
+     * than stop responding.
+     */
+    private int dyeDrag = -1;
+
+    /**
+     * Where the wardrobe's rows are, worked out once and read by both the
+     * update and the draw.
+     *
+     * <p>A record for {@code SatchelBox}'s reason: two copies of the same
+     * arithmetic is a screen whose rows are drawn a few pixels from where they
+     * can be clicked, and nobody ever notices until somebody with a different
+     * font does.
+     */
+    private record WardrobeBox(int x, int y, int w, int h, int split, int slots,
+                               int pieces) {
+
+        static final int ROW = 20;
+
+        int slotTop() { return y + 62; }
+
+        int pieceTop() { return y + 86; }
+
+        int dyeTop() { return pieceTop() + pieces * ROW + 12; }
+
+        int barX() { return split + 104; }
+
+        static final int BAR_W = 132, BAR_H = 12;
+
+        /** Which slot row a point is on, or {@code −1}. */
+        int slotAt(int mx, int my) {
+            if (mx < x + 12 || mx >= split - 8) return -1;
+            int row = (my - slotTop() + ROW - 6) / ROW;
+            return my >= slotTop() - 6 && row >= 0 && row < slots ? row : -1;
+        }
+
+        /**
+         * Which row of the right column a point is on — a piece, then the three
+         * channels and the way back to how it was made — or {@code −1}.
+         */
+        int rightAt(int mx, int my) {
+            if (mx < split - 8 || mx >= x + w - 12) return -1;
+            int row = (my - pieceTop() + ROW - 6) / ROW;
+            if (my >= pieceTop() - 6 && row >= 0 && row < pieces) return row;
+            int dye = (my - dyeTop() + ROW - 6) / ROW;
+            return my >= dyeTop() - 6 && dye >= 0 && dye < DYE_ROWS
+                    ? pieces + dye : -1;
+        }
+
+        /** Which colour bar a point is in, or {@code −1}. */
+        int barAt(int mx, int my) {
+            if (mx < barX() - 6 || mx > barX() + BAR_W + 6) return -1;
+            for (int i = 0; i < 3; i++) {
+                int top = dyeTop() + i * ROW - BAR_H / 2 - 2;
+                if (my >= top && my <= top + BAR_H + 4) return i;
+            }
+            return -1;
+        }
+
+        /** What a point along a bar means, 0–255. */
+        int valueAt(int mx) {
+            double at = (mx - barX()) / (double) BAR_W;
+            return Math.max(0, Math.min(255, (int) Math.round(at * 255)));
+        }
+
+        boolean overClose(int mx, int my) {
+            return mx >= x + w - 38 && mx <= x + w - 12
+                    && my >= y + 12 && my <= y + 38;
+        }
+    }
+
+    private WardrobeBox wardrobeBox() {
+        int w = Math.min(620, Math.max(360, viewportWidth - 60));
+        int h = Math.min(430, Math.max(260, viewportHeight - 60));
+        int x = (viewportWidth - w) / 2, y = (viewportHeight - h) / 2;
+        Cosmetics.Slot[] slots = Cosmetics.Slot.values();
+        int at = Math.floorMod(slotIndex, slots.length);
+        return new WardrobeBox(x, y, w, h, x + 190, slots.length,
+                ownedIn(slots[at]).size());
+    }
+
     public WatchScene(GameContext ctx) {
         this.ctx = ctx;
     }
@@ -928,6 +1032,9 @@ public class WatchScene extends AbstractScene {
         airPose = 0;
         settle = 0;
         drawnAt = -1;
+        // A walk re-entered is a walk begun, camera included.
+        orbitYaw = 0;
+        orbitPitch = 0;
         // The bar starts whole and the respawn counter starts unread, so the
         // first snapshot adopts whatever the save says without teleporting
         // anybody. See syncVitals.
@@ -1156,10 +1263,18 @@ public class WatchScene extends AbstractScene {
             openBounties();
             return;
         }
-        if (KeyBinds.pressed(input, GameAction.TOGGLE_VIEW)) thirdPerson = !thirdPerson;
+        if (KeyBinds.pressed(input, GameAction.TOGGLE_VIEW)) {
+            thirdPerson = !thirdPerson;
+            // The view key is also how you put the camera back: coming out of
+            // third person and going back in is the gesture somebody already
+            // reaches for when the camera is somewhere odd.
+            orbitYaw = 0;
+            orbitPitch = 0;
+        }
 
         useGlass(dt, input);
         steerLook(input);
+        recentreOrbit(dt, input);
         walk(dt, input);
         // The reach gesture and the pickup flash decay on their own clock,
         // which is the frame's rather than the simulation's: they are things
@@ -1504,6 +1619,17 @@ public class WatchScene extends AbstractScene {
         double step = LOOK_STEP * PlayerSettings.active().lookSensitivity
                 * glass.lookScale();
         double sign = PlayerSettings.active().invertLook ? 1 : -1;
+        if (orbiting(input)) {
+            // The hand is swinging the camera round the walker rather than
+            // turning them. Same motion, same sensitivity, different thing
+            // moved — which is what makes it read as one gesture rather than
+            // as a mode.
+            orbitYaw = (orbitYaw + lookMotion[0] * step) % (Math.PI * 2);
+            orbitPitch = Math.max(-ORBIT_MAX_PITCH, Math.min(ORBIT_MAX_PITCH,
+                    orbitPitch - lookMotion[1] * step * sign));
+            applySway();
+            return;
+        }
         yaw += lookMotion[0] * step;
         pitch += lookMotion[1] * step * sign;
         pitch = Math.max(-EyeCamera.MAX_PITCH, Math.min(EyeCamera.MAX_PITCH, pitch));
@@ -1511,6 +1637,46 @@ public class WatchScene extends AbstractScene {
 
         applySway();
     }
+
+    /**
+     * Whether the right button is swinging the camera round rather than the
+     * player round the world.
+     *
+     * <p>Only in third person, and only with the glass down. Both are the same
+     * reason: there has to be something to look <em>at</em>. In first person the
+     * camera is inside the walker's head and orbiting it would be orbiting
+     * nothing, and a raised glass is at your eye whatever the view setting says.
+     */
+    private boolean orbiting(InputManager input) {
+        return thirdPerson && !glass.up() && input.isRightMouseDown();
+    }
+
+    /** How far above or below the walker the camera can be swung, in radians. */
+    private static final double ORBIT_MAX_PITCH = 1.15;
+
+    /** How long the camera takes to swing back behind you once you move off. */
+    private static final double ORBIT_RECENTRE = 0.45;
+
+    /**
+     * Bring the camera back behind the walker while they are walking.
+     *
+     * <p>You stopped to look at your hat; you did not stop to walk home
+     * backwards. Nothing has to be pressed to put it back, which is the whole
+     * point — the alternative is a camera somebody left sideways an hour ago
+     * and a key they have to be told about to fix it.
+     *
+     * <p>Only while actually moving, so standing and turning on the spot to
+     * look at yourself from the other side is not fought.
+     */
+    private void recentreOrbit(double dt, InputManager input) {
+        if (orbiting(input) || animSpeed <= WALK_STILL) return;
+        double keep = Math.max(0, 1 - dt / ORBIT_RECENTRE);
+        orbitYaw *= keep;
+        orbitPitch *= keep;
+    }
+
+    /** Below this many metres a second the camera is left where it was put. */
+    private static final double WALK_STILL = 0.4;
 
     /**
      * The aim: the heading plus whatever the hands are doing.
@@ -3719,6 +3885,7 @@ public class WatchScene extends AbstractScene {
         Cosmetics.Slot slot = slots[slotIndex];
         List<Cosmetics.Piece> owned = ownedIn(slot);
         int rows = owned.size() + DYE_ROWS;
+        if (mouseWardrobe(input, slot, owned)) return;
 
         int step = 0;
         if (KeyBinds.pressed(input, GameAction.MENU_DOWN)) step = 1;
@@ -3769,6 +3936,90 @@ public class WatchScene extends AbstractScene {
         }
     }
 
+    /**
+     * The wardrobe, worked by hand.
+     *
+     * <p><b>Hovering moves the cursor and clicking does the thing under it</b> —
+     * the same contract the satchel and the shop already keep, so a player who
+     * has used either of those has used this. The colours are the one addition:
+     * three bars you drag, which is what a colour wants and what four arrow
+     * presses per shade is not.
+     *
+     * @return whether the mouse dealt with this frame, in which case the
+     *         keyboard is not also read — a click that lands on a row must not
+     *         be a click and an Enter
+     */
+    private boolean mouseWardrobe(InputManager input, Cosmetics.Slot slot,
+                                  List<Cosmetics.Piece> owned) {
+        WardrobeBox box = wardrobeBox();
+        boolean moved = pointerMoved(input);
+
+        // A drag in progress owns the mouse until it is let go, wherever the
+        // hand has wandered to: sliding off the end of a bar clamps rather than
+        // stops, which is what a slider does everywhere else.
+        if (dyeDrag >= 0) {
+            if (!input.isMouseDown()) {
+                dyeDrag = -1;
+                return true;
+            }
+            setDye(slot, dyeDrag, box.valueAt(pointerX));
+            return true;
+        }
+
+        if (moved) {
+            int over = box.slotAt(pointerX, pointerY);
+            if (over >= 0) {
+                slotIndex = over;
+                wardrobePieces = false;
+            } else {
+                int row = box.rightAt(pointerX, pointerY);
+                if (row >= 0) {
+                    pieceIndex = row;
+                    wardrobePieces = true;
+                }
+            }
+        }
+        if (!input.isMouseJustPressed()) return false;
+
+        if (box.overClose(pointerX, pointerY)) {
+            panel = Panel.PAUSED;
+            return true;
+        }
+        int bar = box.barAt(pointerX, pointerY);
+        if (bar >= 0 && view().outfit().wornIn(slot) != null) {
+            dyeDrag = bar;
+            pieceIndex = owned.size() + bar;
+            wardrobePieces = true;
+            setDye(slot, bar, box.valueAt(pointerX));
+            return true;
+        }
+        if (box.slotAt(pointerX, pointerY) >= 0) {
+            // Already selected by the hover above; a click on a slot is a way
+            // of saying "this one" rather than a second thing to do.
+            return true;
+        }
+        int row = box.rightAt(pointerX, pointerY);
+        if (row < 0) return true;
+        if (row < owned.size()) {
+            wearPiece(owned.get(row).key());
+        } else if (row == owned.size() + 3) {
+            String on = view().outfit().wornIn(slot);
+            if (on != null) sendDye(on, 0);
+        }
+        return true;
+    }
+
+    /** Put one channel of whatever is worn in a slot at a value, 0–255. */
+    private void setDye(Cosmetics.Slot slot, int channel, int value) {
+        String key = view().outfit().wornIn(slot);
+        if (key == null) return;
+        int shift = 16 - channel * 8;
+        int rgb = (dyeOf(key) & ~(0xFF << shift)) | (value << shift);
+        // Never zero: that is the sentinel for "as its artist made it", so a
+        // piece dyed all the way to black would spring back to green.
+        sendDye(key, rgb == 0 ? 1 : rgb);
+    }
+
     /** Rows under the pieces: three channels and a way back to how it was made. */
     private static final int DYE_ROWS = 4;
 
@@ -3793,19 +4044,12 @@ public class WatchScene extends AbstractScene {
         }
     }
 
-    /** Move one channel of whatever is worn in a slot. */
+    /** Move one channel of whatever is worn in a slot, for the arrow keys. */
     private void nudgeDye(Cosmetics.Slot slot, int channel, int by) {
         String key = view().outfit().wornIn(slot);
         if (key == null) return;
-        int rgb = dyeOf(key);
-        int shift = 16 - channel * 8;
-        int was = (rgb >> shift) & 0xFF;
-        int now = Math.max(0, Math.min(255, was + by));
-        // Never zero: a colour of zero is the sentinel for "as its artist made
-        // it", so a coat dyed all the way to black would spring back to green.
-        // One count of red is a black nobody can tell from black.
-        int dyed = (rgb & ~(0xFF << shift)) | (now << shift);
-        sendDye(key, dyed == 0 ? 1 : dyed);
+        int was = (dyeOf(key) >> (16 - channel * 8)) & 0xFF;
+        setDye(slot, channel, Math.max(0, Math.min(255, was + by)));
     }
 
     /**
@@ -4142,20 +4386,39 @@ public class WatchScene extends AbstractScene {
         // which is what falling on concrete looks like rather than landing.
         eyeHeight -= settle * LANDING_DIP;
         if (thirdPerson && !glass.up()) {
-            // Behind and a little above, and pulled up out of the ground if the
-            // slope behind is steeper than the camera arm.
-            double bx = px - Math.sin(yaw) * THIRD_PERSON_BACK;
-            double by = py + Math.cos(yaw) * THIRD_PERSON_BACK;
+            // Behind and a little above — or wherever the orbit has swung it,
+            // which is the same arithmetic with an angle added. The arm is
+            // shortened by the cosine as it lifts, so the camera moves on a
+            // sphere round the walker rather than on a widening cone.
+            double around = yaw + orbitYaw;
+            double arm = THIRD_PERSON_BACK * Math.cos(orbitPitch);
+            double bx = px - Math.sin(around) * arm;
+            double by = py + Math.cos(around) * arm;
+            double lift = THIRD_PERSON_BACK * Math.sin(orbitPitch);
             double bz = Math.max(streamer.groundAt(bx, by) + 1.2,
-                    pz + eyeHeight + 1.0);
+                    pz + eyeHeight + 1.0 + lift);
             eye.place(bx, by, bz);
-        } else {
-            // A raised glass is at your eye whatever the view setting says:
-            // looking through a telescope from four metres behind your own head
-            // is not a thing, and the third-person camera's own body would be
-            // in the middle of the eyepiece.
-            eye.place(px, py, pz + eyeHeight);
+            // **The orbit turns the look by exactly what it turned the
+            // position by**, which is what keeps the walker in the same place
+            // in the frame all the way round instead of sliding out of shot.
+            // At an orbit of nothing this is `eye.look(aimYaw, aimPitch)` and
+            // the camera is the one this game has always had.
+            //
+            // The crosshair stops meaning what the camera is pointing at while
+            // it is swung round, and that is unavoidable rather than an
+            // oversight: the aim is still `aimYaw`, so spotting and picking go
+            // on working off the walker's own heading — you simply cannot see
+            // where you are pointing from in front of your own face. Which is
+            // why the orbit puts itself away the moment anybody walks off.
+            eye.look(aimYaw + orbitYaw, Math.max(-EyeCamera.MAX_PITCH,
+                    Math.min(EyeCamera.MAX_PITCH, aimPitch - orbitPitch)));
+            return;
         }
+        // A raised glass is at your eye whatever the view setting says:
+        // looking through a telescope from four metres behind your own head
+        // is not a thing, and the third-person camera's own body would be
+        // in the middle of the eyepiece.
+        eye.place(px, py, pz + eyeHeight);
         eye.look(aimYaw, aimPitch);
     }
 
@@ -5035,6 +5298,12 @@ public class WatchScene extends AbstractScene {
                 stillness > 0.7 ? HUD_ACCENT : HUD_WARN);
         String hint = boatId != 0 ? "Rowing — Y to step out"
                 : crouching ? "Crouched — stay still and they will come back"
+                // Said only where it is useful and only while it is: standing
+                // still in third person is exactly the moment somebody is
+                // trying to look at what they have on, and it goes away again
+                // the moment they walk off.
+                : thirdPerson && animSpeed <= WALK_STILL && orbitYaw == 0
+                        ? "Hold the right mouse button to look round yourself"
                 : "Stillness";
         label(target, hint, viewportHeight > 0
                 ? viewportWidth / 2 - target.textWidth(hint, HUD_SMALL) / 2 : 0,
@@ -6684,26 +6953,29 @@ public class WatchScene extends AbstractScene {
      * did not look like the walk.
      */
     private void drawWardrobe(DrawTarget target) {
-        int w = Math.min(620, viewportWidth - 60);
-        int h = Math.min(400, viewportHeight - 60);
-        int x = (viewportWidth - w) / 2, y = (viewportHeight - h) / 2;
+        WardrobeBox box = wardrobeBox();
+        int x = box.x(), y = box.y(), w = box.w(), h = box.h(), split = box.split();
         target.fillRect(0, 0, viewportWidth, viewportHeight, new Color(0, 0, 0, 150));
         target.fillRect(x, y, w, h, HUD_PANEL);
         target.drawRect(x, y, w, h, HUD_ACCENT);
         target.drawText("Wardrobe", x + 20, y + 32, TITLE_FONT, HUD_INK);
+        target.drawText("×", x + w - 32, y + 34, TITLE_FONT,
+                box.overClose(pointerX, pointerY) ? HUD_WARN : HUD_DIM);
 
         Cosmetics.Slot[] slots = Cosmetics.Slot.values();
         Cosmetics.Slot slot = slots[Math.floorMod(slotIndex, slots.length)];
         Outfit outfit = view().outfit();
-        int split = x + 190;
 
         for (int i = 0; i < slots.length; i++) {
-            int row = y + 62 + i * 20;
-            String on = outfit.wornIn(slots[i]);
-            Cosmetics.Piece piece = Cosmetics.byKey(on);
+            int row = box.slotTop() + i * WardrobeBox.ROW;
+            String worn = outfit.wornIn(slots[i]);
+            Cosmetics.Piece piece = Cosmetics.byKey(worn);
             boolean here = i == slotIndex;
-            target.drawText((here && !wardrobePieces ? "> " : "  ")
-                            + slots[i].label(), x + 20, row, HUD_FONT,
+            if (here) {
+                target.fillRect(x + 12, row - 14, split - x - 24, WardrobeBox.ROW,
+                        new Color(255, 255, 255, wardrobePieces ? 14 : 30));
+            }
+            target.drawText(slots[i].label(), x + 20, row, HUD_FONT,
                     here ? HUD_ACCENT : HUD_DIM);
             target.drawText(piece == null ? "nothing" : piece.name(), x + 92, row,
                     HUD_SMALL, piece == null ? HUD_DIM : HUD_INK);
@@ -6716,32 +6988,53 @@ public class WatchScene extends AbstractScene {
             Cosmetics.Piece piece = owned.get(i);
             boolean here = wardrobePieces && i == pieceIndex;
             boolean on = piece.key().equals(outfit.wornIn(slot));
-            target.drawText((here ? "> " : "  ") + (on ? "• " : "  ") + piece.name(),
-                    split, y + 86 + i * 20, HUD_FONT,
+            int row = box.pieceTop() + i * WardrobeBox.ROW;
+            if (here) {
+                target.fillRect(split - 8, row - 14, x + w - split - 4,
+                        WardrobeBox.ROW, new Color(255, 255, 255, 30));
+            }
+            target.drawText((on ? "• " : "   ") + piece.name(), split, row, HUD_FONT,
                     here ? HUD_ACCENT : on ? HUD_INK : HUD_DIM);
         }
 
-        // The colour, under the pieces, with a swatch of what it currently is.
-        int base = y + 86 + owned.size() * 20 + 12;
+        // The colour, under the pieces: a bar you drag for each channel, and a
+        // swatch of what they add up to.
         String on = outfit.wornIn(slot);
         int rgb = on == null ? 0 : dyeOf(on);
         String[] names = {"Red", "Green", "Blue", "As made"};
         for (int i = 0; i < DYE_ROWS; i++) {
             boolean here = wardrobePieces && pieceIndex == owned.size() + i;
-            int row = base + i * 20;
-            String value = i == 3 ? "" : String.valueOf((rgb >> (16 - i * 8)) & 0xFF);
-            target.drawText((here ? "> " : "  ") + names[i], split, row, HUD_FONT,
+            int row = box.dyeTop() + i * WardrobeBox.ROW;
+            target.drawText(names[i], split, row, HUD_FONT,
                     on == null ? HUD_DIM : here ? HUD_ACCENT : HUD_INK);
-            target.drawText(value, split + 96, row, HUD_FONT, HUD_DIM);
+            if (i == 3 || on == null) continue;
+            int value = (rgb >> (16 - i * 8)) & 0xFF;
+            int bx = box.barX(), by = row - WardrobeBox.BAR_H / 2 - 2;
+            target.fillRect(bx, by, WardrobeBox.BAR_W, WardrobeBox.BAR_H,
+                    new Color(0, 0, 0, 120));
+            target.fillRect(bx, by, WardrobeBox.BAR_W * value / 255,
+                    WardrobeBox.BAR_H, channelInk(i, value));
+            target.drawRect(bx, by, WardrobeBox.BAR_W, WardrobeBox.BAR_H,
+                    here || dyeDrag == i ? HUD_ACCENT : HUD_DIM);
+            target.drawText(String.valueOf(value),
+                    bx + WardrobeBox.BAR_W + 10, row, HUD_SMALL, HUD_DIM);
         }
         if (on != null) {
-            target.fillRect(split + 140, base - 12, 40, 40, new Color(rgb));
-            target.drawRect(split + 140, base - 12, 40, 40, HUD_DIM);
+            int sx = box.barX() + WardrobeBox.BAR_W + 44;
+            target.fillRect(sx, box.dyeTop() - 12, 40, 40, new Color(rgb));
+            target.drawRect(sx, box.dyeTop() - 12, 40, 40, HUD_DIM);
         }
 
-        target.drawText("↑↓ move · ←→ column, or a colour channel · "
-                        + "Enter puts it on · Esc back",
+        target.drawText("Click a slot, a piece, or drag a colour · "
+                        + "arrows and Enter work too · Esc back",
                 x + 20, y + h - 16, HUD_SMALL, HUD_DIM);
+    }
+
+    /** The bar's own colour, so a red slider is red rather than green. */
+    private static Color channelInk(int channel, int value) {
+        int lit = Math.max(90, value);
+        return new Color(channel == 0 ? lit : 40, channel == 1 ? lit : 40,
+                channel == 2 ? lit : 40);
     }
 
     /** Whatever the local player is looking at, for tests and the debug overlay. */
@@ -6749,6 +7042,46 @@ public class WatchScene extends AbstractScene {
 
     /** Which overlay is up, in lower case, or {@code "none"} — for tests. */
     public String panelName() { return panel.name().toLowerCase(java.util.Locale.ROOT); }
+
+    /** Which slot the wardrobe's cursor is on — for tests. */
+    public String wardrobeSlot() {
+        Cosmetics.Slot[] slots = Cosmetics.Slot.values();
+        return slots[Math.floorMod(slotIndex, slots.length)].label();
+    }
+
+    /**
+     * Where the wardrobe put one of its rows, as {@code {x, y}} — for tests.
+     *
+     * <p>Asked of the screen rather than counted out by the test, which is the
+     * whole reason the layout is a record: a panel whose rows are drawn a few
+     * pixels from where they can be clicked passes a test that knows the same
+     * wrong numbers.
+     */
+    public int[] wardrobeSlotRow(int row) {
+        WardrobeBox box = wardrobeBox();
+        return new int[]{box.x() + 40, box.slotTop() + row * WardrobeBox.ROW - 6};
+    }
+
+    /** …of the right column, which is the pieces and then the colour rows. */
+    public int[] wardrobePieceRow(int row) {
+        WardrobeBox box = wardrobeBox();
+        int y = row < box.pieces() ? box.pieceTop() + row * WardrobeBox.ROW
+                : box.dyeTop() + (row - box.pieces()) * WardrobeBox.ROW;
+        return new int[]{box.split() + 30, y - 6};
+    }
+
+    /** …and of a colour bar, as {@code {left, y, right}}. */
+    public int[] wardrobeDyeBar(int channel) {
+        WardrobeBox box = wardrobeBox();
+        int y = box.dyeTop() + channel * WardrobeBox.ROW - 6;
+        return new int[]{box.barX(), y, box.barX() + WardrobeBox.BAR_W};
+    }
+
+    /** …and of the cross that shuts it. */
+    public int[] wardrobeCloseButton() {
+        WardrobeBox box = wardrobeBox();
+        return new int[]{box.x() + box.w() - 25, box.y() + 25};
+    }
 
     /**
      * What the satchel screen's cursor is on — an item key in the carrying

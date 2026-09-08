@@ -2,6 +2,8 @@ package com.larsons.engine.watch;
 
 import com.larsons.engine.config.GameContext;
 import com.larsons.engine.config.GameTypeStore;
+import com.larsons.engine.graphics.EyeCamera;
+import com.larsons.engine.graphics.draw.RecordingTarget;
 import com.larsons.engine.input.InputManager;
 import com.larsons.engine.scene.SceneManager;
 import com.larsons.engine.demo.WatchLobbyScene;
@@ -26,6 +28,7 @@ import org.junit.jupiter.api.io.TempDir;
 
 import javax.swing.JPanel;
 import java.awt.event.KeyEvent;
+import java.awt.event.MouseEvent;
 import java.io.IOException;
 import java.nio.file.Files;
 import java.nio.file.Path;
@@ -826,6 +829,77 @@ class PlayerFiguresTest {
         }
     }
 
+    /**
+     * The wardrobe is workable by hand as well as by arrow key.
+     *
+     * <p>Hovering moves the cursor, clicking does the thing under it, and the
+     * colours are three bars you drag — which is what a colour wants and what
+     * thirty-two arrow presses per shade is not. The same contract the satchel
+     * and the shop already keep, so anybody who has used those has used this.
+     *
+     * <p>Every row is found by asking the panel where it drew itself rather
+     * than by counting pixels here, which is the point of there being a
+     * {@code WardrobeBox} at all: a screen whose rows are drawn a few pixels
+     * from where they can be clicked is a screen nobody notices is broken until
+     * somebody with a different font tries it.
+     */
+    @Test
+    void theWardrobeIsWorkableWithTheMouse(@TempDir Path dir) {
+        try (Walk walk = new Walk(dir)) {
+            Outfit outfit = walk.game.player(1).outfit();
+            walk.press(KeyEvent.VK_ESCAPE);
+            walk.press(KeyEvent.VK_ENTER);
+            assertEquals("wardrobe", walk.walk.panelName());
+
+            // Click the BODY slot on the left, and the right column follows.
+            int body = Cosmetics.Slot.BODY.ordinal();
+            walk.click(walk.slotRow(body));
+            assertEquals(Cosmetics.Slot.BODY.label(), walk.walk.wardrobeSlot(),
+                    "clicking a slot did not select it");
+
+            // …then the coat in it, which takes it off, and again to put it on.
+            String coat = outfit.wornIn(Cosmetics.Slot.BODY);
+            assertNotNull(coat, "started without a coat");
+            int row = ownedRow(outfit, Cosmetics.Slot.BODY, coat);
+            walk.click(walk.pieceRow(row));
+            assertNull(outfit.wornIn(Cosmetics.Slot.BODY),
+                    "clicking the coat did not take it off");
+            walk.click(walk.pieceRow(row));
+            assertEquals(coat, outfit.wornIn(Cosmetics.Slot.BODY),
+                    "…or put it back on");
+
+            // Drag the red bar to the far end, and the coat is dyed by it.
+            int[] bar = walk.dyeBar(0);
+            walk.drag(bar[0], bar[1], bar[2], bar[1]);
+            int dyed = outfit.colourOf(coat);
+            assertNotEquals(0, dyed, "dragging the red bar dyed nothing");
+            assertTrue(((dyed >> 16) & 0xFF) > 230,
+                    "dragging red to the far end left it at "
+                            + ((dyed >> 16) & 0xFF));
+            // …and back to the near end, which is none of it.
+            walk.drag(bar[2], bar[1], bar[0] - 40, bar[1]);
+            assertTrue(((outfit.colourOf(coat) >> 16) & 0xFF) < 12,
+                    "dragging red back left it at "
+                            + ((outfit.colourOf(coat) >> 16) & 0xFF));
+
+            // The cross closes it back to the pause screen.
+            walk.click(walk.wardrobeClose());
+            assertEquals("paused", walk.walk.panelName(),
+                    "the close button did not go back to the pause screen");
+        }
+    }
+
+    /** Which row of a slot's owned list a key is on. */
+    private static int ownedRow(Outfit outfit, Cosmetics.Slot slot, String key) {
+        int at = 0;
+        for (Cosmetics.Piece piece : Cosmetics.inSlot(slot)) {
+            if (!outfit.owns(piece.key())) continue;
+            if (piece.key().equals(key)) return at;
+            at++;
+        }
+        throw new IllegalStateException(key + " is not owned");
+    }
+
     // --- the choice ---------------------------------------------------------------------
 
     /** Changing figure is free, instant, and touches nothing else about a walker. */
@@ -931,6 +1005,107 @@ class PlayerFiguresTest {
         until("the party to settle", () -> figureOf(friend, id) == Figure.WAYFARER);
         assertEquals(Figure.WAYFARER,
                 server.game().player(id).figure(), "an unknown key reached the host's copy");
+    }
+
+    // --- looking at yourself --------------------------------------------------------------
+
+    /**
+     * <b>The third-person camera goes all the way round.</b>
+     *
+     * <p>It used to sit behind the walker and nowhere else, which is a fine
+     * camera to walk with and useless for the one thing a third-person view in
+     * this game is for: seeing what you have on. You cannot check a scarf, a
+     * hat's brim or the hang of a cape from directly behind.
+     *
+     * <p>So the right button swings the camera round, and the assertion is the
+     * two things that have to hold at every angle: the camera really is on the
+     * other side of the walker, and it is still <b>pointing at them</b> — the
+     * orbit turns the look by exactly what it turned the position by, which is
+     * what keeps somebody framed instead of sliding out of shot.
+     */
+    @Test
+    void theThirdPersonCameraGoesAllTheWayRound(@TempDir Path dir) {
+        try (Walk walk = new Walk(dir)) {
+            walk.press(KeyEvent.VK_F5);
+            walk.step();
+            EyeCamera eye = walk.walk.camera();
+            double[] me = {eye.x(), eye.y()};
+            double behind = Math.hypot(eye.x() - walk.px(), eye.y() - walk.py());
+            assertTrue(behind > 3, "the third-person camera is not standing off at all");
+            // Behind: the camera is on the opposite side from the way they face,
+            // and forward in this game is -y at a yaw of zero.
+            assertTrue(eye.y() > walk.py(),
+                    "the camera did not start behind the walker");
+            double aimed = pointingAtWalker(walk, eye);
+            assertTrue(aimed < 0.35,
+                    "the camera does not start pointing at the walker: " + aimed + " rad off");
+
+            // Swing it half a turn with the right button held.
+            walk.orbit(180);
+            assertTrue(eye.y() < walk.py(),
+                    "half a turn of the orbit left the camera behind them");
+            assertEquals(behind, Math.hypot(eye.x() - walk.px(), eye.y() - walk.py()),
+                    0.6, "the camera changed its distance on the way round");
+            assertTrue(pointingAtWalker(walk, eye) < 0.35,
+                    "the camera swung round the walker and stopped looking at them");
+
+            // …and all the way, through every quarter, still framed.
+            for (int i = 0; i < 8; i++) {
+                walk.orbit(45);
+                assertTrue(pointingAtWalker(walk, eye) < 0.35,
+                        "the camera lost the walker a quarter of the way round");
+            }
+            assertNotEquals(me[0], eye.x(), "the camera never moved at all");
+        }
+    }
+
+    /** Walking puts the camera back behind you without anybody asking. */
+    @Test
+    void walkingOffSwingsTheCameraBackBehindYou(@TempDir Path dir) {
+        try (Walk walk = new Walk(dir)) {
+            walk.press(KeyEvent.VK_F5);
+            walk.orbit(180);
+            EyeCamera eye = walk.walk.camera();
+            assertTrue(eye.y() < walk.py(), "the orbit did not take");
+            // Forward for a second, which is long enough for a 0.45 s recentre.
+            walk.hold(KeyEvent.VK_W);
+            for (int i = 0; i < 120; i++) walk.step();
+            walk.release(KeyEvent.VK_W);
+            walk.step();
+            assertTrue(eye.y() > walk.py(),
+                    "the camera was still in front of somebody walking forwards");
+        }
+    }
+
+    /**
+     * In first person the right button is not a mode — it steers, exactly as
+     * the mouse always did, and the camera stays in the walker's head.
+     *
+     * <p>There is nothing to orbit: the camera <em>is</em> the walker, and
+     * swinging it round them would be swinging it round itself. So the orbit is
+     * third person's alone and holding the button changes nothing anywhere
+     * else, which is what stops it becoming a control somebody has to know
+     * about to play normally.
+     */
+    @Test
+    void thereIsNothingToOrbitInFirstPerson(@TempDir Path dir) {
+        try (Walk walk = new Walk(dir)) {
+            EyeCamera eye = walk.walk.camera();
+            walk.step();
+            double yaw = eye.yaw();
+            walk.orbit(90);
+            assertEquals(walk.px(), eye.x(), 0.02, "the first-person camera left the head");
+            assertEquals(walk.py(), eye.y(), 0.02, "the first-person camera left the head");
+            assertNotEquals(yaw, eye.yaw(),
+                    "the right button swallowed the mouse instead of steering with it");
+        }
+    }
+
+    /** How far off the camera is from pointing at the walker, in radians. */
+    private static double pointingAtWalker(Walk walk, EyeCamera eye) {
+        double toward = Math.atan2(walk.px() - eye.x(), -(walk.py() - eye.y()));
+        double off = Math.abs(toward - eye.yaw()) % (Math.PI * 2);
+        return Math.min(off, Math.PI * 2 - off);
     }
 
     // --- the two screens that offer it ----------------------------------------------------
@@ -1318,15 +1493,117 @@ class PlayerFiguresTest {
         void step() {
             input.newFrame();
             scenes.update(1 / 120.0, input);
+            // **And draw.** The camera is placed while rendering rather than
+            // while updating — it is a thing the screen does, not a thing the
+            // world does — so a harness that only ever updated would be asking
+            // an EyeCamera that had never been told where anybody is.
+            scenes.render(frame, 0f);
         }
 
+        private final RecordingTarget frame = new RecordingTarget(800, 480);
+
         void press(int key) {
+            hold(key);
+            step();
+            release(key);
+            step();
+        }
+
+        void hold(int key) {
             input.keyPressed(new KeyEvent(new JPanel(), KeyEvent.KEY_PRESSED, 0, 0, key,
                     KeyEvent.CHAR_UNDEFINED));
-            step();
+        }
+
+        void release(int key) {
             input.keyReleased(new KeyEvent(new JPanel(), KeyEvent.KEY_RELEASED, 0, 0, key,
                     KeyEvent.CHAR_UNDEFINED));
+        }
+
+        double px() { return game.player(1).x(); }
+
+        double py() { return game.player(1).y(); }
+
+        /**
+         * Swing the third-person camera round by so many degrees, the way a
+         * player does: right button held, mouse dragged sideways.
+         *
+         * <p>In small steps, because the scene reads the pointer's <em>travel</em>
+         * each frame and puts it back to the middle — one enormous jump would
+         * be one enormous frame rather than a turn.
+         */
+        void orbit(double degrees) {
+            int fromX = 200, atY = 240;
+            // The scene reads how far the hand *travelled*, so each event has to
+            // land somewhere new: sending the same coordinate twice is a hand
+            // that moved once and then stopped.
+            int by = (int) Math.round(Math.toRadians(degrees) / 0.0032 / 24);
+            input.mousePressed(mouse(MouseEvent.MOUSE_PRESSED, MouseEvent.BUTTON3,
+                    fromX, atY));
+            int x = fromX;
+            for (int i = 0; i < 24; i++) {
+                x += by;
+                input.mouseDragged(mouse(MouseEvent.MOUSE_DRAGGED, MouseEvent.BUTTON3,
+                        x, atY));
+                step();
+            }
+            // Released where it ended, so letting go banks no travel of its own
+            // and does not turn the walker on the way out.
+            input.mouseReleased(mouse(MouseEvent.MOUSE_RELEASED, MouseEvent.BUTTON3,
+                    x, atY));
             step();
+        }
+
+        int[] slotRow(int row) { return walk.wardrobeSlotRow(row); }
+
+        int[] pieceRow(int row) { return walk.wardrobePieceRow(row); }
+
+        int[] dyeBar(int channel) { return walk.wardrobeDyeBar(channel); }
+
+        int[] wardrobeClose() { return walk.wardrobeCloseButton(); }
+
+        /**
+         * Move the pointer there and click, the way a hand does: the panel
+         * hovers on the frame the mouse arrives and acts on the frame the
+         * button goes down, so those are two frames and not one.
+         */
+        void click(int[] at) { click(at[0], at[1]); }
+
+        void click(int x, int y) {
+            input.mouseMoved(mouse(MouseEvent.MOUSE_MOVED, MouseEvent.NOBUTTON, x, y));
+            step();
+            input.mousePressed(mouse(MouseEvent.MOUSE_PRESSED, MouseEvent.BUTTON1, x, y));
+            step();
+            input.mouseReleased(mouse(MouseEvent.MOUSE_RELEASED, MouseEvent.BUTTON1,
+                    x, y));
+            step();
+        }
+
+        /** Press at one point, drag to another, and let go. */
+        void drag(int fromX, int fromY, int toX, int toY) {
+            input.mouseMoved(mouse(MouseEvent.MOUSE_MOVED, MouseEvent.NOBUTTON,
+                    fromX, fromY));
+            step();
+            input.mousePressed(mouse(MouseEvent.MOUSE_PRESSED, MouseEvent.BUTTON1,
+                    fromX, fromY));
+            step();
+            for (int i = 1; i <= 6; i++) {
+                input.mouseDragged(mouse(MouseEvent.MOUSE_DRAGGED, MouseEvent.BUTTON1,
+                        fromX + (toX - fromX) * i / 6, fromY + (toY - fromY) * i / 6));
+                step();
+            }
+            input.mouseReleased(mouse(MouseEvent.MOUSE_RELEASED, MouseEvent.BUTTON1,
+                    toX, toY));
+            step();
+        }
+
+        private MouseEvent mouse(int id, int button, int x, int y) {
+            int mask = switch (button) {
+                case MouseEvent.BUTTON1 -> MouseEvent.BUTTON1_DOWN_MASK;
+                case MouseEvent.BUTTON3 -> MouseEvent.BUTTON3_DOWN_MASK;
+                default -> 0;
+            };
+            return new MouseEvent(new JPanel(), id, 0,
+                    id == MouseEvent.MOUSE_RELEASED ? 0 : mask, x, y, 1, false, button);
         }
 
         @Override public void close() {
