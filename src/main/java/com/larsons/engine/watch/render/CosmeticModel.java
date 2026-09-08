@@ -333,14 +333,40 @@ public final class CosmeticModel {
     public static void overlay(Mesh.Builder mesh, Figure figure, List<String> worn,
                                double x, double y, double z, double yaw, double height,
                                double speed, double phase, float[] uv) {
+        overlay(mesh, figure, worn, x, y, z, yaw, height, stateFor(speed), phase, uv,
+                null);
+    }
+
+    /**
+     * The same, drawn through the motion of the body underneath.
+     *
+     * <p><b>This is what makes a hat bob with the head it is on.</b> A worn
+     * piece and the body are two models with two rigs drawn by two calls, and
+     * left to themselves the body plays its authored {@code walk} — root dropped
+     * to put the lower boot on the floor, chest leaning, head nodding — while
+     * the garment, having no clip, is posed by the procedural stand-in instead.
+     * Standing still nobody could see it; at a run the head came 50 mm out from
+     * under the hat once a stride. {@link SceneModel.Worn} is the body saying
+     * where its joints went, and everything here is carried along with them.
+     *
+     * <p>The wearer's {@linkplain SceneModel.Lean tip} is inside {@code carry}
+     * rather than beside it — a swimmer's cloak lies down with them and this
+     * method never has to know what leaning is. See {@link SceneModel#wornAt}.
+     *
+     * @param carry the wearer's {@link SceneModel#wornAt}, or {@code null} for
+     *              the boxes, which have no clips for anything to follow
+     */
+    public static void overlay(Mesh.Builder mesh, Figure figure, List<String> worn,
+                               double x, double y, double z, double yaw, double height,
+                               AnimState state, double phase, float[] uv,
+                               SceneModel.Worn carry) {
         if (worn == null || worn.isEmpty()) return;
-        AnimState state = stateFor(speed);
         double scale = height / WalkerModel.HEIGHT;
         for (String key : worn) {
             SceneModel model = importedFor(figure, key);
             if (model == null) continue;
             model.mesh(mesh, x, y, z, yaw + SceneModel.PERSON_TURN, state, phase,
-                    scale, uv);
+                    scale, uv, 0, null, SceneModel.Lean.UPRIGHT, carry);
         }
     }
 

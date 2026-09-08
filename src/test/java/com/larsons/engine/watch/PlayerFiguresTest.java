@@ -441,6 +441,130 @@ class PlayerFiguresTest {
         }
     }
 
+    /**
+     * <b>The clothes move with the body.</b>
+     *
+     * <p>A worn piece and the figure under it are two models with two rigs drawn
+     * by two calls. Left to themselves each animates on its own: the body plays
+     * the {@code walk} its artist authored — root dropped to put the lower boot
+     * on the floor, chest leaning, head nodding — and the garment, having no
+     * clip of its own, was posed by the procedural stand-in instead. Standing
+     * still nobody could see it. At a run the head came 50 mm out from under the
+     * hat, once a stride, for ever.
+     *
+     * <p>So this walks a whole stride and compares how far the hat travelled
+     * against how far the head under it did. Three things about how it measures
+     * are load-bearing:
+     *
+     * <ul>
+     *   <li><b>Differences, not heights.</b> A bobble hat legitimately stands
+     *       90 mm proud of a crown; the question is not where it sits but
+     *       whether it comes along.</li>
+     *   <li><b>Centroids, not extremes.</b> The head nods and rolls as well as
+     *       rising, and the <em>highest vertex</em> of a 0.11 m bobble and of a
+     *       0.27 m crown swing on different arms — so a max jumps between
+     *       vertices and disagrees by millimetres for entirely correct reasons.
+     *       A centroid does not move when the mesh does not.</li>
+     *   <li><b>Both read off the same drawn figure</b>, the hat from the piece
+     *       and the head from the body's own vertices above the shoulders, so
+     *       nothing about how either is placed enters into it.</li>
+     * </ul>
+     *
+     * <p>What the bug looked like, for scale: posed by the stand-in the hat did
+     * not rise <em>at all</em> while the head moved 20–50 mm a stride.
+     */
+    @Test
+    void aHatBobsWithTheHeadUnderIt() {
+        for (Figure figure : Figure.all()) {
+            String hat = Cosmetics.inSlot(Cosmetics.Slot.HEAD).get(0).key();
+            String boots = Cosmetics.inSlot(Cosmetics.Slot.FEET).get(0).key();
+            // **The same vertices at every phase, chosen once.** Picked afresh
+            // by height each time, the head's own set would shed vertices as
+            // the figure bobs down past the cut and its centroid would move by
+            // more than the head did — which is a bug in the measurement that
+            // looks exactly like a bug in the thing being measured.
+            Mesh still = walking(figure, List.of(), 0);
+            int[] head = between(still, 1.55, 9);
+            int[] feet = between(still, -9, 0.30);
+            double restingHead = centroidZ(still, head);
+            double restingHat = centroidZ(walkingWorn(figure, hat, 0), null);
+            double restingFeet = centroidZ(still, feet);
+            double restingBoots = centroidZ(walkingWorn(figure, boots, 0), null);
+            double moved = 0;
+            for (double phase : new double[]{0.15, 0.25, 0.4, 0.6, 0.75, 0.9}) {
+                double nodded = centroidZ(walking(figure, List.of(), phase), head)
+                        - restingHead;
+                double crown = centroidZ(walkingWorn(figure, hat, phase), null)
+                        - restingHat;
+                moved = Math.max(moved, Math.abs(nodded));
+                assertEquals(nodded, crown, 0.0015,
+                        figure.key() + " at phase " + phase + ": the head moved "
+                                + round(nodded) + " m and the hat on it moved "
+                                + round(crown) + " — the clothes are not following "
+                                + "the body");
+                // …and the boots go with the feet in them, which at the middle
+                // of a stride is a good deal of movement to keep up with.
+                assertEquals(centroidZ(walking(figure, List.of(), phase), feet)
+                                - restingFeet,
+                        centroidZ(walkingWorn(figure, boots, phase), null)
+                                - restingBoots, 0.004,
+                        figure.key() + " at phase " + phase + ": a boot is not "
+                                + "walking with the foot inside it");
+            }
+            // …and the walk actually moves, or the assertions above are vacuous.
+            assertTrue(moved > 0.012,
+                    figure.key() + "'s walk shifts the head by only " + round(moved)
+                            + " m, which is not enough of a bob for the comparison "
+                            + "above to mean anything");
+        }
+    }
+
+    /**
+     * A garment follows the body into the water and into a boat as well.
+     *
+     * <p>Those two poses used to keep their boxes, and the folder README said so
+     * at length: a swimmer is laid along a spine that can point anywhere and a
+     * rower is folded onto a thwart, and neither is something a garment's own
+     * clip could ever know. With the body handing over where its joints actually
+     * went there is nothing left to fall back to — and it matters more now than
+     * it reads, because a coat is a worn piece too and a swimmer without one is
+     * a swimmer in their underwear.
+     */
+    @Test
+    void aSwimmerAndARowerAreDressedToo() {
+        String coat = Cosmetics.inSlot(Cosmetics.Slot.BACK).get(0).key();
+        for (Figure figure : Figure.all()) {
+            Mesh.Builder swimming = Mesh.builder(0, 0, 0, false, 1);
+            WalkerModel.swimmer(swimming, figure, 0, 0, 0, 0, 0.1, 1, 0.3, true,
+                    0x4A6B33, List.of(coat));
+            Mesh.Builder bareSwim = Mesh.builder(0, 0, 0, false, 1);
+            WalkerModel.swimmer(bareSwim, figure, 0, 0, 0, 0, 0.1, 1, 0.3, true,
+                    0x4A6B33, List.of());
+            Mesh dressed = swimming.build();
+            Mesh bare = bareSwim.build();
+            assertTrue(dressed.triangleCount() > bare.triangleCount(),
+                    figure.key() + " swims with nothing on");
+            // Laid down with them: a swimmer at this pitch is nearly flat, so
+            // the cloak has to be long fore-and-aft and short vertically. Left
+            // upright it would stand a metre and a half over the lake.
+            assertTrue(dressed.maxZ() < bare.maxZ() + 0.30,
+                    figure.key() + "'s cloak stands " + round(dressed.maxZ())
+                            + " m over a swimmer whose own top is "
+                            + round(bare.maxZ()) + " — it did not lie down");
+
+            Mesh.Builder rowing = Mesh.builder(0, 0, 0, false, 1);
+            WalkerModel.rower(rowing, figure, 0, 0, 0, 0, 0.25, 0.2, 0x4A6B33,
+                    List.of(coat));
+            Mesh.Builder bareRow = Mesh.builder(0, 0, 0, false, 1);
+            WalkerModel.rower(bareRow, figure, 0, 0, 0, 0, 0.25, 0.2, 0x4A6B33,
+                    List.of());
+            assertTrue(rowing.build().triangleCount() > bareRow.build().triangleCount(),
+                    figure.key() + " rows with nothing on");
+            assertTrue(rowing.build().maxZ() < bareRow.build().maxZ() + 0.25,
+                    figure.key() + "'s cloak is standing up in the boat");
+        }
+    }
+
     // --- the choice ---------------------------------------------------------------------
 
     /** Changing figure is free, instant, and touches nothing else about a walker. */
@@ -701,6 +825,58 @@ class PlayerFiguresTest {
         WalkerModel.walker(mesh, figure, 0, 0, 0, 0, false, 0, 0,
                 WalkerModel.Leap.GROUNDED, 0x4A6B33, worn, 0);
         return mesh.build();
+    }
+
+    /** …part way through a stride, which is where the clothes have to keep up. */
+    private static Mesh walking(Figure figure, List<String> worn, double phase) {
+        Mesh.Builder mesh = Mesh.builder(0, 0, 0, false, 1);
+        WalkerModel.walker(mesh, figure, 0, 0, 0, 0, false, phase, 4.4,
+                WalkerModel.Leap.GROUNDED, 0x4A6B33, worn, 0);
+        return mesh.build();
+    }
+
+    /**
+     * One garment alone, drawn through the motion of a figure part way through
+     * a stride — exactly as {@code WalkerModel.walker} draws it.
+     *
+     * <p>Alone rather than on the body, so what is measured is the garment and
+     * not whichever of the two happens to reach furthest.
+     */
+    private static Mesh walkingWorn(Figure figure, String key, double phase) {
+        SceneModel body = SceneModels.of(figure.model(), ModelRig.Kind.HUMANOID,
+                SceneModel.Size.height(1));
+        assertNotNull(body, figure.key() + " has no model to be worn over");
+        Mesh.Builder mesh = Mesh.builder(0, 0, 0, false, 1);
+        CosmeticModel.overlay(mesh, figure, List.of(key), 0, 0, 0, 0, HEIGHT,
+                AnimState.WALK, phase, new float[]{0, 0, 1, 1},
+                body.wornAt(AnimState.WALK, phase, HEIGHT, SceneModel.Lean.UPRIGHT));
+        return mesh.build();
+    }
+
+    /** Which vertices of a mesh lie between two heights. */
+    private static int[] between(Mesh mesh, double from, double to) {
+        float[] v = mesh.vertices();
+        int[] out = new int[mesh.vertexCount()];
+        int n = 0;
+        for (int i = 0; i < mesh.vertexCount(); i++) {
+            double z = v[i * Mesh.FLOATS_PER_VERTEX + 2];
+            if (z >= from && z <= to) out[n++] = i;
+        }
+        assertTrue(n > 0, "nothing at all between " + from + " and " + to + " m");
+        return java.util.Arrays.copyOf(out, n);
+    }
+
+    /** The mean height of some vertices, or of all of them for {@code null}. */
+    private static double centroidZ(Mesh mesh, int[] which) {
+        float[] v = mesh.vertices();
+        double sum = 0;
+        int n = which == null ? mesh.vertexCount() : which.length;
+        for (int i = 0; i < n; i++) {
+            int at = which == null ? i : which[i];
+            sum += v[at * Mesh.FLOATS_PER_VERTEX + 2];
+        }
+        assertTrue(n > 0, "no vertices to take a centroid of");
+        return sum / n;
     }
 
     /** One garment, on its own, at the feet of a standing figure. */
