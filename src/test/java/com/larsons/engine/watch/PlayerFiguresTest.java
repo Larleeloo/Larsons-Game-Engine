@@ -4,6 +4,8 @@ import com.larsons.engine.config.GameContext;
 import com.larsons.engine.config.GameTypeStore;
 import com.larsons.engine.graphics.EyeCamera;
 import com.larsons.engine.graphics.draw.RecordingTarget;
+import com.larsons.engine.input.GameAction;
+import com.larsons.engine.input.InputBinding;
 import com.larsons.engine.input.InputManager;
 import com.larsons.engine.scene.SceneManager;
 import com.larsons.engine.demo.WatchLobbyScene;
@@ -1017,11 +1019,18 @@ class PlayerFiguresTest {
      * this game is for: seeing what you have on. You cannot check a scarf, a
      * hat's brim or the hang of a cape from directly behind.
      *
-     * <p>So the right button swings the camera round, and the assertion is the
-     * two things that have to hold at every angle: the camera really is on the
-     * other side of the walker, and it is still <b>pointing at them</b> — the
-     * orbit turns the look by exactly what it turned the position by, which is
-     * what keeps somebody framed instead of sliding out of shot.
+     * <p>So the orbit button swings the camera round, and the assertion is the
+     * three things that have to hold at every angle: the walker did not turn,
+     * the camera really is on the other side of them, and it is still
+     * <b>pointing at them</b> — the orbit turns the look by exactly what it
+     * turned the position by, which is what keeps somebody framed instead of
+     * sliding out of shot.
+     *
+     * <p>The first of those three is the one this test used to be missing, and
+     * it is the only one that can tell an orbit from a walker spinning on the
+     * spot: turning round moves the camera to the other side too, and keeps it
+     * pointing at you the whole way, so every other assertion here passes just
+     * as happily on a camera that never orbited anything.
      */
     @Test
     void theThirdPersonCameraGoesAllTheWayRound(@TempDir Path dir) {
@@ -1039,9 +1048,13 @@ class PlayerFiguresTest {
             double aimed = pointingAtWalker(walk, eye);
             assertTrue(aimed < 0.35,
                     "the camera does not start pointing at the walker: " + aimed + " rad off");
+            double facing = walk.game.player(1).yaw();
 
-            // Swing it half a turn with the right button held.
+            // Swing it half a turn with the orbit button held.
             walk.orbit(180);
+            assertEquals(facing, walk.game.player(1).yaw(), 1e-9,
+                    "the walker turned on the spot — the mouse is steering them rather "
+                            + "than swinging the camera round them");
             assertTrue(eye.y() < walk.py(),
                     "half a turn of the orbit left the camera behind them");
             assertEquals(behind, Math.hypot(eye.x() - walk.px(), eye.y() - walk.py()),
@@ -1054,6 +1067,8 @@ class PlayerFiguresTest {
                 walk.orbit(45);
                 assertTrue(pointingAtWalker(walk, eye) < 0.35,
                         "the camera lost the walker a quarter of the way round");
+                assertEquals(facing, walk.game.player(1).yaw(), 1e-9,
+                        "the walker turned a quarter of the way round instead of the camera");
             }
             assertNotEquals(me[0], eye.x(), "the camera never moved at all");
         }
@@ -1064,8 +1079,12 @@ class PlayerFiguresTest {
     void walkingOffSwingsTheCameraBackBehindYou(@TempDir Path dir) {
         try (Walk walk = new Walk(dir)) {
             walk.press(KeyEvent.VK_F5);
+            double facing = walk.game.player(1).yaw();
             walk.orbit(180);
             EyeCamera eye = walk.walk.camera();
+            assertEquals(facing, walk.game.player(1).yaw(), 1e-9,
+                    "the walker turned instead of the camera, so the camera being in "
+                            + "front of them proves nothing");
             assertTrue(eye.y() < walk.py(), "the orbit did not take");
             // Forward for a second, which is long enough for a 0.45 s recentre.
             walk.hold(KeyEvent.VK_W);
@@ -1078,7 +1097,7 @@ class PlayerFiguresTest {
     }
 
     /**
-     * In first person the right button is not a mode — it steers, exactly as
+     * In first person the orbit button is not a mode — it steers, exactly as
      * the mouse always did, and the camera stays in the walker's head.
      *
      * <p>There is nothing to orbit: the camera <em>is</em> the walker, and
@@ -1097,7 +1116,39 @@ class PlayerFiguresTest {
             assertEquals(walk.px(), eye.x(), 0.02, "the first-person camera left the head");
             assertEquals(walk.py(), eye.y(), 0.02, "the first-person camera left the head");
             assertNotEquals(yaw, eye.yaw(),
-                    "the right button swallowed the mouse instead of steering with it");
+                    "the orbit button swallowed the mouse instead of steering with it");
+        }
+    }
+
+    /**
+     * And the walker has to have stopped. Walking is aimed with the mouse, so a
+     * walker who could orbit mid-stride would be steering the camera and the
+     * legs with one hand and getting neither — the button does nothing while
+     * they are moving, and the mouse goes on steering.
+     */
+    @Test
+    void theCameraDoesNotSwingRoundSomebodyWhoIsWalking(@TempDir Path dir) {
+        try (Walk walk = new Walk(dir)) {
+            walk.press(KeyEvent.VK_F5);
+            walk.hold(KeyEvent.VK_W);
+            for (int i = 0; i < 30; i++) walk.step();
+            double facing = walk.game.player(1).yaw();
+            walk.orbit(90);
+            walk.release(KeyEvent.VK_W);
+            for (int i = 0; i < 10; i++) walk.step();
+            assertNotEquals(facing, walk.game.player(1).yaw(),
+                    "the mouse stopped steering a walker who was walking");
+
+            // And behind them, the way it is for anybody on the move: looking
+            // from the camera to the walker is looking the way the walker
+            // faces, which an orbit of ninety degrees would have broken.
+            EyeCamera eye = walk.walk.camera();
+            double yaw = walk.game.player(1).yaw();
+            double toX = walk.px() - eye.x(), toY = walk.py() - eye.y();
+            double away = Math.hypot(toX, toY);
+            assertTrue(away > 3, "the camera is not standing off the walker at all");
+            assertTrue((Math.sin(yaw) * toX - Math.cos(yaw) * toY) / away > 0.8,
+                    "the camera is not behind a walker who never stopped walking");
         }
     }
 
@@ -1525,11 +1576,18 @@ class PlayerFiguresTest {
 
         /**
          * Swing the third-person camera round by so many degrees, the way a
-         * player does: right button held, mouse dragged sideways.
+         * player does: the orbit button held, mouse dragged sideways.
          *
          * <p>In small steps, because the scene reads the pointer's <em>travel</em>
          * each frame and puts it back to the middle — one enormous jump would
          * be one enormous frame rather than a turn.
+         *
+         * <p>The button is <b>asked of the binding</b> rather than written in.
+         * It used to say {@code BUTTON3} here, which is what let these tests go
+         * on passing after the orbit had stopped working for everybody: the
+         * right button raises the spyglass, and a walk whose walker is carrying
+         * one gets a glass rather than a camera. Reading the binding means a
+         * test can only ever drive the control the game actually offers.
          */
         void orbit(double degrees) {
             int fromX = 200, atY = 240;
@@ -1537,20 +1595,27 @@ class PlayerFiguresTest {
             // land somewhere new: sending the same coordinate twice is a hand
             // that moved once and then stopped.
             int by = (int) Math.round(Math.toRadians(degrees) / 0.0032 / 24);
-            input.mousePressed(mouse(MouseEvent.MOUSE_PRESSED, MouseEvent.BUTTON3,
-                    fromX, atY));
+            int button = orbitButton();
+            input.mousePressed(mouse(MouseEvent.MOUSE_PRESSED, button, fromX, atY));
             int x = fromX;
             for (int i = 0; i < 24; i++) {
                 x += by;
-                input.mouseDragged(mouse(MouseEvent.MOUSE_DRAGGED, MouseEvent.BUTTON3,
-                        x, atY));
+                input.mouseDragged(mouse(MouseEvent.MOUSE_DRAGGED, button, x, atY));
                 step();
             }
             // Released where it ended, so letting go banks no travel of its own
             // and does not turn the walker on the way out.
-            input.mouseReleased(mouse(MouseEvent.MOUSE_RELEASED, MouseEvent.BUTTON3,
-                    x, atY));
+            input.mouseReleased(mouse(MouseEvent.MOUSE_RELEASED, button, x, atY));
             step();
+        }
+
+        /** Whichever mouse button swinging the camera round is bound to. */
+        static int orbitButton() {
+            for (InputBinding binding : GameAction.WATCH_ORBIT.defaults()) {
+                if (binding.kind() == InputBinding.Kind.MOUSE) return binding.code();
+            }
+            throw new AssertionError("swinging the camera round is not on a mouse button "
+                    + "any more, and these tests drag one");
         }
 
         int[] slotRow(int row) { return walk.wardrobeSlotRow(row); }

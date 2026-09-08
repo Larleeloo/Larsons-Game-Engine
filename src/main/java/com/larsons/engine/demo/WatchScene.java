@@ -1274,7 +1274,7 @@ public class WatchScene extends AbstractScene {
 
         useGlass(dt, input);
         steerLook(input);
-        recentreOrbit(dt, input);
+        recentreOrbit(dt);
         walk(dt, input);
         // The reach gesture and the pickup flash decay on their own clock,
         // which is the frame's rather than the simulation's: they are things
@@ -1639,16 +1639,30 @@ public class WatchScene extends AbstractScene {
     }
 
     /**
-     * Whether the right button is swinging the camera round rather than the
-     * player round the world.
+     * Whether the hand is swinging the camera round the walker rather than
+     * turning the walker round the world.
+     *
+     * <p><b>Its own binding</b> ({@link GameAction#WATCH_ORBIT}, the middle
+     * button) rather than the right one, which is what kept this from ever
+     * working. The right button raises the spyglass, {@link #useGlass} runs one
+     * line above {@link #steerLook}, and a glass that is up sends the camera
+     * back to the walker's eye — so the orbit disqualified itself on the frame
+     * after it was asked for, and the camera did not move. A button already
+     * spent on a verb is not a button.
      *
      * <p>Only in third person, and only with the glass down. Both are the same
      * reason: there has to be something to look <em>at</em>. In first person the
      * camera is inside the walker's head and orbiting it would be orbiting
      * nothing, and a raised glass is at your eye whatever the view setting says.
+     *
+     * <p>And only while standing still, which is the whole shape of the
+     * feature: walking is aimed with the mouse, so a walker who could orbit at
+     * the same time would be steering the camera and the legs with one hand and
+     * getting neither. Stopping is what asks for it.
      */
     private boolean orbiting(InputManager input) {
-        return thirdPerson && !glass.up() && input.isRightMouseDown();
+        return thirdPerson && !glass.up() && animSpeed <= WALK_STILL
+                && KeyBinds.down(input, GameAction.WATCH_ORBIT);
     }
 
     /** How far above or below the walker the camera can be swung, in radians. */
@@ -1665,15 +1679,29 @@ public class WatchScene extends AbstractScene {
      * point — the alternative is a camera somebody left sideways an hour ago
      * and a key they have to be told about to fix it.
      *
-     * <p>Only while actually moving, so standing and turning on the spot to
-     * look at yourself from the other side is not fought.
+     * <p>Only while actually moving, which is the other half of {@link
+     * #orbiting}'s standing-still rule and the reason the button does not have
+     * to be held: stopped, the camera stays exactly where it was put, so you
+     * can let go and look; walking, it comes back on its own whether or not
+     * anything is being pressed.
      */
-    private void recentreOrbit(double dt, InputManager input) {
-        if (orbiting(input) || animSpeed <= WALK_STILL) return;
+    private void recentreOrbit(double dt) {
+        if (animSpeed <= WALK_STILL) return;
         double keep = Math.max(0, 1 - dt / ORBIT_RECENTRE);
         orbitYaw *= keep;
         orbitPitch *= keep;
+        // Landed rather than approached. A proportional decay is asymptotic:
+        // it leaves a millionth of a radian behind for ever, which is nothing
+        // to look at and is not nothing to ask about — `placeCamera` claims to
+        // be the camera this game has always had at an orbit of exactly zero,
+        // and the stillness hint offers itself again at exactly zero. Both were
+        // wrong forever after one swing without this.
+        if (Math.abs(orbitYaw) < ORBIT_SETTLED) orbitYaw = 0;
+        if (Math.abs(orbitPitch) < ORBIT_SETTLED) orbitPitch = 0;
     }
+
+    /** Under this many radians the swing is over: a tenth of a millimetre of arm. */
+    private static final double ORBIT_SETTLED = 1e-4;
 
     /** Below this many metres a second the camera is left where it was put. */
     private static final double WALK_STILL = 0.4;
@@ -5302,8 +5330,14 @@ public class WatchScene extends AbstractScene {
                 // still in third person is exactly the moment somebody is
                 // trying to look at what they have on, and it goes away again
                 // the moment they walk off.
+                //
+                // Named from the binding rather than written out, so that a
+                // player who has moved it is told the button they moved it to.
+                // The line that used to be here said "the right mouse button",
+                // which by then raised the spyglass and did not orbit anything.
                 : thirdPerson && animSpeed <= WALK_STILL && orbitYaw == 0
-                        ? "Hold the right mouse button to look round yourself"
+                        ? "Hold " + KeyBinds.label(GameAction.WATCH_ORBIT)
+                                + " to look round yourself"
                 : "Stillness";
         label(target, hint, viewportHeight > 0
                 ? viewportWidth / 2 - target.textWidth(hint, HUD_SMALL) / 2 : 0,

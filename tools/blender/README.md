@@ -332,10 +332,11 @@ you cut it for, then <kbd>Enter</kbd> for the wardrobe and click the piece to pu
 it on. (One of the eighteen has to be bought first: walk to a trading post, press
 <kbd>E</kbd>, then <kbd>←</kbd> for the clothes rail.)
 
-Then <kbd>F5</kbd> for third person and **hold the right mouse button to swing
-the camera round yourself** — up, down and all the way about. That is the only
-way to look at the front of anything, and it is what you want the moment you are
-checking a fit rather than playing.
+Then <kbd>F5</kbd> for third person and, standing still, **hold the middle mouse
+button** (or <kbd>O</kbd>) **to swing the camera round yourself** — up, down and
+all the way about. That is the only way to look at the front of anything, and it
+is what you want the moment you are checking a fit rather than playing. It is on
+the controls screen as "Look Around Yourself" if you would rather move it.
 
 **If it did not load**, one line went to stderr saying why and whatever was there
 before was drawn instead:
