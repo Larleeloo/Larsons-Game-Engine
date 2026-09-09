@@ -662,11 +662,11 @@ not describe that.
 Two tables, because there are two figures and a garment is cut to one of them.
 Which you want depends on which folder the file is going in — see above.
 
-**For `cosmetics/<figure>/`, the modelled bodies.** Both stand **exactly 1.78 m**
-to the crown, which is `WalkerModel.HEIGHT` and is not a coincidence: an imported
-character is normalised by its height and redrawn at that number, so a figure
-authored at 1.78 comes out at the metres it was authored in and the landmarks
-below are the landmarks the game draws. Every row is
+**For `cosmetics/<figure>/`, the modelled bodies.** A body is drawn at **the
+metres it was authored in** — see §17 — so every row below is a row the game
+draws, at the number written. Both figures are cut so that a walker in the kit
+they set off in stands **exactly 1.78 m**, which is `WalkerModel.HEIGHT`; the
+last 165 mm of that is a hat, and the hat is a garment. Every row is
 `tools/blender/figures.py`, which is also what `cosmetics.py` cuts the shipped
 wardrobe from.
 
@@ -683,21 +683,38 @@ wardrobe from.
 | shoulder | 1.18 | 1.19 |
 | neck / collar | 1.27 | 1.28 |
 | head centre | 1.45 | 1.47 |
-| top of the head | 1.62 | 1.62 |
-| brim of the hat | 1.59 | 1.61 |
-| **top of the hat** | **1.78** | **1.78** |
+| **top of the head — where a body ends** | **1.615** | **1.620** |
+| brim of `walking_hat` | 1.590 | 1.590 |
+| **top of `walking_hat` — where a dressed figure ends** | **1.78** | **1.78** |
 | shoulders, either side of centre | ±0.205 | ±0.175 |
 | hips | ±0.105 | ±0.100 |
 | chest, half-width | 0.165 | 0.142 |
 | front of the chest | −0.145 | −0.130 |
 | back of the pack | +0.330 | +0.300 |
-| hat brim, radius | 0.320 | 0.275 |
-| radius that covers the crown | 0.238 | 0.162 |
+| hat brim, radius | 0.320 | 0.300 |
+| radius that covers the crown | 0.244 | 0.228 |
 
-That last row is the one an artist actually needs for a hat: the walker's crown
-is a square box 0.33 across, so covering it takes the radius of its *corners*
-and not half of its side. The wayfarer's is round, so it barely needs more than
-itself.
+Three of those rows are worth reading twice.
+
+**A hat's brim goes *below* the top of the head.** 1.590 against a crown of
+1.615: that is where a sweatband sits, and a brim written above the crown is a
+hat balanced in the air with daylight all round the band. The shipped wardrobe
+had exactly that for a while and it is the first thing anyone noticed.
+
+**The last row is the one an artist actually needs, and it is not half a
+head.** Both crowns are square boxes; the walker's is 0.31 × 0.29, so its
+*corners* are 0.212 m from the middle. A drum worn over one has to reach that
+much at forty-five degrees, which for an octagon means a radius of 0.244 —
+almost half as much again as the 0.177 that "a bit more than half the width"
+gives you. Anything narrower and the four corners of somebody's skull come
+through their beanie. `cosmetics.py`'s `crown_r` is this number and every drum
+in the wardrobe is written against it.
+
+**A round hat on a square head is wide**, and that is a fact about the head. The
+corners of a 0.31 m crown are 0.42 m apart, so nothing round covers one and
+stays narrow. Build a box crown if you want a close fit — `walking_hat` does,
+for the walker — and measure it against `head_half_x`/`head_half_y` plus a
+clearance instead.
 
 **For `cosmetics/`, the boxed reference figure.** These are the procedural
 walker's own numbers (`WalkerModel`), which is what the game draws when there is
@@ -873,16 +890,33 @@ anywhere else, and that is the property `Figure` exists to have.
 
 Three things are the player's own.
 
-### Author at exactly 1.78 m
+### A body is drawn at the metres it was authored in
 
-**This is the load-bearing number and it is easy to miss.** An imported character
-is measured, normalised by its height, and redrawn at `WalkerModel.HEIGHT` —
-which is 1.78. A figure authored at 1.78 therefore comes out at exactly the
-metres it was authored in, and every landmark in §16's table is a landmark the
-game draws. A figure authored at 2.10 comes out scaled by 0.85, its head lands
-250 mm below where you put it, and the wardrobe cut to your table is worn 250 mm
-above the head it belongs on — because a cosmetic is the one thing here that is
-never rescaled.
+**This is the load-bearing rule and it is the one that got broken.** A worn piece
+is `AS_PLACED`: never measured, never rescaled, drawn at the metre you put it at.
+A body has to be drawn the same way or the two are being drawn to different
+scales, so `WalkerModel` asks the file how tall it is and draws it 1:1. Every
+landmark in §16's table is a landmark the game draws, at the number written, and
+a figure authored at 2.10 m comes out 2.10 m tall — wearing clothes that still
+fit it, because they were cut to the same table.
+
+**It used to be the other way round and it cost the whole wardrobe.** The body was
+*normalised*: measured, and redrawn so its bounding box came out at
+`WalkerModel.HEIGHT`. That is the same thing as 1:1 for exactly as long as a
+figure's tallest point is 1.78 — which it was, because a walker's hat was
+modelled into him. The day the hat came off and became `walking_hat`, the body
+measured 1.615 m to a bald crown, every figure in the game was stretched by a
+tenth to make that 1.78, and eighteen garments stayed exactly where they were:
+spectacles on the chin, a collar across the chest, trousers at the knee, a hat
+inside the skull. Nothing in the wardrobe had moved. The body had, and nothing
+measured the body — `PlayerFiguresTest.theBodyIsDrawnAtTheMetresItWasAuthoredIn`
+does now.
+
+So **1.78 is a recommendation rather than a trap**: it is the height the two
+shipped figures stand in their standard kit, it is what every proportion in §5 is
+a fraction of, and matching it means your figure is the same size as everybody
+else's. Miss it and you get a person of the wrong size rather than a person whose
+clothes have fallen off — a mistake you can see.
 
 ### Ship five clips, not one
 

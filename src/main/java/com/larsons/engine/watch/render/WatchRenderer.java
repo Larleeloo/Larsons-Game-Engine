@@ -98,8 +98,27 @@ public final class WatchRenderer {
     /** The most vertices a clipped triangle can have. */
     private static final int MAX_CORNERS = 4;
 
-    /** Depth quantisation for the sort key, in units per metre. */
-    private static final int DEPTH_UNITS = 32;
+    /**
+     * Depth quantisation for the sort key, in units per metre.
+     *
+     * <p><b>Five hundred and twelve, because a garment is millimetres off the
+     * body it is worn on.</b> This was 32 — one bucket every 31 mm — and
+     * everything inside a bucket sorted by {@link #tieBreak} instead of by
+     * depth. That is invisible on a wood: the nearest two things in a forest are
+     * a trunk and the grass in front of it and they are a metre apart. It is
+     * catastrophic on a person. A hairstyle is a cap 11 mm proud of a skull, a
+     * vest is 5 mm proud of a chest, a hood is a shell 20 mm off a head — every
+     * one of them inside one bucket, so which you saw was decided by submission
+     * order, and some triangles straddled a boundary and some did not. What that
+     * looked like is a haircut showing through in ragged diagonal bands, and it
+     * looked like a bug in the wardrobe rather than a bug in here.
+     *
+     * <p>Two millimetres resolves all of those and costs nothing: the key has 40
+     * bits of depth, so even at this rate it reaches two million kilometres
+     * before the clamp in {@link #triangle} has anything to do, against a fog
+     * that has thrown the triangle away by three hundred metres.
+     */
+    private static final int DEPTH_UNITS = 512;
 
     /** Bits of the sort key given to the triangle's index. */
     private static final int INDEX_BITS = 22;
@@ -449,9 +468,33 @@ public final class WatchRenderer {
         // to be. See Mesh.sortBias.
         double sortDepth = bias <= 0 ? depth : Math.max(EyeCamera.NEAR, depth - bias);
         long key = ((long) Math.min((1L << 40) - 1, (long) (sortDepth * DEPTH_UNITS))
-                << INDEX_BITS) | (queued & INDEX_MASK);
+                << INDEX_BITS) | tieBreak(queued);
         order[queued] = key;
         queued++;
+    }
+
+    /**
+     * What decides between two triangles the depth cannot tell apart: <b>whoever
+     * was submitted later is painted on top.</b>
+     *
+     * <p>The low bits of the key are the triangle's index, and {@link #flush}
+     * walks the sorted array backwards — so the <em>smallest</em> low bits are
+     * painted last, which is to say on top. Written straight, that made the
+     * first thing submitted win, which is exactly backwards for a painter: the
+     * whole convention of this renderer, and of every model in the folder, is
+     * that you draw what is underneath and then draw over it. A body is
+     * submitted and then the clothes are; a skin torso is built and then the
+     * vest over it. Complemented, the last thing in wins, and a tie now resolves
+     * the way the art was authored.
+     *
+     * <p>It matters much less than it did now that {@link #DEPTH_UNITS} resolves
+     * two millimetres — the two changes were made together and either would have
+     * fixed the wardrobe on its own. This one is the belt: it holds for geometry
+     * that is genuinely coincident, where no quantisation can help and the only
+     * honest answer is "the one the artist put on top".
+     */
+    private static long tieBreak(int index) {
+        return INDEX_MASK - (index & INDEX_MASK);
     }
 
     /**
@@ -572,7 +615,9 @@ public final class WatchRenderer {
      * <p>One sort of one {@code long[]}: the depth is in the high bits and the
      * triangle's index in the low, so sorting the keys sorts the triangles and
      * nothing is moved but a long. Walked backwards, because the array comes
-     * out near-first and the painter needs the opposite.
+     * out near-first and the painter needs the opposite. The low bits are the
+     * index <em>complemented</em>, so that two triangles at the same depth come
+     * out in the order they were submitted — see {@link #tieBreak}.
      */
     public void flush(DrawTarget target) {
         if (gpu) {
@@ -609,7 +654,8 @@ public final class WatchRenderer {
         int[] xs = new int[MAX_CORNERS];
         int[] ys = new int[MAX_CORNERS];
         for (int i = queued - 1; i >= 0; i--) {
-            int index = (int) (order[i] & INDEX_MASK);
+            // The complement of the index, put back — see tieBreak.
+            int index = (int) (INDEX_MASK - (order[i] & INDEX_MASK));
             int n = corners[index];
             int base = index * MAX_CORNERS;
             System.arraycopy(cornerX, base, xs, 0, n);

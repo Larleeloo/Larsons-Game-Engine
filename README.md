@@ -3724,7 +3724,19 @@ dyed coat keeps its brass buttons. The rule is "a scalar multiple of the
 commonest colour in the mesh", which needs no labelling from the artist and works
 because of how §12 already asks them to paint.
 
-And you can **look at what you are wearing**. The third-person camera used to sit
+**And the screen shows you.** A list of what you own with a dot beside what is on
+is a manifest rather than a mirror, and every decision this screen exists for —
+which of four haircuts, what colour to dye a coat, whether a cloak is worth what
+a keeper is asking — is a decision about how something *looks*. So the panel
+draws the actual figure in the actual outfit in the actual dyes, and it **turns,
+all the way round**, because the pack, the cape and the plait are all on the side
+of you that you cannot see. It turns on its own at a revolution every fourteen
+seconds and you can **drag it** to spin it by hand. It is one call to the same
+`WalkerModel.walker` the world draws everybody with — a mirror that was assembled
+out of its own arithmetic would eventually be a picture of a person nobody owns
+([`FigureMirror`](src/main/java/com/larsons/engine/watch/render/FigureMirror.java)).
+
+And you can **look at what you are wearing** out in the world, too. The third-person camera used to sit
 behind the walker and nowhere else — a fine camera to walk with, and useless for
 checking a scarf, a hat's brim or the hang of a cape. Stand still in third person
 and **hold the middle mouse button** (or `O`) and it swings all the way round
@@ -3780,6 +3792,32 @@ worn where its slot says. The contract is §16 of
 [`tools/blender/`](tools/blender/README.md) has the walkthrough with the clicks
 in it plus the scripts that build both figures and the whole wardrobe, so there
 is a body to fit a garment to and no numbers to retype.
+
+**Taking the coat off broke every garment in the game, and it took two fixes.**
+A worn piece is never rescaled; a *body* used to be — measured, and redrawn so
+its bounding box came out at `WalkerModel.HEIGHT`. Those are the same thing for
+exactly as long as a figure's tallest point is 1.78 m, which it was, because a
+walker's hat was modelled into him. The day the hat became `walking_hat` the body
+measured 1.615 m to a bald crown, every figure in the game was stretched by a
+tenth to make that 1.78, and eighteen garments stayed exactly where they were:
+spectacles on the chin, a collar across the chest, trousers at the knee, a hat
+inside the skull. Nothing in the wardrobe had moved — the body had, and nothing
+measured the body. A body is now drawn at **the metres it was authored in**,
+which is a rule that holds for any file at any height, and
+`PlayerFiguresTest.theBodyIsDrawnAtTheMetresItWasAuthoredIn` measures it against
+the file it came out of.
+
+**The second was in the painter.** With no depth buffer, §B sorts triangles by
+their centroid's distance — quantised, and anything inside one bucket fell back
+to submission order. The bucket was 31 mm. That is invisible in a wood, where the
+nearest two things are a trunk and the grass a metre in front of it, and
+catastrophic on a person: a hairstyle is a cap 11 mm proud of a skull, a vest is
+5 mm proud of a chest, a hood is a shell 20 mm off a head. All of them tied, the
+body won because it is submitted first, and a haircut showed through in ragged
+diagonal bands that looked like a bug in the wardrobe. The buckets are 2 mm now,
+and a tie resolves the way a painter's algorithm should have all along — whatever
+was submitted *later* is painted on top, which is the order everything in this
+game is drawn and authored in.
 
 Wiring that up found a ninety-degree bug older than the wardrobe. This game has
 **two facing conventions** — an animal's boxes point along `+x` at a yaw of zero
@@ -3960,6 +3998,17 @@ It grants:
   bottomless-satchel lens below does not reach them.
 - **Unlimited items.** Every recipe, every feeder, every seed and every tool, in
   any number, for ever.
+- **The whole wardrobe.** Every hat, coat, cloak and haircut in the catalogue,
+  to put on and take off. The second row that is the same *shape* as the
+  bottomless satchel below rather than a grant of its own: `Outfit.owns` answers
+  for the whole catalogue while the mode is on, so the wardrobe screen, a
+  keeper's rail and the renderer are all covered by one flag and a piece added
+  next month is covered without a line being edited. It grants the wearing and
+  not the owning — try on the heron cloak, leave the mode, and you have bought
+  nothing — because a cosmetic is the one thing in this game you cannot get back
+  by walking somewhere. It exists because a rail is five of twenty-eight pieces
+  chosen by the post's own hash, which is a fine thing to ask of a player and a
+  silly thing to ask of somebody checking whether a garment fits.
 - **[Maps](#maps-debug-mode-only-for-now).** Draw one with <kbd>M</kbd>, mark
   it with a pen, and pin maps together on a board. The odd one out: it grants
   *access* rather than abundance, because the feature is finished and its price

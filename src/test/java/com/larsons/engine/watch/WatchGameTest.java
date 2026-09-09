@@ -34,8 +34,21 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
 class WatchGameTest {
 
     /** A walk on your own, which is a walk with room for exactly one. */
+    /**
+     * A solo walk in <b>a stated world</b> rather than in a fresh random one.
+     *
+     * <p>{@code Config.solo} seeds itself from {@code new Random()}, which is
+     * right for a player starting a walk and wrong for a test: a house needs
+     * flat dry ground under it, whether any of the two dozen spots
+     * {@link #findSpot} tries has that is a property of the seed, and some
+     * seeds have none. That failed {@link #aHouseCostsPointsAndThenStands}
+     * about one run in four, for reasons that had nothing to do with houses.
+     *
+     * <p>Everything else in this file is seed-independent and simply inherits
+     * a world that no longer changes underneath it.
+     */
     private static WatchGame game() {
-        return new WatchGame(WatchGame.Config.solo("Test Walk"));
+        return new WatchGame(new WatchGame.Config(20240908L, "Test Walk", 1));
     }
 
     /** A walk with room for a party — the same simulation, a different cap. */

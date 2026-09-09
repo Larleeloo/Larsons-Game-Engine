@@ -290,13 +290,48 @@ public final class WalkerModel {
     public static boolean imported(Figure figure) { return model(figure) != null; }
 
     private static SceneModel model(Figure figure) {
-        // One unit tall, and drawn at `height` metres per unit below — which is
-        // CROUCH_HEIGHT when they are crouching, exactly as the boxes are
-        // scaled down rather than posed. A crude crouch, but the same crude
-        // crouch, so dropping a file in does not change what crouching looks
-        // like as well as what the player looks like.
+        // One unit tall, and drawn at so many metres per unit below — see
+        // asAuthored, which is where that number comes from and why it is not
+        // simply `height`.
         return SceneModels.of((figure == null ? Figure.DEFAULT : figure).model(),
                 ModelRig.Kind.HUMANOID, SceneModel.Size.height(1));
+    }
+
+    /**
+     * How many metres to draw one unit of an imported body at, so that a metre
+     * of the file it was authored in is a metre of the world.
+     *
+     * <p><b>This is the number that keeps the clothes on.</b> A worn piece is
+     * {@link SceneModel.Size#AS_PLACED}: never measured, never rescaled, drawn
+     * at the metre its artist put it at. A body is normalised — measured, and
+     * redrawn so that its bounding box is a stated height. Those two only
+     * describe the same person while the body's measured height <em>is</em> the
+     * height the wardrobe was cut against, and for a year it was, because the
+     * tallest point of a walker was the top of a hat modelled into him at
+     * exactly {@link #HEIGHT}.
+     *
+     * <p>Then the hat came off and became {@code walking_hat}. What is in
+     * {@code characters/walker.glb} now is a bald body 1.615 m to the crown, and
+     * normalising <em>that</em> to 1.78 stretched every figure in the game by a
+     * tenth while the eighteen garments cut to it stayed exactly where they
+     * were: spectacles on the chin, a collar across the chest, trousers at the
+     * knee, and a hat somewhere inside the skull. Nothing in the wardrobe had
+     * moved — the body had.
+     *
+     * <p>So the body is drawn at the metres it was authored in, and
+     * {@link #HEIGHT} goes back to meaning what {@code figures.py} and §16 both
+     * say it means: <b>the height of a figure in its standard kit</b>, hat
+     * included, which is what the file used to measure and is now the sum of two
+     * files. A figure authored at some other height comes out at that height,
+     * wearing clothes that still fit it — which is a visible, self-explaining
+     * mistake rather than an invisible one smeared across a wardrobe.
+     *
+     * <p>Multiplied by {@code height / HEIGHT} rather than being a bare
+     * conversion, so a crouch still scales the body down exactly as it scales
+     * the clothes down — {@link CosmeticModel#overlay} takes the same fraction.
+     */
+    private static double asAuthored(SceneModel figure, double height) {
+        return figure.authoredHeight() * height / HEIGHT;
     }
 
     /**
@@ -376,8 +411,9 @@ public final class WalkerModel {
             // through. Only the keeper and the ranger watch you.
             AnimState state = state(speed);
             double at = at(speed, phase, clock);
+            double fit = asAuthored(figure, height);
             figure.mesh(mesh, x, y, z, yaw + SceneModel.PERSON_TURN, state, at,
-                    height, uv, 0);
+                    fit, uv, 0);
             // The clothes go on over the top, at `z` for the same reason the
             // boxes put them at `base`: a piece authored on a reference walker
             // measured itself from the floor.
@@ -389,7 +425,7 @@ public final class WalkerModel {
             // once a stride, and a hat that agreed about the pose but not about
             // *which* clip would do it at every threshold.
             CosmeticModel.overlay(mesh, who, worn, x, y, z, yaw, height, state, at, uv,
-                    figure.wornAt(state, at, height, SceneModel.Lean.UPRIGHT), dyes);
+                    figure.wornAt(state, at, fit, SceneModel.Lean.UPRIGHT), dyes);
             return;
         }
 
@@ -736,8 +772,9 @@ public final class WalkerModel {
             double seatX = x + fx * BoatModel.SEAT_ALONG;
             double seatY = y + fy * BoatModel.SEAT_ALONG;
             double boards = BoatModel.floorZ(waterZ, bob);
+            double fit = asAuthored(figure, HEIGHT);
             figure.mesh(mesh, seatX, seatY, boards, yaw + SceneModel.PERSON_TURN,
-                    AnimState.ROW, at, HEIGHT, uv, 0);
+                    AnimState.ROW, at, fit, uv, 0);
             // **A modelled rower is dressed, which they used not to be.** Their
             // pose is numbers no garment's clip could know — a body folded onto
             // a thwart — so the clothes used to fall back to standing bolt
@@ -746,7 +783,7 @@ public final class WalkerModel {
             // did, so there is nothing left to fall back to.
             CosmeticModel.overlay(mesh, who, worn, seatX, seatY, boards, yaw, HEIGHT,
                     AnimState.ROW, at, uv,
-                    figure.wornAt(AnimState.ROW, at, HEIGHT, SceneModel.Lean.UPRIGHT),
+                    figure.wornAt(AnimState.ROW, at, fit, SceneModel.Lean.UPRIGHT),
                     dyes);
             return;
         }
@@ -977,15 +1014,16 @@ public final class WalkerModel {
             // water is.
             double at = RowStroke.wrap(phase);
             SceneModel.Lean lean = new SceneModel.Lean(UPRIGHT - bodyPitch, HIP_SHARE);
+            double fit = asAuthored(figure, HEIGHT);
             figure.mesh(mesh, x, y, z, yaw + SceneModel.PERSON_TURN, AnimState.SWIM,
-                    at, HEIGHT, uv, 0, null, lean);
+                    at, fit, uv, 0, null, lean);
             // …and dressed, laid down with them. The tip is inside the pose the
             // clothes are carried by rather than applied to them separately —
             // see SceneModel.wornAt, which is also why a swimmer's cloak no
             // longer has to be left off.
             CosmeticModel.overlay(mesh, who, worn, x, y, z, yaw, HEIGHT,
                     AnimState.SWIM, at, uv,
-                    figure.wornAt(AnimState.SWIM, at, HEIGHT, lean), dyes);
+                    figure.wornAt(AnimState.SWIM, at, fit, lean), dyes);
             return;
         }
 

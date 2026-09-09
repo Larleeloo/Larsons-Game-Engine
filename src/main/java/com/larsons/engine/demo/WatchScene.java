@@ -59,6 +59,7 @@ import com.larsons.engine.watch.render.BoatModel;
 import com.larsons.engine.watch.model.SceneModel;
 import com.larsons.engine.watch.render.ChartImage;
 import com.larsons.engine.watch.render.CosmeticModel;
+import com.larsons.engine.watch.render.FigureMirror;
 import com.larsons.engine.watch.render.FloraMesher;
 import com.larsons.engine.watch.render.Gait;
 import com.larsons.engine.watch.render.HouseModel;
@@ -894,6 +895,39 @@ public class WatchScene extends AbstractScene {
      */
     private int dyeDrag = -1;
 
+    // --- the looking-glass --------------------------------------------------------------
+
+    /**
+     * The figure in the wardrobe, and how far round it has turned.
+     *
+     * <p>One mirror kept across frames rather than a picture built per frame:
+     * see {@link FigureMirror}, which owns an image and paints over it.
+     */
+    private final FigureMirror mirror = new FigureMirror();
+
+    private double mirrorSpin;
+
+    /**
+     * Where the hand was when it last turned the figure, or {@code −1} for a
+     * hand that is not on it.
+     *
+     * <p>Held across frames for {@link #dyeDrag}'s reason and read the same way:
+     * what turns the figure is how far the pointer <em>travelled</em> since the
+     * last frame, so a drag that wanders off the edge of the panel keeps
+     * turning and letting go anywhere stops it.
+     */
+    private int mirrorDrag = -1;
+
+    /**
+     * How fast the figure turns on its own, in turns a second, and how far a
+     * pixel of drag turns it.
+     *
+     * <p>Slow — a revolution takes fourteen seconds. This is a thing to glance
+     * at while you decide about a hat, not a thing to watch, and anything
+     * quicker makes the panel behind it feel like it is moving too.
+     */
+    private static final double MIRROR_TURN = 1 / 14.0, MIRROR_DRAG = 0.011;
+
     /**
      * Where the wardrobe's rows are, worked out once and read by both the
      * update and the draw.
@@ -904,9 +938,12 @@ public class WatchScene extends AbstractScene {
      * font does.
      */
     private record WardrobeBox(int x, int y, int w, int h, int split, int slots,
-                               int pieces) {
+                               int pieces, int mirrorX) {
 
         static final int ROW = 20;
+
+        /** How wide the looking-glass is, and the least panel that fits one. */
+        static final int MIRROR_W = 196, MIRROR_ROOM = 726;
 
         int slotTop() { return y + 62; }
 
@@ -917,6 +954,24 @@ public class WatchScene extends AbstractScene {
         int barX() { return split + 104; }
 
         static final int BAR_W = 132, BAR_H = 12;
+
+        /** Whether there is room on this screen for the figure. */
+        boolean mirrored() { return mirrorX > 0; }
+
+        int mirrorY() { return y + 56; }
+
+        int mirrorH() { return h - 56 - 30; }
+
+        /** Whether a point is inside the looking-glass — where a drag turns it. */
+        boolean overMirror(int mx, int my) {
+            return mirrored() && mx >= mirrorX && mx < mirrorX + MIRROR_W
+                    && my >= mirrorY() && my < mirrorY() + mirrorH();
+        }
+
+        /** Where the two columns of text have to stop. */
+        private int columnsEnd() {
+            return mirrored() ? mirrorX - 12 : x + w - 12;
+        }
 
         /** Which slot row a point is on, or {@code −1}. */
         int slotAt(int mx, int my) {
@@ -930,7 +985,7 @@ public class WatchScene extends AbstractScene {
          * channels and the way back to how it was made — or {@code −1}.
          */
         int rightAt(int mx, int my) {
-            if (mx < split - 8 || mx >= x + w - 12) return -1;
+            if (mx < split - 8 || mx >= columnsEnd()) return -1;
             int row = (my - pieceTop() + ROW - 6) / ROW;
             if (my >= pieceTop() - 6 && row >= 0 && row < pieces) return row;
             int dye = (my - dyeTop() + ROW - 6) / ROW;
@@ -961,13 +1016,19 @@ public class WatchScene extends AbstractScene {
     }
 
     private WardrobeBox wardrobeBox() {
-        int w = Math.min(620, Math.max(360, viewportWidth - 60));
-        int h = Math.min(430, Math.max(260, viewportHeight - 60));
+        // Wider than it was, for the looking-glass on the right — and it gives
+        // that up rather than the rows when there is not room for both, which
+        // is what {@code MIRROR_ROOM} decides. A wardrobe you cannot work is
+        // worse than a wardrobe you cannot see yourself in.
+        int w = Math.min(760, Math.max(360, viewportWidth - 60));
+        int h = Math.min(460, Math.max(260, viewportHeight - 60));
         int x = (viewportWidth - w) / 2, y = (viewportHeight - h) / 2;
         Cosmetics.Slot[] slots = Cosmetics.Slot.values();
         int at = Math.floorMod(slotIndex, slots.length);
+        int mirrorX = w >= WardrobeBox.MIRROR_ROOM
+                ? x + w - WardrobeBox.MIRROR_W - 16 : -1;
         return new WardrobeBox(x, y, w, h, x + 190, slots.length,
-                ownedIn(slots[at]).size());
+                ownedIn(slots[at]).size(), mirrorX);
     }
 
     public WatchScene(GameContext ctx) {
@@ -3028,7 +3089,7 @@ public class WatchScene extends AbstractScene {
             case MAP -> updateMap(input);
             case BOUNTY -> updateBounty(input);
             case PAUSED -> updatePaused(input);
-            case WARDROBE -> updateWardrobe(input);
+            case WARDROBE -> updateWardrobe(dt, input);
             case NONE -> { }
         }
     }
@@ -3906,8 +3967,14 @@ public class WatchScene extends AbstractScene {
      * fill it on the right, with the three colour rows under that. Left and
      * right change column on a piece row and change a <em>channel</em> on a
      * colour row, which is one rule to learn and is written on the screen.
+     *
+     * <p>…and, on the right, <b>you</b>. See {@link FigureMirror}.
      */
-    private void updateWardrobe(InputManager input) {
+    private void updateWardrobe(double dt, InputManager input) {
+        // The figure turns on its own unless a hand is on it, so a player who
+        // never touches it still sees every side of what they have on, and one
+        // who does is not fighting it.
+        if (mirrorDrag < 0) mirrorSpin += MIRROR_TURN * Math.PI * 2 * dt;
         Cosmetics.Slot[] slots = Cosmetics.Slot.values();
         slotIndex = Math.floorMod(slotIndex, slots.length);
         Cosmetics.Slot slot = slots[slotIndex];
@@ -3982,6 +4049,20 @@ public class WatchScene extends AbstractScene {
         WardrobeBox box = wardrobeBox();
         boolean moved = pointerMoved(input);
 
+        // A hand on the figure turns it, and goes on turning it until it is let
+        // go — off the edge of the panel included, for the reason a colour bar
+        // does: a drag that stopped at a border would be a drag you cannot
+        // finish in one go.
+        if (mirrorDrag >= 0) {
+            if (!input.isMouseDown()) {
+                mirrorDrag = -1;
+                return true;
+            }
+            mirrorSpin -= (pointerX - mirrorDrag) * MIRROR_DRAG;
+            mirrorDrag = pointerX;
+            return true;
+        }
+
         // A drag in progress owns the mouse until it is let go, wherever the
         // hand has wandered to: sliding off the end of a bar clamps rather than
         // stops, which is what a slider does everywhere else.
@@ -4011,6 +4092,10 @@ public class WatchScene extends AbstractScene {
 
         if (box.overClose(pointerX, pointerY)) {
             panel = Panel.PAUSED;
+            return true;
+        }
+        if (box.overMirror(pointerX, pointerY)) {
+            mirrorDrag = pointerX;
             return true;
         }
         int bar = box.barAt(pointerX, pointerY);
@@ -7059,10 +7144,51 @@ public class WatchScene extends AbstractScene {
             target.drawRect(sx, box.dyeTop() - 12, 40, 40, HUD_DIM);
         }
 
+        drawMirror(target, box);
+
         target.drawText("Click a slot, a piece, or drag a colour · "
+                        + (box.mirrored() ? "drag yourself to turn round · " : "")
                         + "arrows and Enter work too · Esc back",
                 x + 20, y + h - 16, HUD_SMALL, HUD_DIM);
     }
+
+    /**
+     * <b>You, in what you have on, turning.</b>
+     *
+     * <p>Drawn last of the panel's furniture so that it sits over the backdrop
+     * and under nothing, and drawn on the wearer's own colour so that the
+     * picture reads as a window in the panel rather than as a photograph pinned
+     * to it. Everything about what is in it is {@link FigureMirror}'s; this
+     * decides only where it goes and that there is a frame round it.
+     *
+     * <p>Silently absent on a narrow screen — see {@code wardrobeBox}.
+     */
+    private void drawMirror(DrawTarget target, WardrobeBox box) {
+        if (!box.mirrored() || view() == null) return;
+        int mx = box.mirrorX(), my = box.mirrorY();
+        int mw = WardrobeBox.MIRROR_W, mh = box.mirrorH();
+        Outfit outfit = view().outfit();
+        // `colourOf` and not `dyeOf`: the second answers "what colour is this
+        // being drawn in", which is what a slider needs to open on, and its
+        // zero-means-as-made sentinel is exactly what the renderer wants. Handed
+        // the resolved colour instead, every undyed piece in the game would be
+        // repainted in its own base colour — a no-op that is not quite one.
+        target.drawImage(mirror.of(mw, mh, figure(), outfit.wornKeys(),
+                        outfit::colourOf, WalkerModel.coatFor(session.selfId()),
+                        mirrorSpin, drawClock, MIRROR_BACK.getRGB() & 0xFFFFFF),
+                mx, my);
+        target.drawRect(mx, my, mw, mh, mirrorDrag >= 0 ? HUD_ACCENT : HUD_DIM);
+    }
+
+    /**
+     * What the looking-glass has behind the figure in it.
+     *
+     * <p>Darker than the panel it sits in rather than the same, because the two
+     * pieces the game draws in near-black — an oilskin cape, a hood — would
+     * otherwise have no outline at all against it, and those are exactly the
+     * two a player opens this screen to look at.
+     */
+    private static final Color MIRROR_BACK = new Color(20, 24, 27);
 
     /** The bar's own colour, so a red slider is red rather than green. */
     private static Color channelInk(int channel, int value) {
@@ -7103,6 +7229,19 @@ public class WatchScene extends AbstractScene {
                 : box.dyeTop() + (row - box.pieces()) * WardrobeBox.ROW;
         return new int[]{box.split() + 30, y - 6};
     }
+
+    /**
+     * Where the looking-glass is, as {@code {x, y, w, h}}, or {@code null} on a
+     * screen too narrow for one — for tests.
+     */
+    public int[] wardrobeMirror() {
+        WardrobeBox box = wardrobeBox();
+        return box.mirrored() ? new int[]{box.mirrorX(), box.mirrorY(),
+                WardrobeBox.MIRROR_W, box.mirrorH()} : null;
+    }
+
+    /** How far round the figure in the wardrobe has turned, in radians — for tests. */
+    public double wardrobeSpin() { return mirrorSpin; }
 
     /** …and of a colour bar, as {@code {left, y, right}}. */
     public int[] wardrobeDyeBar(int channel) {

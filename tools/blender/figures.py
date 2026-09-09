@@ -100,9 +100,15 @@ WALKER = {
     # own from the start. It is a garment now rather than part of the body,
     # so these rows are the *specification* for cutting it, and every other
     # head piece is cut to the head rather than to cover this.
-    "hat_brim_z": 1.660,
+    #
+    # **The brim crosses the head below the crown, not above it.** This row
+    # said 1.660 — 45 mm clear of a `head_top` of 1.615 — so the hat balanced
+    # in the air over the skull with daylight all round the band. 1.590 is
+    # `ranger.py`'s own BRIM_Z, which is the hat this figure wore for a year
+    # while it was still modelled into him, and it is 25 mm *inside* the
+    # crown because that is where the sweatband of a hat actually sits.
+    "hat_brim_z": 1.590,
     "hat_brim_r": 0.320,           # half of a 0.64 brim: the widest thing
-    "hat_crown_r": 0.165,
     "hat_top": 1.780,
 
     # The throat, and the chest under it.
@@ -172,9 +178,15 @@ WAYFARER = {
     # A soft felt hat: a rolled brim and a round crown, where the walker has
     # a flat brim and a peak. Narrower than his, so a hat bought off a rail
     # is cut to it rather than hung over it.
-    "hat_brim_z": 1.672,
-    "hat_brim_r": 0.275,
-    "hat_crown_r": 0.152,
+    #
+    # Below `head_top` for the walker's reason — see his row. 30 mm inside
+    # rather than 25: a soft brim rolls down onto the head where a stiff one
+    # sits flat on it.
+    "hat_brim_z": 1.590,
+    # Still narrower than his, which is the point of the row — but a soft
+    # crown is a drum and a drum that covers a box head is 0.46 m across, so
+    # a 0.275 brim was 20 mm of felt showing round the outside of it.
+    "hat_brim_r": 0.300,
     "hat_top": 1.780,
 
     "collar_z": 1.283,

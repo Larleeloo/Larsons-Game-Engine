@@ -120,6 +120,35 @@ public final class Debug {
                         + "at any price, without spending what the guide earned."),
 
         /**
+         * The whole wardrobe, to try on.
+         *
+         * <p><b>The one row that is the same shape as the first.</b>
+         * {@link #ITEMS} is a lens over a {@link Satchel} and this is a lens
+         * over an {@link Outfit}: {@code Outfit.owns} answers for the whole
+         * catalogue while it is on, so every screen that asks what somebody has
+         * — the wardrobe's own list, a keeper's rail, the renderer — is covered
+         * by one flag, and a piece added to {@link Cosmetics} next month is
+         * covered by it without this file being edited.
+         *
+         * <p>It exists because a cosmetic is the one thing in this game you
+         * cannot get by walking somewhere. Everything else on a shelf turns up
+         * on another shelf; a rail is five of twenty-eight pieces chosen by the
+         * post's own hash, so seeing what the heron cloak looks like on the
+         * wayfarer means finding the post that stocks it. That is a fine thing
+         * to ask of a player and a silly thing to ask of somebody checking
+         * whether a garment fits.
+         *
+         * <p><b>It grants the wearing and not the owning</b>, which is what
+         * makes it a lens: nothing is added to the wardrobe underneath, so a
+         * walk that leaves debug mode is wearing whatever of its own it had on
+         * and has bought nothing. {@code Outfit.bought} is the question a
+         * keeper still asks, so a purchase at a rail is still a purchase.
+         */
+        WARDROBE("The whole wardrobe",
+                "Every hat, coat, cloak and haircut in the catalogue, to put on "
+                        + "and take off — without owning any of it."),
+
+        /**
          * Maps: draw one, mark it, and hang it on a board.
          *
          * <p><b>The second row that had to be added, and it is a different

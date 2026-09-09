@@ -181,8 +181,9 @@ class PlayerFiguresTest {
             Mesh standing = standing(figure);
             assertEquals(0, standing.minZ(), 0.02,
                     figure.key() + " does not stand on the ground");
-            assertEquals(HEIGHT, standing.maxZ(), 0.02,
-                    figure.key() + " is not " + HEIGHT + " m to the crown");
+            assertEquals(HEIGHT, dressed(figure, kitOf(figure)).maxZ(), 0.04,
+                    figure.key() + " in the kit they walk out in is not " + HEIGHT
+                            + " m to the top of their hat");
             // §14's ceiling for a character. Both figures pay the same, which
             // is what stops one of them being the one you pick to be seen from
             // further away.
@@ -193,6 +194,66 @@ class PlayerFiguresTest {
                     figure.key() + " is " + standing.triangleCount() + " triangles, which "
                             + "is a placeholder rather than a person");
         }
+    }
+
+    /**
+     * <b>A figure is drawn at the metres it was authored in, and so is what it
+     * is wearing.</b>
+     *
+     * <p>This is the one assertion that stands between the wardrobe and every
+     * other test in this file being vacuous, and it is the one that was
+     * missing. A worn piece is {@code AS_PLACED}: never measured, never
+     * rescaled, drawn at the metre its artist put it at. A body was
+     * <em>normalised</em> — measured, and redrawn so that its bounding box came
+     * out at {@link WalkerModel#HEIGHT}. Those two describe the same person
+     * only while the body's measured height is the height the wardrobe was cut
+     * against, and for a year it was, because the tallest point of a walker was
+     * a hat modelled into him at exactly 1.78.
+     *
+     * <p>Then the hat came off and became {@code walking_hat}. The body now
+     * measures 1.615 m to a bald crown, and normalising that to 1.78 stretched
+     * every figure in the game by a tenth while the eighteen garments cut to it
+     * stayed where they were — spectacles on the chin, a collar across the
+     * chest, trousers at the knee, a hat inside the skull. Every window in
+     * {@link #everyPieceIsWornWhereItsSlotSaysItIs} still passed, because
+     * nothing in the wardrobe had moved: the body had, and nothing measured the
+     * body.
+     *
+     * <p>So this measures the body, against the file it came out of. It is
+     * deliberately an equality and not a window — a metre of the file is a
+     * metre of the world or it is not — and it holds for anything anybody drops
+     * into the folder, at any height, which is the property that makes the
+     * fixed 1.78 in §17 a recommendation rather than a trap.
+     */
+    @Test
+    void theBodyIsDrawnAtTheMetresItWasAuthoredIn() {
+        for (Figure figure : Figure.all()) {
+            SceneModel file = SceneModels.of(figure.model(), ModelRig.Kind.HUMANOID,
+                    SceneModel.Size.AS_PLACED);
+            assertNotNull(file, figure.key() + " has no model to measure");
+            Mesh drawn = standing(figure);
+            assertEquals(file.authoredHeight(), drawn.maxZ(), 0.005,
+                    figure.key() + " is authored " + round(file.authoredHeight())
+                            + " m tall and drawn " + round(drawn.maxZ()) + " — the body "
+                            + "is being rescaled and the wardrobe cut to it is not");
+
+            // …and the consequence, stated where a reader will believe it: the
+            // hat this figure walks out in comes down onto the head, because
+            // both of them are in the same metres.
+            double crown = drawn.maxZ();
+            Mesh hat = worn(figure, "walking_hat");
+            assertTrue(hat.minZ() < crown && hat.maxZ() > crown,
+                    figure.key() + "'s own hat spans " + round(hat.minZ()) + "–"
+                            + round(hat.maxZ()) + " m on a head that ends at "
+                            + round(crown) + " — it is not on it");
+        }
+    }
+
+    /** Everything a figure walks out in, which is what §16 measures 1.78 to. */
+    private static List<String> kitOf(Figure figure) {
+        List<String> out = new ArrayList<>();
+        for (Cosmetics.Piece piece : Cosmetics.standardKit()) out.add(piece.key());
+        return out;
     }
 
     /**
@@ -349,13 +410,24 @@ class PlayerFiguresTest {
                 // top is at the yoke and not somewhere above the ears.
                 if (piece.slot() == Cosmetics.Slot.HEAD
                         || piece.slot() == Cosmetics.Slot.HAIR) {
-                    assertTrue(mesh.minZ() <= crown - 0.08,
-                            where + " starts at " + round(mesh.minZ()) + " m on a figure "
-                                    + round(crown) + " m tall — it is floating over the "
-                                    + "head rather than being worn on it");
+                    // **It has to straddle the crown**, which is a sharper
+                    // question than "how far down does it come" and does not
+                    // need a number pulled out of the air: a hat whose lowest
+                    // point is above the top of the head is balanced over it,
+                    // and one whose highest point is below it has been swallowed
+                    // by it. Both of those have shipped. The 30 mm is only so
+                    // that grazing the crown does not count as wearing it.
+                    assertTrue(mesh.minZ() <= crown - 0.03 && mesh.maxZ() > crown,
+                            where + " spans " + round(mesh.minZ()) + "–"
+                                    + round(mesh.maxZ()) + " m on a head that ends at "
+                                    + round(crown) + " — it is not sitting on it");
                 }
                 if (piece.slot() == Cosmetics.Slot.BACK) {
-                    assertTrue(mesh.maxZ() <= crown - 0.42,
+                    // Not above the throat, which on both figures is about
+                    // 280 mm below the crown: a pack's top flap and a cape's
+                    // yoke both stand a little proud of the shoulders they are
+                    // carried on, and neither may reach an ear.
+                    assertTrue(mesh.maxZ() <= crown - 0.28,
                             where + " reaches " + round(mesh.maxZ()) + " m, which is over "
                                     + "the shoulders it is supposed to hang from");
                 }
@@ -621,8 +693,12 @@ class PlayerFiguresTest {
         for (Figure figure : Figure.all()) {
             Mesh body = standing(figure);
             assertEquals(0, body.minZ(), 0.02, figure.key() + " is not standing on the ground");
-            assertEquals(HEIGHT, body.maxZ(), 0.02,
-                    figure.key() + " is not " + HEIGHT + " m to the crown undressed");
+            // Undressed they reach their own bald crown, which is 165 mm short
+            // of HEIGHT and is supposed to be: the last 165 mm is a hat, and a
+            // hat is a garment now. See theBodyIsDrawnAtTheMetresItWasAuthoredIn.
+            assertTrue(body.maxZ() < HEIGHT - 0.10,
+                    figure.key() + " is " + round(body.maxZ()) + " m to the crown with "
+                            + "nothing on — there is still a hat modelled into them");
             // A body is cheap, which is the point of splitting the clothes off:
             // what used to be 1180 triangles you could never take off is 500
             // you always pay and 900 you choose.
@@ -888,6 +964,67 @@ class PlayerFiguresTest {
             walk.click(walk.wardrobeClose());
             assertEquals("paused", walk.walk.panelName(),
                     "the close button did not go back to the pause screen");
+        }
+    }
+
+    /**
+     * <b>The wardrobe shows you what you are wearing, and turns you round.</b>
+     *
+     * <p>A list of what you own with a dot beside what is on is a manifest
+     * rather than a mirror, and every decision this screen exists for — which
+     * of four haircuts, what colour to dye a coat, whether a cape is worth what
+     * a keeper wants — is a decision about how something looks. Half of what
+     * there is to look at is on the side of you that you cannot see: the pack,
+     * the cape, the plait. So it turns, all the way round, and a hand on it
+     * turns it faster.
+     *
+     * <p>Three things are asserted and they are the three that can break
+     * separately: that it is <em>there</em> at an ordinary window size, that it
+     * turns on its own, and that it never takes a click the rows needed — the
+     * panel grew by 140 px to make room for it and the right-hand column had to
+     * stop somewhere new.
+     */
+    @Test
+    void theWardrobeShowsYouTurningAllTheWayRound(@TempDir Path dir) {
+        try (Walk walk = new Walk(dir)) {
+            walk.press(KeyEvent.VK_ESCAPE);
+            walk.press(KeyEvent.VK_ENTER);
+            assertEquals("wardrobe", walk.walk.panelName());
+
+            int[] glass = walk.walk.wardrobeMirror();
+            assertNotNull(glass, "an 800×480 window has room for the figure and there "
+                    + "is no figure in it");
+            // Clear of both columns of rows, which is the whole reason
+            // WardrobeBox knows where it is: a picture drawn over the colour
+            // bars would be a picture you cannot drag a colour under.
+            int[] bar = walk.dyeBar(2);
+            assertTrue(bar[2] < glass[0],
+                    "the blue slider ends at " + bar[2] + " and the figure starts at "
+                            + glass[0] + " — they overlap");
+            for (int row = 0; row < Cosmetics.Slot.values().length; row++) {
+                assertTrue(walk.slotRow(row)[0] < glass[0], "a slot row is under it");
+            }
+
+            // It turns on its own, and goes on turning: a preview that stopped
+            // at half a revolution would be a preview of your front.
+            double was = walk.walk.wardrobeSpin();
+            for (int i = 0; i < 60; i++) walk.step();
+            double half = walk.walk.wardrobeSpin();
+            assertTrue(half > was, "the figure in the wardrobe does not turn at all");
+            for (int i = 0; i < 60; i++) walk.step();
+            assertEquals(half - was, walk.walk.wardrobeSpin() - half, 1e-6,
+                    "the turn is not steady — it eases to a stop somewhere");
+
+            // …and a hand on it turns it, the way it is dragged, further in one
+            // pull than the clock manages in a second.
+            double before = walk.walk.wardrobeSpin();
+            walk.drag(glass[0] + 20, glass[1] + glass[3] / 2,
+                    glass[0] + glass[2] - 20, glass[1] + glass[3] / 2);
+            double dragged = walk.walk.wardrobeSpin() - before;
+            assertTrue(dragged < -0.5,
+                    "dragging across the figure turned it by " + round(dragged)
+                            + " rad — a pull the width of the glass should swing it "
+                            + "well round, and toward the hand");
         }
     }
 
@@ -1339,9 +1476,15 @@ class PlayerFiguresTest {
                 SceneModel.Size.height(1));
         assertNotNull(body, figure.key() + " has no model to be worn over");
         Mesh.Builder mesh = Mesh.builder(0, 0, 0, false, 1);
+        // **At the body's own scale, which is what `WalkerModel` draws it at.**
+        // A `Worn` is one rigid transform per bone in world metres, so asking
+        // for it at the wrong metres per unit hands the clothes a stride that
+        // is a tenth longer than the one the legs are taking — which is a bug
+        // in the harness that looks exactly like the bug this is testing for.
+        double fit = body.authoredHeight();
         CosmeticModel.overlay(mesh, figure, List.of(key), 0, 0, 0, 0, HEIGHT,
                 AnimState.WALK, phase, new float[]{0, 0, 1, 1},
-                body.wornAt(AnimState.WALK, phase, HEIGHT, SceneModel.Lean.UPRIGHT));
+                body.wornAt(AnimState.WALK, phase, fit, SceneModel.Lean.UPRIGHT));
         return mesh.build();
     }
 

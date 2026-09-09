@@ -95,10 +95,11 @@ blender --python tools/blender/bodies.py -- wayfarer
 ```
 
 Either leaves a collection with the figure in it, rigged, standing on `Z = 0`
-facing `−Y`, 1.78 m to the crown. That is the body you fit the garment to — and
-it is a body, in a vest and shorts, so if the piece you are making is a coat you
-are fitting it to skin rather than to other clothes. Add the standard kit as
-well when that matters:
+facing `−Y`, **1.615 m to the bald crown** — 1.78 is where the top of the hat is,
+and the hat is a garment. That is the body you fit the garment to, and it is a
+body, in a vest and shorts, so if the piece you are making is a coat you are
+fitting it to skin rather than to other clothes. Add the standard kit as well
+when that matters:
 
 ```bash
 blender --python tools/blender/cosmetics.py -- walker field_coat field_trousers
@@ -128,13 +129,20 @@ Turn on **Front orthographic** (numpad 1) and work against the body. The numbers
 below are the **modelled walker's** — for the wayfarer, and for the boxed
 reference figure, read the other columns of §16's tables.
 
-* A **hat** sits on the crown of the one the figure is already wearing — that is
-  at Z 1.59 for the brim and 1.78 for the top of the crown, and anything on the
-  head slot goes *over* it. A round piece needs a radius of **0.238** to cover
-  the walker's square crown, because that is where its corners are.
-* A **cape** hangs off the shoulders (Z 1.18, ±0.205 across) and down the back.
-  The pack's back face is at **Y +0.33**, so a panel goes at about **Y +0.37** —
-  behind the pack, not through it.
+* A **hat** sits on the head, which ends at **Z 1.615**: the brim crosses it at
+  about **1.59** — *below* the crown, where a sweatband goes — and the top of the
+  walker's own hat is at 1.78. One hat is worn at a time, so a hat is cut to the
+  head and not over another hat.
+* A **round** piece on the head needs a radius of **0.244** (walker) or **0.228**
+  (wayfarer) to clear the crown, because the crown is a box and those are where
+  its *corners* are. Half the head's width is 30 mm short of that and puts four
+  triangles of scalp through your hat. `cosmetics.py`'s `crown_r` is the number;
+  a **box** crown avoids the problem entirely and can sit 17 mm proud all round.
+* A **cape** hangs off the shoulders (Z 1.18, ±0.205 across) and down the back,
+  which is at **Y +0.145** — so a panel goes at about **Y +0.21**. Do not cut it
+  to clear the pack at Y +0.33: a pack is a BACK piece too and one piece is worn
+  to a slot, so anybody in a cape has no pack on and a cape that cleared one
+  hangs 185 mm behind them. `cosmetics.py`'s `back_y` is that rule.
 * **Boots** go round the feet at Z 0–0.25; a **scarf** at the neck, Z 1.27;
   **mittens** over the hands, which hang at (±0.205, −0.06, 0.59).
 
