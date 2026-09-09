@@ -8,7 +8,7 @@ that figure — silently, in a binary that does not diff. It keeps its own
 copies. Everything written after it lives here:
 
     figures.py     the two players' measurements, and their palettes
-    wayfarer.py    the second player figure
+    bodies.py      both player figures, as bodies rather than outfits
     cosmetics.py   the wardrobe, fitted to each of them
 
 What is in here is the vocabulary those three are written in, and it is the
