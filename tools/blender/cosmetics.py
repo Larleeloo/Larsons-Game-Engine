@@ -37,10 +37,12 @@ thirty-six files honest: a scarf is not written at "1.27" for one figure and
 --- the three rules a piece is built under --------------------------------
 
 **1. Over the top, never instead of.** The figure underneath is still drawn,
-whole. A hat has to *cover* the hat already on the head, which is what
-`hat_cover_r` is for; a cape has to clear the pack, which is `pack_back_y`.
-A piece that merely occupies the same space as the body reads as a garment
-somebody is standing inside.
+whole, and a piece that merely occupies the same space as the body reads as a
+garment somebody is standing inside. A drum on the head has to clear the
+corners of the box it is worn on (`crown_r`) and something on the back has to
+stand off the back (`back_y`) — those two are where nearly every misfit in
+this file has come from, and they are functions rather than numbers so that
+there is one place to be wrong.
 
 **2. Rigged, not placed.** Each piece is parented to a bone of a rig with
 README §10's names, so a mitten follows a hand and a cape hangs off a spine
@@ -184,17 +186,56 @@ def tin(key):
 # **Everything in the HEAD slot used to be cut to go *over* the figure's own
 # hat**, which was modelled into the body and could not come off. It comes off
 # now — it is `walking_hat` — so one hat is worn at a time and a piece on the
-# head is cut to the head. These two are what a hat's crown has to be to fit
-# one, with the clearance a knitted thing needs and no more.
+# head is cut to the head. These are what a hat's crown has to be to fit one,
+# with the clearance a knitted thing needs and no more.
+
+#: How far a hairstyle stands off the skull, per side.
+#
+#: `_scalp` adds its `thickness` to the cap's *full* width, so half of it is
+#: what the hair actually gains on each side, and the odd millimetre on top is
+#: so that a hat sits on hair rather than exactly in it.
+HAIR_PROUD = 0.013
+
 
 def wrist_of(f):
     """The wrist, which is the hand's own centre with the joint above it."""
     return (f["shoulder_x"], f["hand"][1] + 0.004, f["hand"][2] + 0.062)
 
 
+def head_pad(f):
+    """How far a box worn on the head has to stand off the skull, per side.
+
+    A hat crown built as a *box* has the easy job: a box that is this much
+    bigger than the head's box contains it, corners and all, and no arithmetic
+    is needed. `crown_r` is the same question asked of a drum, which is the
+    hard version.
+    """
+    return HAIR_PROUD + 0.004
+
+
 def crown_r(f):
-    """The radius a thing worn on the head sits at."""
-    return f["head_half_x"] * 1.14
+    """The radius a drum worn on the head has to sit at to cover one.
+
+    **A head in this game is a box and most hats here are drums**, so the
+    number is the box's own *corner* — `hypot` of its two half-widths — opened
+    out twice: once for the hair under the hat, and once for the little a
+    regular octagon loses between a vertex and the middle of an edge, which is
+    where a corner of the skull meets it.
+
+    This used to be 1.14 times the half-*width*, which is 30 mm inside that
+    corner and 45 mm inside the hair on it. Every drum in this file therefore
+    passed *through* the four corners of the head it was worn on: a beanie had
+    a triangle of scalp at each corner, a hood had a face coming out of the
+    front of it, and a hatband was invisible because the whole ring of it was
+    inside the skull. It is the one measurement the whole HEAD slot is built
+    on, so it is also the one that was wrong eight times over.
+
+    The price is that a round hat on a square head is wide — the corners of a
+    0.31 m head are 0.42 m apart, so nothing round covers one and stays
+    narrow. That is a fact about the head rather than about the hat.
+    """
+    corner = math.hypot(f["head_half_x"], f["head_half_y"]) + HAIR_PROUD
+    return corner / math.cos(math.pi / 8)
 
 
 def brow_z(f):
@@ -248,9 +289,13 @@ def straw_boater(f):
     game's shapes are good at.
     """
     p = Part()
-    brim_r = f["hat_brim_r"] * 0.94
-    brim_z = brow_z(f) + 0.006
     r = crown_r(f) + 0.008
+    # A boater's brim is a hand's breadth of straw all the way round, and the
+    # crown it is round has to clear a square head — so the brim is measured
+    # off the crown rather than off the figure's own hat, which is a different
+    # hat and a narrower one.
+    brim_r = r + 0.085
+    brim_z = brow_z(f) + 0.006
     top = f["head_top"] + 0.030
     p.prism((0, 0, brim_z), brim_r, 0.024, "main", bottom_material="main_dark")
     p.prism((0, 0, brim_z + 0.014), brim_r - 0.030, 0.030, "main_light")
@@ -311,16 +356,22 @@ def antler_circlet(f):
     top = f["head_top"]
     p.prism((0, 0, z), r, 0.036, "trim")
     p.prism((0, 0, z + 0.026), r - 0.004, 0.016, "trim_dark")
+    # **The hoop is measured off the crown and the antlers off the head.** They
+    # used to be written as so much further out than the hoop, which meant that
+    # widening the hoop to stop it sitting inside the skull widened the rack
+    # with it — a spread this piece never asked for and one that would have
+    # taken it through the 0.90 m a worn piece is allowed to be.
+    out = f["head_half_x"]
     for side in (1, -1):
         base = Vector((side * r * 0.80, 0.010, z + 0.020))
-        mid = Vector((side * (r + 0.090), -0.030, top + 0.130))
-        tip = Vector((side * (r + 0.140), -0.115, top + 0.240))
+        mid = Vector((side * (out + 0.115), -0.030, top + 0.130))
+        tip = Vector((side * (out + 0.165), -0.115, top + 0.240))
         p.roll(base, mid, 0.021, "main", sides=6)
         p.roll(mid, tip, 0.015, "main", sides=6)
-        p.roll(mid, Vector((side * (r + 0.165), 0.105, top + 0.185)),
+        p.roll(mid, Vector((side * (out + 0.190), 0.105, top + 0.185)),
                0.013, "main_light", sides=6)
         p.roll(base.lerp(mid, 0.45),
-               Vector((side * (r + 0.075), -0.150, top + 0.065)),
+               Vector((side * (out + 0.100), -0.150, top + 0.065)),
                0.012, "main_light", sides=6)
     return {"head": p}
 
@@ -384,14 +435,18 @@ def moth_veil(f):
     **Slats with daylight between them, not a shell.** Nothing in this game
     is transparent — every triangle is one flat colour — so a veil built as
     a closed cylinder round the head is a bucket, which is what the first
-    version of this was. Eight narrow strips at a little under half the
-    chord read as netting for the same reason a picket fence reads as a
-    fence: what you see is as much gap as slat.
+    version of this was. Eight narrow strips read as netting for the same
+    reason a picket fence reads as a fence: what you see is more gap than
+    slat. At the 0.44 of the chord they started at they were not narrow
+    enough to do that and the piece read as a birdcage; at 0.26 the head
+    inside is plainly a head.
     """
     p = Part()
     # A brim of its own, because there is no longer a hat to hang off: the
-    # figure's own went into the wardrobe and one hat is worn at a time.
-    r = f["head_half_x"] * 1.60
+    # figure's own went into the wardrobe and one hat is worn at a time. Off
+    # the crown rather than off the head's half-width — a veil that hangs
+    # inside the corners of the skull hangs through the face.
+    r = crown_r(f) + 0.030
     top = brow_z(f) + 0.030
     drop = top - f["collar_z"] + 0.026
     p.prism((0, 0, top), r + 0.016, 0.018, "trim")
@@ -400,7 +455,7 @@ def moth_veil(f):
         angle = math.tau * (i + 0.5) / 8
         out = r + 0.006
         p.plate((math.sin(angle) * out, math.cos(angle) * out, top - drop / 2),
-                (2 * out * math.tan(math.pi / 8) * 0.44, 0.007, drop),
+                (2 * out * math.tan(math.pi / 8) * 0.26, 0.007, drop),
                 "main", turn=-angle)
     p.ring((0, 0, top - drop + 0.010), r + 0.012, 0.016, 0.016, "trim_dark",
            sides=8)
@@ -470,8 +525,16 @@ def fur_collar(f):
     unevenness is the whole of what stops it reading as a rubber tyre.
     """
     p = Part()
-    r = f["neck_r"] + 0.060
-    z = f["collar_z"] - 0.004
+    # **Round the outside of the shoulders, not threaded through them.** A
+    # neck is 85 mm across and a chest is 165, so a ring built at "the neck
+    # and a bit" — which is what this was — is a ring *inside* the body: the
+    # panels at the sides were in the chest and the ones at the front and back
+    # were in the jaw, and all a player ever saw of a 130-point cosmetic was
+    # whichever corner happened to miss. There is no room for a deep fur
+    # collar between a chin at 1.285 and shoulders at 1.24, so it does what a
+    # real one does and sits on the outside of both.
+    r = max(f["neck_r"] + 0.060, f["chest_half_x"] + 0.032)
+    z = f["collar_z"] - 0.020
     p.prism((0, 0, z), r - 0.016, 0.110, "trim_dark", squash=1.08)
     for i in range(8):
         angle = math.tau * (i + 0.5) / 8
@@ -487,15 +550,22 @@ def fur_collar(f):
 
 
 def rolled_bedroll(f):
-    """Strapped across the satchel: a roll, its blanket edge, and three straps.
+    """Strapped across the small of the back: a roll, its blanket edge, and
+    three straps.
 
     It says you meant to be out this long, which is the only job it has, so
     it is built as a real cylinder lying across the back rather than as a box
     somebody will read as a plank.
+
+    **Across the back rather than across the satchel**, which is what it used
+    to be written against and is the one thing a walker wearing this is not
+    also wearing — see `back_y`. Lower, too: a roll strapped straight onto
+    somebody sits at the small of the back where a belt can take its weight,
+    not between the shoulder blades where a pack would have held it.
     """
     p = Part()
-    y = f["pack_back_y"] + 0.052
-    z = f["chest_z"] - 0.190
+    y = back_y(f, 0.088)
+    z = f["chest_z"] - 0.240
     reach = f["chest_half_x"] + 0.075
     p.roll((-reach, y, z), (reach, y, z + 0.010), 0.062, "main", sides=8,
            end_material="main_dark")
@@ -512,6 +582,20 @@ def rolled_bedroll(f):
     return {"spine": p}
 
 
+def back_y(f, clear):
+    """How far behind the middle something hung on the back sits.
+
+    **Off the back, not off the pack.** Everything in the BACK slot used to be
+    written against `pack_back_y`, which is where the satchel reaches — 330 mm
+    behind the middle of a chest that is 145 mm deep. That was right while the
+    pack was part of the body and every cape in the game was worn over one. The
+    pack is a BACK piece itself now, and one piece is worn to a slot, so a cape
+    was clearing a satchel that by definition was not there: 185 mm of daylight
+    between a cloak and the shoulders it is supposed to hang from.
+    """
+    return f["chest_back_y"] + clear
+
+
 def _cape(f, panel_material, yoke_material, hem_z):
     """The shape both big back pieces are: a yoke over the shoulders and a
     panel that stands off the back and widens toward the hem.
@@ -520,7 +604,9 @@ def _cape(f, panel_material, yoke_material, hem_z):
     not in how they hang, and two copies of this arithmetic would drift.
     """
     p = Part()
-    y = f["pack_back_y"] + 0.036
+    # A hand's breadth off the back, which is what a cape hanging from a yoke
+    # does and is as much as it can stand off before it reads as a signboard.
+    y = back_y(f, 0.062)
     shoulder = f["shoulder_z"]
     across = f["shoulder_x"] + 0.055
     p.taper((0, y + 0.030, hem_z), (0, y, shoulder + 0.020),
@@ -649,30 +735,79 @@ def _feet(f, build):
     return made
 
 
+def _legs(f, boot, shaft):
+    """A boot on the foot bones and a shaft up the shin, on the shin bones.
+
+    **Anything that reaches the knee has to bend at the ankle.** A gaiter and
+    a pair of waders were both built by `_feet` — every triangle of them
+    parented to `foot_l` and `foot_r` — so 300 mm of canvas swung about the
+    ankle with the boot. Standing still nobody could see it; at a walk the
+    tops of both waders scythed forward and back through the shins inside
+    them, once a stride, because a foot rolls through 40° in a step and a shin
+    does not.
+
+    Splitting them is a change of *which bone carries which box* and nothing
+    else: both parts are still authored in world metres on a figure standing
+    at the origin, so the two halves meet exactly where they met before.
+    """
+    made = {}
+    for foot, shin, side in (("foot_l", "shin_l", 1), ("foot_r", "shin_r", -1)):
+        low, high = Part(), Part()
+        boot(low, side)
+        shaft(high, side)
+        made[foot] = low
+        made[shin] = high
+    return made
+
+
+#: How much of a foot's fore-and-aft depth a shin has.
+#
+#: A boot is long because a foot is; a shin is nearly round. A shaft tapered
+#: from a boot's depth to a boot's depth is a slab of canvas the length of a
+#: foot standing on edge all the way to the knee, which is what a pair of
+#: waders looked like from any angle but dead ahead.
+SHIN_OF_BOOT = 0.86
+
+#: The widest a thing worn on one foot may be, as a share of the gap between
+#: the two of them.
+#
+#: Feet are 210 mm apart on the walker and a boot is 185 mm across, so there
+#: is 25 mm of daylight between them and that gap is the entire reason a pair
+#: of legs reads as two legs. A gaiter at 208 and a wader at 212 closed it: two
+#: of them met at the centre line and what a player saw below the knee was one
+#: dark slab with a notch in it.
+FOOT_SPAN = 0.90
+
+
 def canvas_gaiters(f):
     """Buckled up the shin. Keeps the burrs out, mostly."""
     bx, by, bz = f["boot"]
     wide, deep = f["boot_half_x"], f["boot_half_y"]
+    ankle = f["boot_top"] - 0.070
     top = f["boot_top"] + 0.145
+    shin = deep * SHIN_OF_BOOT
+    half = bx * FOOT_SPAN
 
-    def build(p, side):
+    def boot(p, side):
         x = side * bx
-        p.taper((x, by - 0.006, f["boot_top"] - 0.070),
-                (x, by + 0.004, top),
-                ((wide + 0.014) * 2, deep * 1.86),
-                ((wide - 0.008) * 2, deep * 1.44), "main")
-        p.prism((x, by + 0.004, top - 0.014), wide + 0.008, 0.036, "trim",
-                sides=6, squash=1.40)
-        p.prism((x, by - 0.004, f["boot_top"] - 0.058), wide + 0.020, 0.030,
+        p.prism((x, by - 0.004, ankle + 0.012), min(wide + 0.020, half), 0.030,
                 "trim", sides=6, squash=1.44)
-        for at in (0.24, 0.56, 0.86):
-            z = f["boot_top"] - 0.070 + (top - f["boot_top"] + 0.070) * at
-            p.box((x + side * (wide - 0.006), by - 0.020, z),
-                  (0.020, 0.030, 0.026), "trim_dark")                # hooks
         p.strut((x - (wide + 0.010), by + 0.006, bz - 0.006),
                 (x + (wide + 0.010), by + 0.006, bz - 0.006),
                 0.024, 0.024, "trim_dark")                           # instep
-    return _feet(f, build)
+
+    def shaft(p, side):
+        x = side * bx
+        p.taper((x, by - 0.006, ankle), (x, by * 0.30, top),
+                (min(wide + 0.014, half) * 2, deep * 1.86),
+                ((wide - 0.008) * 2, shin * 1.44), "main")
+        p.prism((x, by * 0.30, top - 0.014), wide + 0.008, 0.036, "trim",
+                sides=6, squash=1.30)
+        for at in (0.24, 0.56, 0.86):
+            z = ankle + (top - ankle) * at
+            p.box((x + side * (wide - 0.006), by * 0.40 - 0.014, z),
+                  (0.020, 0.030, 0.026), "trim_dark")                # hooks
+    return _legs(f, boot, shaft)
 
 
 def river_waders(f):
@@ -680,23 +815,28 @@ def river_waders(f):
     bx, by, bz = f["boot"]
     wide, deep = f["boot_half_x"], f["boot_half_y"]
     top = f["knee_z"] + 0.030
+    shin = deep * SHIN_OF_BOOT
+    half = bx * FOOT_SPAN
 
-    def build(p, side):
+    def boot(p, side):
         x = side * bx
-        p.box((x, by, bz + 0.006), ((wide + 0.016) * 2, deep * 2.10, 0.100),
-              "main")
-        p.box((x, by - 0.010, bz - 0.030), ((wide + 0.020) * 2, deep * 2.16,
-                                            0.028), "trim_dark")     # sole
-        p.taper((x, by, 0.090), (x, 0.004, top),
-                ((wide + 0.016) * 2, deep * 1.94),
-                ((wide - 0.004) * 2, deep * 1.42), "main")
+        p.box((x, by, bz + 0.006), (min(wide + 0.016, half) * 2, deep * 2.10,
+                                    0.100), "main")
+        p.box((x, by - 0.010, bz - 0.030), (min(wide + 0.020, half) * 2,
+                                            deep * 2.16, 0.028), "trim_dark")
+
+    def shaft(p, side):
+        x = side * bx
+        p.taper((x, by * 0.60, 0.090), (x, 0.004, top),
+                (min(wide + 0.016, half) * 2, deep * 1.94),
+                ((wide - 0.004) * 2, shin * 1.42), "main")
         p.prism((x, 0.004, top - 0.020), wide + 0.014, 0.046, "main_light",
-                sides=6, squash=1.36)                                # turned top
+                sides=6, squash=1.22)                                # turned top
         p.prism((x, 0.004, top - 0.058), wide + 0.006, 0.026, "trim",
-                sides=6, squash=1.38)
+                sides=6, squash=1.24)
         p.box((x + side * (wide - 0.002), -0.004, top - 0.090),
               (0.022, 0.034, 0.070), "trim_dark")                    # buckle
-    return _feet(f, build)
+    return _legs(f, boot, shaft)
 
 
 # --- the standard kit -------------------------------------------------------
@@ -725,8 +865,14 @@ def field_coat(f):
     front = f["chest_front_y"]
     collar = f["collar_z"]
     belt = f["hip_z"] + 0.100
+    # **Deep enough to be over the vest rather than in it.** `bodies.py` builds
+    # the vest at `back * 1.98` and this used to be `back * 2.02` — under three
+    # millimetres of cloth between them, which is less than the gap between two
+    # sheets of paper at this scale and much less than a painter's algorithm
+    # can be relied on to tell apart. What showed for it was two pale wedges of
+    # underwear through the chest of a waxed coat.
     p.taper((0, 0, belt - 0.030), (0, 0, collar - 0.014),
-            (waist_x * 2.10, back * 1.96), (chest_x * 2.08, back * 2.02), "main")
+            (waist_x * 2.10, back * 2.10), (chest_x * 2.08, back * 2.16), "main")
     p.box((0, 0, collar), (chest_x * 1.50, back * 1.48, 0.058), "main_light")
     kit.mirrored(p, ("box", (chest_x * 0.44, front - 0.014, collar - 0.022),
                      (chest_x * 0.50, 0.030, 0.052), "main_light"))
@@ -741,10 +887,12 @@ def field_coat(f):
                      (chest_x * 0.68, 0.038, 0.100), "main_dark"))    # pockets
     kit.mirrored(p, ("box", (chest_x * 0.52, front - 0.018, belt + 0.176),
                      (chest_x * 0.74, 0.042, 0.030), "main_light"))
-    p.box((0, 0, belt), (waist_x * 2.16, back * 2.00, 0.062), "trim_dark")
+    # The belt and the skirt clear the shorts' waistband, which `bodies.py`
+    # puts at `back * 2.02` — the same three millimetres the coat body had.
+    p.box((0, 0, belt), (waist_x * 2.16, back * 2.22, 0.062), "trim_dark")
     p.box((0, front - 0.024, belt), (0.058, 0.032, 0.058), "trim")    # buckle
     p.taper((0, 0, f["hem_z"]), (0, 0, belt - 0.010),
-            (skirt_x * 2, back * 2.36), (waist_x * 2.14, back * 2.00), "main_dark")
+            (skirt_x * 2, back * 2.36), (waist_x * 2.14, back * 2.16), "main_dark")
     p.box((0, 0, f["hem_z"] + 0.014), (skirt_x * 2 + 0.008, back * 2.42, 0.028),
           "main_dark")
 
@@ -837,8 +985,13 @@ def field_pack(f):
     p = Part()
     chest_x, back = f["chest_half_x"], f["chest_back_y"]
     mid = f["chest_z"] - 0.020
-    y = back + 0.088
-    p.box((0, y, mid), (chest_x * 1.76, 0.176, 0.300), "main")
+    # From the back of the chest to `pack_back_y`, which is what that row of
+    # the table means and is now the only thing that reads it: the capes and
+    # the bedroll used to be cut against it too, and were cut against a satchel
+    # they can never be worn with. See `back_y`.
+    deep = f["pack_back_y"] - back
+    y = back + deep / 2
+    p.box((0, y, mid), (chest_x * 1.76, deep, 0.300), "main")
     p.box((0, y, mid + 0.170), (chest_x * 1.84, 0.186, 0.056), "main_light")
     kit.mirrored(p, ("box", (chest_x * 0.96, y + 0.008, mid - 0.040),
                      (0.052, 0.130, 0.168), "main_light"))
@@ -867,20 +1020,29 @@ def walking_hat(f):
     """
     p = Part()
     brim_r, brim_z = f["hat_brim_r"], f["hat_brim_z"]
-    r, top = f["hat_crown_r"], f["hat_top"]
+    top = f["hat_top"]
     if f.get("peaked"):
+        # A box crown, so it is measured against the box of a head rather than
+        # against a radius: this much proud of the skull on every side is this
+        # much proud at the corners too, which is the one shape that gets that
+        # for nothing. `hat_crown_r` used to be a row of the table and was a
+        # radius pretending to be a half-width.
+        hx = f["head_half_x"] + head_pad(f)
+        hy = f["head_half_y"] + head_pad(f)
         p.box((0, 0, brim_z), (brim_r * 2, brim_r * 1.88, 0.030), "main",
               faces={"-z": "main_dark"})
-        p.box((0, 0, brim_z + 0.020), (r * 2.12, r * 2.06, 0.030), "trim")
-        p.box((0, 0, brim_z + 0.062), (r * 2, r * 2, 0.084), "main")
-        p.pyramid((0, 0), brim_z + 0.100, r * 1.82, top, "main")
-        p.box((0, -r * 1.02, brim_z + 0.062), (0.050, 0.022, 0.050), "trim_dark")
+        p.box((0, 0, brim_z + 0.020), (hx * 2.12, hy * 2.12, 0.030), "trim")
+        p.box((0, 0, brim_z + 0.074), (hx * 2, hy * 2, 0.108), "main")
+        p.pyramid((0, 0), brim_z + 0.128, hx * 1.82, top, "main")
+        p.box((0, -hy * 1.02, brim_z + 0.062), (0.050, 0.022, 0.050), "trim_dark")
     else:
+        # …and a drum crown, which is the hard version — see `crown_r`.
+        r = crown_r(f)
         p.prism((0, 0, brim_z), brim_r, 0.044, "main", squash=0.96)
         p.prism((0, 0, brim_z + 0.002), brim_r - 0.020, 0.026, "main",
                 squash=0.96, bottom_material="main_dark")
         p.prism((0, 0, (brim_z + top) / 2 + 0.014), r, top - brim_z - 0.028,
-                "main", squash=0.96, top_radius=r * 0.88)
+                "main", squash=0.96, top_radius=r * 0.72)
         p.prism((0, 0, brim_z + 0.030), r + 0.008, 0.034, "trim", sides=6,
                 squash=0.96)
         p.strut((r * 0.64, -r * 0.62, brim_z + 0.036),

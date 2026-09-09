@@ -1647,7 +1647,10 @@ public final class WatchGame implements Animal.Surroundings {
         if (shopId != 0 && shop.id() != shopId) return null;
         Cosmetics.Piece piece = shop.worn(key);
         if (piece == null) return null;
-        if (player.outfit().owns(key)) {
+        // `bought` and not `owns`: debug mode's open wardrobe answers yes to
+        // everything, and a keeper who refused every sale with "you already
+        // have one" would take Debug.Power.POINTS off the rail entirely.
+        if (player.outfit().bought(key)) {
             return "You already have the " + piece.name() + ".";
         }
         // Debug mode buys off a rail for the same reason it buys off a shelf,

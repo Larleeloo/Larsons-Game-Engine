@@ -9,7 +9,7 @@ are two figures there are two wardrobes — thirty-six files whose every
 number is read off a body. Written twice, they would be wrong within a month
 and wrong in a binary that does not diff.
 
-So every landmark either figure has is in here, once, and `wayfarer.py`
+So every landmark either figure has is in here, once, and `bodies.py`
 builds a body out of it while `cosmetics.py` builds clothes out of it. Both
 of them read the same rows, which is the whole point: a collar sits at the
 Z the collar bone is at because it is literally the same number.
@@ -17,22 +17,28 @@ Z the collar bone is at because it is literally the same number.
 --- the two of them -------------------------------------------------------
 
     walker      the figure this game has shipped since people had bodies.
-                Square-shouldered, field coat, campaign hat, a pack on the
-                back. Built by `ranger.py`, which is *not* driven from this
-                table — see WALKER below for why, and for what keeps the two
-                honest.
+                Square-shouldered, campaign hat, a pack on the back. His
+                landmarks are read off `ranger.py` — see WALKER below for why
+                and for what keeps the two honest — and `bodies.py` builds
+                the body out of them.
 
     wayfarer    the second figure. A slighter build: narrower shoulders, a
                 waist, a longer coat with more flare in the skirt, a soft
                 brimmed hat instead of the campaign one, and a plait rather
-                than a beard. Built by `wayfarer.py` out of these rows.
+                than a beard.
 
-Both stand **exactly 1.78 m** floor to crown, and that number is not a
-coincidence or a style: an imported character is normalised by its height
-and drawn at `WalkerModel.HEIGHT`, so a figure authored at 1.78 comes out at
-the metres it was authored in and a figure authored at anything else does
-not. Author at 1.78 and the landmarks below are the landmarks the game
-draws — which is what lets a hat be written at 1.62 and arrive at 1.62.
+**A figure is drawn at the metres it is authored in**, so every row below is
+a row the game draws, at the number written. Both are cut so that a walker
+in the kit they set off in stands **exactly 1.78 m** — `WalkerModel.HEIGHT`
+— of which the last 165 mm is `walking_hat`. A body on its own ends at
+`head_top`, which is a bald crown at 1.615, and that is the number a hat is
+fitted to rather than the 1.78.
+
+That distinction is not pedantry. The game used to *normalise* a body —
+measure it and redraw it so its bounding box came out at 1.78 — which is the
+same thing as 1:1 only while the tallest point of a figure is its hat. The
+day the hat became a garment, every figure was stretched by a tenth and the
+whole wardrobe stayed where it was.
 
 --- everything is metres, floor up ----------------------------------------
 
@@ -44,11 +50,11 @@ draws — which is what lets a hat be written at 1.62 and arrive at 1.62.
 # --- the walker ------------------------------------------------------------
 #
 # **These are read off `ranger.py`, not fed into it.** That script built
-# `characters/walker.glb` before this table existed and it stays
-# self-contained on purpose: it is the figure the game has always drawn, in a
-# binary nobody can diff, and a refactor that changed one rounding in it would
-# change what every player looks like without a single line of review
-# noticing.
+# `characters/walker.glb` before the coat came off and it still builds the
+# ranger who stands outside a trading post; it stays self-contained on
+# purpose, because it is the figure the game has always drawn, in a binary
+# nobody can diff, and a refactor that changed one rounding in it would change
+# what every player looks like without a single line of review noticing.
 #
 # The copy is kept honest from the outside instead —
 # `PlayerFiguresTest.theWalkerTableAgreesWithTheScriptThatBuiltIt` reads both
@@ -100,9 +106,15 @@ WALKER = {
     # own from the start. It is a garment now rather than part of the body,
     # so these rows are the *specification* for cutting it, and every other
     # head piece is cut to the head rather than to cover this.
-    "hat_brim_z": 1.660,
+    #
+    # **The brim crosses the head below the crown, not above it.** This row
+    # said 1.660 — 45 mm clear of a `head_top` of 1.615 — so the hat balanced
+    # in the air over the skull with daylight all round the band. 1.590 is
+    # `ranger.py`'s own BRIM_Z, which is the hat this figure wore for a year
+    # while it was still modelled into him, and it is 25 mm *inside* the
+    # crown because that is where the sweatband of a hat actually sits.
+    "hat_brim_z": 1.590,
     "hat_brim_r": 0.320,           # half of a 0.64 brim: the widest thing
-    "hat_crown_r": 0.165,
     "hat_top": 1.780,
 
     # The throat, and the chest under it.
@@ -114,7 +126,9 @@ WALKER = {
     "chest_back_y": 0.145,
     "waist_half_x": 0.170,         # the belt, 0.34 across
 
-    # The back: a cape has to clear the pack, not the coat.
+    # The back of the pack. Read by `field_pack` and nothing else: a cape used
+    # to be cut to clear this, which is the one thing somebody in a cape can
+    # never also be wearing — see `cosmetics.back_y`.
     "pack_back_y": 0.330,
     "hem_z": 0.445,                # the bottom of the coat skirt
     "skirt_half_x": 0.180,
@@ -132,8 +146,8 @@ WALKER = {
 
 # --- the wayfarer ----------------------------------------------------------
 #
-# The second figure, and `wayfarer.py` is built out of exactly these rows —
-# so unlike the block above, this one is the source rather than a copy of it.
+# The second figure, and `bodies.py` builds it out of exactly these rows — so
+# unlike the block above, this one is the source rather than a copy of it.
 #
 # **What makes it a different person and not a smaller one.** Scaling the
 # walker down would have produced a child, which is the usual failure here.
@@ -172,9 +186,15 @@ WAYFARER = {
     # A soft felt hat: a rolled brim and a round crown, where the walker has
     # a flat brim and a peak. Narrower than his, so a hat bought off a rail
     # is cut to it rather than hung over it.
-    "hat_brim_z": 1.672,
-    "hat_brim_r": 0.275,
-    "hat_crown_r": 0.152,
+    #
+    # Below `head_top` for the walker's reason — see his row. 30 mm inside
+    # rather than 25: a soft brim rolls down onto the head where a stiff one
+    # sits flat on it.
+    "hat_brim_z": 1.590,
+    # Still narrower than his, which is the point of the row — but a soft
+    # crown is a drum and a drum that covers a box head is 0.46 m across, so
+    # a 0.275 brim was 20 mm of felt showing round the outside of it.
+    "hat_brim_r": 0.300,
     "hat_top": 1.780,
 
     "collar_z": 1.283,
@@ -185,7 +205,7 @@ WAYFARER = {
     "chest_back_y": 0.130,
     "waist_half_x": 0.126,         # nipped, and 44 mm narrower than his belt
 
-    "pack_back_y": 0.300,
+    "pack_back_y": 0.300,          # see the walker's row
     "hem_z": 0.400,                # a longer coat, and more flare in it
     "skirt_half_x": 0.178,
 

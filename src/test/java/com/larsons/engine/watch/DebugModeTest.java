@@ -46,8 +46,21 @@ class DebugModeTest {
         game.move(id, x, y, game.field().heightAt(x, y), 0, 0, false, 0.05);
     }
 
+    /**
+     * A solo walk in <b>a stated world</b> rather than in a fresh random one.
+     *
+     * <p>{@code Config.solo} seeds itself from {@code new Random()}, which is
+     * right for a player starting a walk and wrong for a test that asks whether
+     * a house will go up: a house needs flat dry ground under it, whether any
+     * of the handful of spots this file tries has that is a property of the
+     * seed, and a quarter of seeds have none. That failed
+     * {@link #everythingInTheGameIsFreeIncludingWhatIsAddedNext} about one run
+     * in four for reasons that had nothing to do with debug mode.
+     *
+     * <p>Everything else here is seed-independent and simply inherits it.
+     */
     private static WatchGame solo() {
-        return new WatchGame(WatchGame.Config.solo("Debug Walk"));
+        return new WatchGame(new WatchGame.Config(20240908L, "Debug Walk", 1));
     }
 
     // --- the code --------------------------------------------------------------------
@@ -199,6 +212,66 @@ class DebugModeTest {
         }
         assertTrue(bag.has("something_invented_next_year", 5),
                 "a cost in something not yet registered would not be free");
+
+        // …and the whole wardrobe, for the same reason and by the same means:
+        // Outfit.owns is a lens, so this walks the catalogue rather than naming
+        // anything and a piece added tomorrow is in it tomorrow.
+        assertFalse(Cosmetics.all().isEmpty());
+        for (Cosmetics.Piece piece : Cosmetics.all()) {
+            assertTrue(me.outfit().owns(piece.key()),
+                    piece.key() + " is not in the wardrobe with the mode on");
+            // `wear` is a toggle, and six of these are already on — they are
+            // the standard kit. Ask only for the ones that are off.
+            if (!me.outfit().wearing(piece.key())) {
+                assertNotNull(game.wear(1, piece.key()),
+                        piece.key() + " could not be put on");
+            }
+            assertTrue(me.outfit().wearing(piece.key()),
+                    piece.key() + " went on and is not on");
+        }
+    }
+
+    /**
+     * <b>The open wardrobe is a lens, and this is what that word buys.</b>
+     *
+     * <p>The mode grants the <em>wearing</em> and not the <em>owning</em>, so a
+     * walk that tries on the heron cloak and then leaves debug mode has bought
+     * nothing and is back in its own clothes. Anything else would be a cheat
+     * code that quietly writes 340 points of cosmetics into a save — the one
+     * thing in this game you cannot get back by walking somewhere, arriving by
+     * accident.
+     */
+    @Test
+    void tryingOnTheCatalogueBuysNoneOfIt() {
+        WatchGame game = solo();
+        WatchPlayer me = game.join(1, "Kara");
+        Outfit outfit = me.outfit();
+        int hadKit = outfit.pieces();
+        assertFalse(outfit.owns("heron_cloak"), "the walk started owning a heron cloak");
+
+        game.debug(1, Debug.CODE);
+        assertTrue(outfit.owns("heron_cloak"), "the mode did not open the wardrobe");
+        assertFalse(outfit.bought("heron_cloak"), "the mode bought a heron cloak");
+        assertNotNull(game.wear(1, "heron_cloak"));
+        assertEquals(hadKit, outfit.pieces(),
+                "trying things on added " + (outfit.pieces() - hadKit)
+                        + " pieces to the wardrobe underneath");
+
+        // Off again: what was borrowed comes off with it, and what was theirs
+        // all along is untouched.
+        game.debug(1, Debug.CODE);
+        assertFalse(outfit.owns("heron_cloak"), "the wardrobe stayed open");
+        assertEquals(hadKit, outfit.pieces(), "leaving the mode changed the wardrobe");
+        for (Cosmetics.Piece piece : Cosmetics.standardKit()) {
+            assertTrue(outfit.owns(piece.key()),
+                    "leaving the mode took away their own " + piece.key());
+        }
+
+        // …and a keeper still sells one, which is the row POINTS is for: the
+        // open wardrobe must not turn every purchase into "you already have it".
+        game.debug(1, Debug.CODE);
+        assertFalse(outfit.bought("heron_cloak"),
+                "the mode is still the only reason they have one");
     }
 
     /** The tools the rest of the game gates on are simply there. */

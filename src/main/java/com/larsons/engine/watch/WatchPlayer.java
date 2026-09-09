@@ -355,10 +355,19 @@ public final class WatchPlayer {
      */
     public boolean debugging() { return debug; }
 
-    /** Turn debug mode on or off, and the satchel's lens with it. */
+    /**
+     * Turn debug mode on or off, and the two lenses with it.
+     *
+     * <p>The satchel goes bottomless and the wardrobe opens — see
+     * {@code Satchel.setBottomless} and {@code Outfit.setOpenWardrobe}. Both are
+     * lenses over what is really there rather than grants of anything, so this
+     * one line is also the whole of turning them off again: nothing was added
+     * and nothing has to be taken back.
+     */
     public void setDebug(boolean on) {
         this.debug = on;
         satchel.setBottomless(on);
+        outfit.setOpenWardrobe(on);
     }
 
     /** Take the oars of a boat. */

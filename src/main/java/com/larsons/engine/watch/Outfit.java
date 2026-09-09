@@ -89,8 +89,34 @@ public final class Outfit {
         if (worn.get(Cosmetics.Slot.HAIR) == null) wear(hair);
     }
 
+    /**
+     * Whether the whole catalogue counts as owned — <b>debug mode's wardrobe.</b>
+     *
+     * <p><b>A lens over what is owned, not a gift of it</b>, which is exactly
+     * what {@code Satchel.bottomless} is and is the shape {@link Debug} asks
+     * every power to take. Nothing is added when it goes on and nothing is taken
+     * away when it comes off: {@link #owned} is untouched underneath, so a walk
+     * that spent an hour trying on a heron cloak and then left debug mode is
+     * the walk it was, wearing whatever of its own it had on.
+     *
+     * <p>Being a lens rather than a list is also what makes it not go stale. A
+     * piece added to {@link Cosmetics} next month is in this wardrobe the day it
+     * is added, with nothing here or in {@code Debug} edited — the same promise
+     * the bottomless satchel makes about {@link Forage}.
+     */
+    private boolean everything;
+
     /** Whether this player owns a piece. */
-    public boolean owns(String key) { return key != null && owned.contains(key); }
+    public boolean owns(String key) {
+        if (key == null) return false;
+        return everything ? Cosmetics.isWorn(key) : owned.contains(key);
+    }
+
+    /** Whether the catalogue is open — see {@link #everything}. */
+    public boolean openWardrobe() { return everything; }
+
+    /** Open the whole catalogue, or shut it again. */
+    public void setOpenWardrobe(boolean on) { this.everything = on; }
 
     // --- colour ---------------------------------------------------------------------
 
@@ -141,6 +167,17 @@ public final class Outfit {
         return true;
     }
 
+    /**
+     * Whether a piece was really acquired, ignoring {@link #everything}.
+     *
+     * <p>The one question debug mode must not answer "yes" to on its own. A
+     * keeper refusing a sale with "you already have the boater" has to mean the
+     * boater is in the wardrobe rather than that the catalogue is open, or
+     * {@code Debug.Power.POINTS} would quietly stop being able to buy a
+     * cosmetic at all — which is the one thing that row exists to do.
+     */
+    public boolean bought(String key) { return key != null && owned.contains(key); }
+
     /** Everything owned, in the order it was bought. */
     public List<String> wardrobe() { return List.copyOf(owned); }
 
@@ -156,7 +193,7 @@ public final class Outfit {
      */
     public boolean wear(String key) {
         Cosmetics.Piece piece = Cosmetics.byKey(key);
-        if (piece == null || !owned.contains(key)) return false;
+        if (piece == null || !owns(key)) return false;
         worn.put(piece.slot(), key);
         return true;
     }
@@ -182,7 +219,7 @@ public final class Outfit {
      */
     public String toggle(String key) {
         Cosmetics.Piece piece = Cosmetics.byKey(key);
-        if (piece == null || !owned.contains(key)) return null;
+        if (piece == null || !owns(key)) return null;
         if (key.equals(worn.get(piece.slot()))) {
             worn.remove(piece.slot());
             return "Took off the " + piece.name();

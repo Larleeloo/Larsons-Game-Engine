@@ -438,6 +438,28 @@ public final class SceneModel {
     /** How tall the model is in its normalised space — {@code 1} for a person. */
     public double height() { return height; }
 
+    /**
+     * How tall the <b>file</b> is, in the units its artist authored it in.
+     *
+     * <p>The number {@link Size#height} divides out, handed back — so a caller
+     * that wants the file's own metres rather than a normalised body length can
+     * multiply it in again. That sounds like undoing the normalising and is not:
+     * it is the one measurement that lets a caller <em>choose</em>, and there is
+     * exactly one kind of model that has to.
+     *
+     * <p><b>A player figure and its wardrobe share a coordinate system.</b> A
+     * worn piece is {@link Size#AS_PLACED} — the metre it was modelled at is the
+     * metre it is worn at — so the body it was cut to has to be drawn at the
+     * metres <em>it</em> was modelled at as well, or the two are being drawn to
+     * different scales and every hat in the game is the wrong size. Normalising
+     * by the bounding box happened to do that for as long as a figure's tallest
+     * point was the top of its hat; the day the hat became a garment, the body
+     * measured to its bald crown instead, was stretched by a tenth to make that
+     * come out at {@code WalkerModel.HEIGHT}, and the whole wardrobe was left
+     * behind. See {@code WalkerModel.asAuthored}.
+     */
+    public double authoredHeight() { return height / unit; }
+
     /** Its longest horizontal extent, normalised — {@code 1} for a creature. */
     public double length() { return length; }
 

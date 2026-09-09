@@ -444,10 +444,14 @@ public final class WatchView {
         if (me != null) {
             satchel.load(me.satchel().toMap());
             outfit.load(me.outfit().toMap());
-            // The lens is not in the contents — see Satchel.load — so it is
-            // copied across here, on the same line of thinking that copies
-            // everything else the screen needs from the thing that owns it.
+            // Neither lens is in the contents — see Satchel.load and
+            // Outfit.load — so both are copied across here, on the same line of
+            // thinking that copies everything else the screen needs from the
+            // thing that owns it. Missing the second one is a wardrobe screen
+            // that offers six pieces while the host would happily put on
+            // twenty-eight, which is a thing only the screen can be wrong about.
             satchel.setBottomless(me.debugging());
+            outfit.setOpenWardrobe(me.debugging());
         }
         guide.load(game.guide().toMap());
         grove.load(game.grove().toMap());
